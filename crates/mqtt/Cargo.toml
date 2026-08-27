@@ -1,0 +1,23 @@
+[package]
+name = "mqtt"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# No domain, no storage: this is the wire layer. Everything above it depends on the
+# contract, never the other way round (CLAUDE.md 3).
+#
+# `rumqttc` sits behind the `broker` feature so the protocol, idempotency and ACK logic
+# can be compiled and tested with no broker anywhere in the build (CLAUDE.md 24).
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+rumqttc = { version = "0.24", optional = true }
+
+[features]
+default = ["broker"]
+broker = ["dep:rumqttc"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
