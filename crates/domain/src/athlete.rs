@@ -43,6 +43,10 @@ pub enum ExceptionReason {
     /// e.g. an EXIT while OUTSIDE, or a TOGGLE for a station the athlete is not inside.
     ImpossibleTransition,
     AlreadyFinished,
+    /// The (device_id, reader_id) pair resolved to nothing in the reader registry
+    /// (CLAUDE.md 8). Recorded rather than dropped so the read survives a venue
+    /// mis-configuration and can be re-attributed once the mapping is fixed.
+    UnknownReader,
 }
 
 /// What the hub decided a raw read means. The raw event is stored regardless (CLAUDE.md 19).
