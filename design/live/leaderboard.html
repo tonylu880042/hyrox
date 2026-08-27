@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX Live Leaderboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:ital,wght@0,400..700;1,400..700&amp;family=Bebas+Neue&amp;family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface-tint": "#dec800",
+                      "surface-dim": "#131314",
+                      "on-tertiary-fixed-variant": "#004f54",
+                      "on-secondary": "#313030",
+                      "tertiary": "#ffffff",
+                      "inverse-on-surface": "#303031",
+                      "inverse-surface": "#e4e2e2",
+                      "surface-container": "#1f2020",
+                      "on-primary-fixed-variant": "#504700",
+                      "tertiary-fixed": "#7df4ff",
+                      "surface-container-high": "#292a2a",
+                      "error-container": "#93000a",
+                      "primary-fixed": "#fee400",
+                      "on-surface-variant": "#cec7aa",
+                      "inverse-primary": "#6a5f00",
+                      "secondary-fixed-dim": "#c9c6c5",
+                      "on-tertiary-fixed": "#002022",
+                      "tertiary-container": "#7df4ff",
+                      "surface-container-lowest": "#0d0e0e",
+                      "outline": "#979177",
+                      "on-primary-container": "#716500",
+                      "on-secondary-fixed": "#1c1b1b",
+                      "outline-variant": "#4b4731",
+                      "surface-variant": "#343535",
+                      "error": "#ffb4ab",
+                      "surface-bright": "#393939",
+                      "on-secondary-fixed-variant": "#474646",
+                      "surface": "#131314",
+                      "on-secondary-container": "#bab8b7",
+                      "primary": "#ffffff",
+                      "secondary": "#c9c6c5",
+                      "surface-container-low": "#1b1c1c",
+                      "secondary-fixed": "#e5e2e1",
+                      "on-primary-fixed": "#201c00",
+                      "on-error-container": "#ffdad6",
+                      "primary-fixed-dim": "#dec800",
+                      "secondary-container": "#4a4949",
+                      "on-tertiary-container": "#006f77",
+                      "on-surface": "#e4e2e2",
+                      "on-tertiary": "#00363a",
+                      "primary-container": "#fee400",
+                      "on-primary": "#373100",
+                      "on-background": "#e4e2e2",
+                      "surface-container-highest": "#343535",
+                      "background": "#131314",
+                      "on-error": "#690005",
+                      "tertiary-fixed-dim": "#00dbe9"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "gutter": "1px",
+                      "container-padding": "24px",
+                      "margin-edge": "80px",
+                      "unit": "8px"
+              },
+              "fontFamily": {
+                      "telemetry-data": [
+                              "JetBrains Mono"
+                      ],
+                      "athlete-name": [
+                              "Archivo Narrow"
+                      ],
+                      "label-sm": [
+                              "Archivo Narrow"
+                      ],
+                      "headline-md": [
+                              "Bebas Neue"
+                      ],
+                      "headline-lg": [
+                              "Bebas Neue"
+                      ],
+                      "display-hero": [
+                              "Bebas Neue"
+                      ]
+              },
+              "fontSize": {
+                      "telemetry-data": [
+                              "56px",
+                              {
+                                      "lineHeight": "56px",
+                                      "letterSpacing": "-0.05em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "athlete-name": [
+                              "48px",
+                              {
+                                      "lineHeight": "48px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "label-sm": [
+                              "24px",
+                              {
+                                      "lineHeight": "24px",
+                                      "letterSpacing": "0.1em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "headline-md": [
+                              "64px",
+                              {
+                                      "lineHeight": "60px",
+                                      "letterSpacing": "0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "headline-lg": [
+                              "96px",
+                              {
+                                      "lineHeight": "88px",
+                                      "letterSpacing": "0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "display-hero": [
+                              "160px",
+                              {
+                                      "lineHeight": "140px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        html { background-color: #000; overflow: auto; }
+        /* 16:9 broadcast frame: maps 1:1 to a 2560x1440 projector output */
+        body {
+            width: 2560px;
+            height: 1440px;
+            background-color: #0A0A0A;
+            overflow: hidden; /* No scrollbars for broadcast */
+        }
+        
+        .material-symbols-outlined {
+          font-variation-settings: 'FILL' 1;
+        }
+
+        /* Tonal Stacking Layer 1 */
+        .bg-plinth {
+            background-color: rgba(10, 10, 10, 0.9);
+        }
+
+        /* Tonal Stacking Layer 2 */
+        .bg-active-element {
+            background-color: #151515;
+        }
+
+        /* High contrast border */
+        .border-hc {
+            border-color: #6B6B6B;
+        }
+        
+        /* Progress segments */
+        .progress-segment {
+            width: calc((100% - 15 * 2px) / 16);
+            height: 22px;
+            background-color: #6B6B6B;
+        }
+        
+        .progress-segment.filled {
+            background-color: #ffffff;
+        }
+        
+        .progress-segment.lead {
+            background-color: #fee400; /* primary-fixed equivalent */
+        }
+        
+        /* Rows share the leftover height evenly so nothing dead-spaces above the footer */
+        .leaderboard-row {
+            flex: 1 1 0;
+            min-height: 0;
+        }
+        .station-label {
+            font-family: 'Archivo Narrow';
+            font-size: 18px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #9c9c9c;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body class="flex flex-col font-label-sm text-on-surface">
+<!-- TopAppBar from JSON -->
+<header class="relative w-full shrink-0 flex justify-between items-center px-margin-edge bg-surface dark:bg-surface border-b border-outline-variant h-[100px]">
+<div class="flex items-center gap-6">
+<h1 class="font-headline-md text-headline-md text-primary-fixed dark:text-primary-fixed uppercase tracking-tighter">CENTRAL HUB</h1>
+<div class="h-6 w-gutter bg-outline-variant"></div>
+<div class="flex items-center gap-4">
+<span class="font-label-sm text-label-sm text-primary uppercase font-bold">FRIDAY NIGHT RACE</span>
+<span class="px-2 py-1 bg-surface-variant text-on-surface-variant text-xs uppercase tracking-widest border border-outline-variant">COMPETITION</span>
+</div>
+</div>
+<div class="flex items-center gap-8">
+<div class="flex items-center gap-2">
+<span class="w-3 h-3 rounded-full bg-[#22DD66] animate-pulse"></span>
+<span class="font-label-sm text-label-sm text-primary uppercase font-bold">LIVE</span>
+</div>
+<div class="h-6 w-gutter bg-outline-variant"></div>
+<!-- Navigation Links Mapped from JSON -->
+<div class="flex items-center gap-8">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase">12 READERS ONLINE</span>
+<span class="font-label-sm text-label-sm text-[#6B6B6B] uppercase">LAST EVENT 3s AGO</span>
+</div>
+<div class="h-6 w-gutter bg-outline-variant"></div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<span class="material-symbols-outlined" data-weight="fill" style="font-variation-settings: 'FILL' 1;">schedule</span>
+<span class="font-telemetry-data text-[32px] font-bold text-primary tabular-nums tracking-tighter">19:42:07</span>
+</div>
+<!-- Trailing Icons from JSON -->
+<div class="flex gap-3 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="sensors">sensors</span>
+</div>
+</div>
+</header>
+<!-- Main Canvas: Leaderboard Content -->
+<main class="w-full flex-grow min-h-0 overflow-hidden px-margin-edge flex flex-col gap-gutter bg-background">
+<!-- Row 1: Rank 1 (Electric Yellow) -->
+<div class="leaderboard-row w-full flex items-center bg-primary-fixed text-on-primary">
+<!-- Rank & Bib -->
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-on-primary border-opacity-20 shrink-0">
+<span class="font-headline-md text-headline-md leading-none mt-2">1</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-on-primary border-opacity-20 shrink-0 bg-surface-variant bg-opacity-10">
+<span class="font-telemetry-data text-[24px] font-bold">142</span>
+</div>
+<!-- Name & Progress -->
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-on-primary border-opacity-20">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Hunter McIntyre</div>
+<div class="w-full flex gap-[2px]">
+<!-- 16 Segments -->
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment filled !bg-on-primary"></div>
+<div class="progress-segment !bg-on-primary !bg-opacity-20"></div>
+<div class="progress-segment !bg-on-primary !bg-opacity-20"></div>
+<div class="progress-segment !bg-on-primary !bg-opacity-20"></div>
+<div class="progress-segment !bg-on-primary !bg-opacity-20"></div>
+</div>
+<div class="station-label">RUN</div>
+</div>
+<!-- Times -->
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-on-primary border-opacity-20 shrink-0">
+<span class="text-[12px] uppercase tracking-widest opacity-70 mb-1">Split</span>
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none">03:45.2</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-on-primary border-opacity-20 shrink-0">
+<span class="text-[12px] uppercase tracking-widest opacity-70 mb-1">Gap</span>
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none">--</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="text-[12px] uppercase tracking-widest opacity-70 mb-1">Total</span>
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none">42:15.8</span>
+</div>
+</div>
+<!-- Row 2: Standard Rank -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-hc text-primary relative">
+<!-- Rank & Bib -->
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">2</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">089</span>
+</div>
+<!-- Name & Progress -->
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-hc">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Ryan Kent</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+<div class="station-label">FARMERS CARRY</div>
+</div>
+<!-- Times -->
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-secondary">03:51.0</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+08.4</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">42:24.2</span>
+</div>
+</div>
+<!-- Row 3: ROX ZONE (Cyan border) -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-tertiary-fixed text-primary relative">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-tertiary-fixed shadow-[0_0_15px_rgba(125,244,255,0.5)]"></div>
+<!-- Rank & Bib -->
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">3</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">215</span>
+</div>
+<!-- Name & Progress -->
+<div class="flex-grow h-full flex items-center justify-between px-6 border-r border-hc">
+<div class="flex flex-col justify-center h-full w-[60%]">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Tim Wenisch</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+</div>
+<!-- Telemetry Pill -->
+<div class="border border-tertiary-fixed bg-tertiary-fixed bg-opacity-10 px-4 py-2 flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary-fixed text-[20px]">sync</span>
+<span class="font-label-sm text-[16px] text-tertiary-fixed tracking-widest uppercase font-bold">ROX ZONE</span>
+<span class="font-telemetry-data text-[20px] text-tertiary-fixed tabular-nums font-bold ml-2">01:12</span>
+</div>
+</div>
+<!-- Times -->
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-secondary">--</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+22.1</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">42:37.9</span>
+</div>
+</div>
+<!-- Row 4: Recent Event (Yellow accent left edge) -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-hc text-primary relative">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary-fixed shadow-[0_0_15px_rgba(254,228,0,0.5)]"></div>
+<!-- Rank & Bib -->
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">4</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">042</span>
+</div>
+<!-- Name & Progress -->
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-hc">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Graham Halliday</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+<div class="station-label">RUN</div>
+</div>
+<!-- Times -->
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-primary-fixed">03:48.5</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+45.8</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">43:01.6</span>
+</div>
+</div>
+<!-- Row 5 -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-hc text-primary relative">
+<!-- Rank & Bib -->
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">5</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">112</span>
+</div>
+<!-- Name & Progress -->
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-hc">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Alexander Roncevic</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+<div class="station-label">ROWING</div>
+</div>
+<!-- Times -->
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-secondary">04:02.1</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+1:02.3</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">43:18.1</span>
+</div>
+</div>
+<!-- Row 6 -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-hc text-primary relative">
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">6</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">076</span>
+</div>
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-hc">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">James Kelly</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+<div class="station-label">RUN</div>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-secondary">03:58.9</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+1:15.0</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">43:30.8</span>
+</div>
+</div>
+<!-- Row 7 -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-hc text-primary relative">
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">7</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">334</span>
+</div>
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-hc">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Michael Sandbach</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+<div class="station-label">RUN</div>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-secondary">04:15.2</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+1:42.5</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">43:58.3</span>
+</div>
+</div>
+<!-- Row 8 -->
+<div class="leaderboard-row w-full flex items-center bg-active-element border border-hc text-primary relative">
+<div class="w-[120px] h-full flex flex-col items-center justify-center border-r border-hc shrink-0 bg-surface-container-lowest">
+<span class="font-headline-md text-headline-md leading-none mt-2 text-on-surface-variant">8</span>
+</div>
+<div class="w-[100px] h-full flex items-center justify-center border-r border-hc shrink-0 bg-surface-variant">
+<span class="font-telemetry-data text-[24px] font-bold text-on-surface-variant">015</span>
+</div>
+<div class="flex-grow h-full flex flex-col justify-center px-6 border-r border-hc">
+<div class="font-athlete-name text-athlete-name uppercase leading-none truncate mb-2">Lukas Storath</div>
+<div class="w-full flex gap-[2px]">
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment filled"></div>
+<div class="progress-segment lead"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+<div class="progress-segment"></div>
+</div>
+<div class="station-label">BURPEE BROAD JUMP</div>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-secondary">04:10.7</span>
+</div>
+<div class="w-[200px] h-full flex flex-col items-end justify-center px-6 border-r border-hc shrink-0">
+<span class="font-telemetry-data text-[32px] font-bold tabular-nums leading-none text-error">+2:05.1</span>
+</div>
+<div class="w-[300px] h-full flex flex-col items-end justify-center px-6 shrink-0">
+<span class="font-telemetry-data text-[48px] font-bold tabular-nums leading-none text-primary">44:20.9</span>
+</div>
+</div>
+</main>
+<!-- Footer from JSON -->
+<footer class="relative w-full shrink-0 flex items-center px-margin-edge bg-surface-container-lowest dark:bg-surface-container-lowest border-t border-outline-variant h-[56px]">
+<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface dark:text-on-surface">ATHLETES ON COURSE 24 | FINISHED 6 | AVG SPLIT 04:12</span>
+</footer>
+</body></html>

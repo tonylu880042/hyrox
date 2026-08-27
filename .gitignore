@@ -3,3 +3,4 @@ target/
 *.db
 *.db-wal
 *.db-shm
+design/live/icon-sheet.html
