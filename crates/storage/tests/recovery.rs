@@ -113,3 +113,23 @@ async fn voiding_an_interpreted_event_changes_what_recovery_rebuilds() {
         "raw events are immutable: a correction must not delete them"
     );
 }
+
+#[tokio::test]
+async fn an_unknown_reader_exception_survives_a_restart() {
+    // A venue mis-configuration must not lose the read (CLAUDE.md 8, 31; ADR 0001 D4):
+    // it is stored as an exception so it can be re-attributed once the mapping is fixed.
+    use domain::{ExceptionReason, Interpreted};
+
+    let store = Store::open_in_memory().await.unwrap();
+    let mut session = Session::new_draft("s1", "Thursday Class", SessionMode::Training);
+    session.arm().unwrap();
+    store.save_session(&session, at(0)).await.unwrap();
+    store.save_athlete("s1", "a1", "CHEN YU-TING", 1).await.unwrap();
+
+    let event = Interpreted::Exception { reason: ExceptionReason::UnknownReader, at: at(1_000) };
+    store.save_interpreted("s1", "a1", None, &event).await.unwrap();
+
+    let rebuilt = store.rebuild_athletes("s1").await.unwrap();
+    assert_eq!(rebuilt[0].runs.len(), 0, "an exception must not advance station state");
+    assert_eq!(rebuilt[0].status, domain::AthleteStatus::Ready);
+}

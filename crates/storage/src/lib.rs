@@ -328,6 +328,7 @@ fn reason_str(r: &ExceptionReason) -> &'static str {
         ExceptionReason::SessionNotArmed => "SESSION_NOT_ARMED",
         ExceptionReason::ImpossibleTransition => "IMPOSSIBLE_TRANSITION",
         ExceptionReason::AlreadyFinished => "ALREADY_FINISHED",
+        ExceptionReason::UnknownReader => "UNKNOWN_READER",
     }
 }
 fn parse_reason(s: &str) -> Result<ExceptionReason, StoreError> {
@@ -335,6 +336,7 @@ fn parse_reason(s: &str) -> Result<ExceptionReason, StoreError> {
         "SESSION_NOT_ARMED" => Ok(ExceptionReason::SessionNotArmed),
         "IMPOSSIBLE_TRANSITION" => Ok(ExceptionReason::ImpossibleTransition),
         "ALREADY_FINISHED" => Ok(ExceptionReason::AlreadyFinished),
+        "UNKNOWN_READER" => Ok(ExceptionReason::UnknownReader),
         other => Err(StoreError::Corrupt(format!("exception reason {other}"))),
     }
 }
