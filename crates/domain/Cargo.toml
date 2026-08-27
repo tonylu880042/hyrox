@@ -1,0 +1,9 @@
+[package]
+name = "domain"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# No tokio, no sqlx, no axum: the domain stays portable and testable without them (CLAUDE.md 3).
+[dependencies]
+serde = { workspace = true }
