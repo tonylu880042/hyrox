@@ -43,7 +43,9 @@ CLAUDE.md 12. Training was answered (below); competition was not.
 
 `FinishPolicy::NotConfigured` is the default and evaluates to `Undetermined`, never to
 `NotFinished`, so no caller can mistake an undecided rule for a decided negative. No code
-path sets `AthleteStatus::Finished` from a competition rule.
+path sets `AthleteStatus::Finished` from a competition rule: `application::apply_finish_policy`
+ignores `Undetermined`, and `application::end_class` refuses to run at all while the policy
+is `NotConfigured`, so no operator button can invent the rule either (ADR 0003).
 
 Questions still unanswered are listed in `docs/timing-rules.md`.
 
@@ -82,8 +84,10 @@ The hub calls 健身管, not the reverse. A member id is obtained from a QR code
 fetch the member's basic profile: gender, age, photo, and optionally height and weight.
 
 Modelled as optional fields on `MemberRef`. The exact endpoint, auth and payload are still
-unknown, so the client belongs behind a port (Phase 2) with a stub until the real contract
-arrives. Age is stored as reported, not as a birth date, so it goes stale.
+unknown, so the client sits behind `application::MemberDirectory` with `UnconfiguredDirectory`
+as the only implementation until the real contract arrives (ADR 0003) -- it reports
+`NotConfigured` rather than guessing a URL. Age is stored as reported, not as a birth date,
+so it goes stale.
 
 ## ANSWERED 2026-08-27 — membership validity does not gate timing
 

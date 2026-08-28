@@ -68,5 +68,6 @@ impl FinishPolicy {
 /// The screen shows the station they were in when the class ended.
 pub fn finish(state: &mut AthleteState, at: Instant) {
     state.status = AthleteStatus::Finished;
+    state.finished_at = Some(at);
     state.last_event_at = Some(at);
 }

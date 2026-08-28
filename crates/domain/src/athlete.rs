@@ -47,6 +47,10 @@ pub enum ExceptionReason {
     /// (CLAUDE.md 8). Recorded rather than dropped so the read survives a venue
     /// mis-configuration and can be re-attributed once the mapping is fixed.
     UnknownReader,
+    /// The tag is bound, but to somebody this session's roster does not contain -- a band
+    /// from another class, or an athlete removed from the roster (ADR 0001 D4). The read is
+    /// attributed to whoever holds the tag so an operator can see who to go and find.
+    AthleteNotInSession,
 }
 
 /// What the hub decided a raw read means. The raw event is stored regardless (CLAUDE.md 19).
@@ -91,6 +95,9 @@ pub struct AthleteState {
     pub last_event_at: Option<Instant>,
     /// When the previous station was finished; the left-hand side of a transition (CLAUDE.md 13).
     pub last_exit_at: Option<Instant>,
+    /// When this athlete stopped. Set by `finish`; without it every clock on the live
+    /// screen would keep counting after the class ended.
+    pub finished_at: Option<Instant>,
     pub runs: Vec<StationRun>,
 }
 
@@ -105,19 +112,25 @@ impl AthleteState {
             started_at: None,
             last_event_at: None,
             last_exit_at: None,
+            finished_at: None,
             runs: Vec::new(),
         }
     }
 
+    /// Total time on course. A finished athlete's clock stops at their finish, so the
+    /// screen shows a result rather than a number that keeps climbing.
     pub fn elapsed(&self, now: Instant) -> Option<Duration> {
-        self.started_at.map(|s| now.since(s))
+        let end = self.finished_at.unwrap_or(now);
+        self.started_at.map(|s| end.since(s))
     }
 
-    /// Time inside the current station, or in transition if OUTSIDE.
+    /// Time inside the current station, or in transition if OUTSIDE. Frozen once finished,
+    /// for the same reason as `elapsed`.
     pub fn current_leg(&self, now: Instant) -> Option<Duration> {
+        let end = self.finished_at.unwrap_or(now);
         match self.station_state {
-            StationState::Inside => self.runs.last().map(|r| now.since(r.entered_at)),
-            StationState::Outside => self.last_exit_at.map(|e| now.since(e)),
+            StationState::Inside => self.runs.last().map(|r| end.since(r.entered_at)),
+            StationState::Outside => self.last_exit_at.map(|e| end.since(e)),
         }
     }
 }

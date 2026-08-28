@@ -40,18 +40,20 @@ Transition = 下一個 Entry 的 detected_at - 前一個 Exit 的 detected_at
 
 測試：`transition_is_next_entry_minus_previous_exit`、`first_station_has_no_transition`。
 
-## Finish Rule — **未決議（OPEN）**
+## Finish Rule — 訓練已決議，**競賽仍未決議（OPEN）**
 
-> 這是 CLAUDE.md 12 與 28 明列的未決產品規則。**目前沒有任何 finish 規則。**
+> CLAUDE.md 12 與 28 列為未決的是**競賽**的完成規則。訓練已於 2026-08-27 與使用者確認。
 
 ### 現況實作
 
-`domain::FinishPolicy` 是 Session 設定上的策略值，目前只有一個 variant：
+`domain::FinishPolicy` 是 Session 設定上的策略值：
 
 ```rust
 pub enum FinishPolicy {
     #[default]
-    NotConfigured,
+    NotConfigured,                       // 競賽仍在這裡
+    ClassDuration { limit: Duration },   // 團課時間到就結束
+    CoachDecides,                        // 沒有自動觸發，教練手動結束
 }
 ```
 
@@ -65,20 +67,31 @@ pub enum FinishDecision { Finished, NotFinished, Undetermined }
 兩值答案會迫使「尚未定義」回報成 `false`，而 `false` 讀起來是
 「已經判定、尚未完成」——那是一個被偷渡進來的規則。
 
-`AthleteStatus::Finished` 這個狀態存在於模型中，但**目前沒有任何程式路徑會設定它**。
-唯一寫入 `Finished` 的方式是未來的 finish policy 或人工修正（CLAUDE.md 20）。
+**誰會設定 `AthleteStatus::Finished`（ADR 0003）：**
 
-測試：`crates/domain/tests/course.rs`
-- `the_finish_policy_defaults_to_not_configured`
-- `an_unconfigured_finish_policy_never_decides_an_athlete_is_finished`
+- `application::apply_finish_policy()`：每個 tick 評估一次，只有 `Finished` 才呼叫
+  `domain::finish`。`Undetermined` 一律不動作，也不會被當成 `NotFinished`。
+- `application::end_class()`：教練手動結束。當策略是 `NotConfigured` 時**拒絕執行**，
+  因此競賽不可能經由這條路徑被結束。
+- 人工修正（CLAUDE.md 20）。
 
-### 待釐清的問題
+完成狀態**不寫入 interpreted_events**：它由班級時鐘與既有事件推導，重啟後下一個 tick
+會重新推導出相同結果（CLAUDE.md 21）。寫一筆 FINISHED 等於捏造沒有 reader 觀測到的事件。
+被時間結束時仍在站內的選手，該站保持未關閉——沒有人回報他離站。
+
+測試：
+- `crates/domain/tests/course.rs`：`the_finish_policy_defaults_to_not_configured`、
+  `an_unconfigured_finish_policy_never_decides_an_athlete_is_finished`
+- `crates/application/tests/finish.rs`：時間到、未到、未進場、重複套用、
+  `an_undecided_rule_finishes_nobody_ever`、
+  `ending_a_class_by_hand_is_refused_when_no_finish_rule_exists`
+
+### 競賽仍待釐清的問題
 
 1. 完成是由「最後一站 Exit」判定，還是需要專屬的 Finish Reader？
-2. 訓練模式與競賽模式的完成定義是否相同？
-3. 課表（`Course`）跑完是否等於完成？若中途少一站呢？
-4. 誰有權把選手標記為完成——自動判定、還是 operator 手動？
-5. `Session` CLOSED 是否要連帶處理仍為 ACTIVE 的選手？
+2. 課表（`Course`）跑完是否等於完成？若中途少一站呢？
+3. 誰有權把選手標記為完成——自動判定、還是 operator 手動？
+4. `Session` CLOSED 是否要連帶處理仍為 ACTIVE 的選手？
    （ADR 0001 已註明 CLOSED **不**代表所有人都完成。）
 
 ### 決議後要做的事
@@ -86,9 +99,9 @@ pub enum FinishDecision { Finished, NotFinished, Undetermined }
 1. 在 `FinishPolicy` 增加 variant，並在 `evaluate()` 實作。
 2. 先寫測試（CLAUDE.md 24），再實作。
 3. 更新本檔，並視影響範圍撰寫 ADR（CLAUDE.md 30）。
-4. `crates/storage` 需要新增 finish policy 的持久化與解析。
+4. `crates/storage` 需要新增 finish policy 的持久化與解析（目前 SessionConfig 尚未持久化）。
 
-在此之前，任何模組都**不得**自行推論選手是否完成。
+在此之前，任何模組都**不得**自行推論競賽選手是否完成。
 
 ## 其他未決事項
 

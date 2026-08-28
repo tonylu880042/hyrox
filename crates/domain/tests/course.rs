@@ -209,3 +209,25 @@ fn a_member_carries_the_profile_fields_the_gym_app_supplies() {
     // Membership validity is informational: an expired member is still timed.
     assert_eq!(m.status, MembershipStatus::Expired);
 }
+
+#[test]
+fn a_finished_athletes_clocks_stop() {
+    // The live screen showed FINISHED cards whose totals kept climbing. A finished
+    // athlete's time is a result, not a running clock.
+    let mut a = athlete_mid_class();
+    domain::finish(&mut a, Instant(3_600_000));
+
+    let long_after = Instant(9_999_999);
+    assert_eq!(a.elapsed(long_after), Some(Duration(3_600_000)), "total freezes at the finish");
+    assert_eq!(a.current_leg(long_after), Some(Duration(3_600_000)), "so does the station leg");
+
+    // And it stays frozen however long the screen stays up.
+    assert_eq!(a.elapsed(Instant(99_999_999)), a.elapsed(long_after));
+}
+
+#[test]
+fn an_unfinished_athletes_clock_still_runs() {
+    let a = athlete_mid_class();
+    assert_eq!(a.elapsed(Instant(60_000)), Some(Duration(60_000)));
+    assert_eq!(a.elapsed(Instant(120_000)), Some(Duration(120_000)));
+}
