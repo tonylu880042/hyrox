@@ -1,14 +1,20 @@
-//! HYROX Central Hub server.
+//! HYROX Central Hub server: the composition root, and nothing else.
 //!
-//! Transport and wiring only: it opens the store, builds the session, subscribes to the
-//! broker, serves HTTP and WebSocket, and pushes the read model. Every business decision --
-//! what a read means, when a class ends, what may be acknowledged -- belongs to
-//! `application` and `domain` (CLAUDE.md 3, 29). Nothing in this file may grow a rule.
+//! It opens the store, recovers the interrupted session, provisions the development venue,
+//! subscribes to the broker, starts the tick loop, and serves the router `crates/api`
+//! builds. It holds no route, no handler and no rule.
+//!
+//! Every business decision -- what a read means, when a class ends, what may be
+//! acknowledged, which surface may write -- belongs to `application`, `domain` and `api`
+//! (CLAUDE.md 3, 29; ADR 0007). This file is the only place that may see every layer at
+//! once, which is exactly why nothing in it may grow a rule.
 //!
 //! ```text
 //! ESP32 --MQTT--> mqtt::run --> application::ingest_read --> storage
 //!                     |                                        |
 //!                     +------------- ACK <---------------------+   (only after COMMIT)
+//!
+//! browser ---HTTP/WS---> api::router --> api capability state --> application use cases
 //! ```
 //!
 //! `HYROX_DB`, `HYROX_MQTT_HOST`, `HYROX_MQTT_PORT`, `HYROX_MQTT_CLIENT_ID` and `HYROX_SIM`
@@ -23,16 +29,13 @@ mod mqtt;
 #[cfg(feature = "dev-simulator")]
 mod sim;
 
+use api::{Clock, Hub};
 use application::{
-    apply_finish_policy, checkin::bind_tag, register_reader, snapshot, LiveSession,
-    OperatorCommand, Recovery, RosterEntry, SessionPlan,
+    apply_finish_policy, checkin::bind_tag, register_reader, snapshot, OperatorCommand,
+    Recovery, RosterEntry, SessionPlan,
 };
 use axum::{
-    extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
-    },
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, Redirect},
     routing::get,
     Router,
 };
@@ -43,7 +46,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use storage::Store;
-use tokio::sync::{broadcast, Mutex};
 use transport::MqttConfig;
 
 /// Development clock speed. The class script covers ~20 minutes of real training;
@@ -62,11 +64,16 @@ const DEFAULT_CLIENT_ID: &str = "hyrox-hub";
 /// product decision.
 const DEV_CLASS_LENGTH: Duration = Duration(20 * 60 * 1000);
 
-const TRAINING_HTML: &str = include_str!("../static/training.html");
+/// How often the read model is re-derived and pushed. Published to every screen in the
+/// freshness readout, so a client can tell "quiet" from "the socket died" without inventing
+/// a timeout of its own (ADR 0001 D5).
+const PUSH_INTERVAL_MS: i64 = 250;
 
-struct Hub {
-    state: LiveSession,
-}
+/// Snapshot fan-out depth. A screen further behind than this is dropped rather than served
+/// stale frames: on a live screen an old snapshot is worse than a visibly closed socket.
+const SNAPSHOT_CHANNEL_CAPACITY: usize = 16;
+
+const TRAINING_HTML: &str = include_str!("../static/training.html");
 
 /// The development clock: the class script's time, run fast.
 ///
@@ -74,6 +81,9 @@ struct Hub {
 /// `detected_at` the edge stamps (CLAUDE.md 17). This decides when the emulated venue
 /// *presents a tag*, and when the class's own duration is up; it never converts an arrival
 /// into a result.
+///
+/// It is also the clock `crates/api` reads, through [`api::Clock`]. One clock for the
+/// screens and the script, so an age shown on a screen means what the events mean.
 #[derive(Clone, Copy)]
 struct VirtualClock {
     /// Where the class script's clock starts. Only the emulated collector needs it, so a
@@ -96,23 +106,16 @@ impl VirtualClock {
         }
     }
 
-    fn now(&self) -> Instant {
-        Instant(self.base_ms + (wall_clock_ms() - self.started_wall_ms) * self.speed)
-    }
-
     #[cfg_attr(not(feature = "dev-simulator"), allow(dead_code))]
     fn class_start(&self) -> Instant {
         self.class_start
     }
 }
 
-#[derive(Clone)]
-struct AppState {
-    /// A Tokio mutex, not a std one: the ingestion use case holds the session across the
-    /// store's awaits, which is exactly what keeps the ordering guarantees in one place.
-    hub: Arc<Mutex<Hub>>,
-    store: Arc<Store>,
-    tx: broadcast::Sender<String>,
+impl Clock for VirtualClock {
+    fn now(&self) -> Instant {
+        Instant(self.base_ms + (wall_clock_ms() - self.started_wall_ms) * self.speed)
+    }
 }
 
 fn wall_clock_ms() -> i64 {
@@ -200,11 +203,13 @@ async fn main() {
         .unwrap_or(0);
 
     let clock = VirtualClock::start(state.class_start, resume_offset, SPEED);
-    let store = Arc::new(store);
-    let hub = Arc::new(Mutex::new(Hub { state }));
-
-    let (tx, _) = broadcast::channel(16);
-    let app_state = AppState { hub, store, tx };
+    let hub = Hub::new(
+        state,
+        Arc::new(store),
+        Arc::new(clock),
+        PUSH_INTERVAL_MS,
+        SNAPSHOT_CHANNEL_CAPACITY,
+    );
 
     // Real ingestion: everything that reaches the screen from here on arrived over the
     // broker (CLAUDE.md 15, 16).
@@ -221,14 +226,16 @@ async fn main() {
         tokio::spawn(sim::run(clock, device));
     }
 
-    tokio::spawn(mqtt::run(app_state.clone(), broker));
-    tokio::spawn(tick_loop(app_state.clone(), clock));
+    tokio::spawn(mqtt::run(hub.clone(), broker));
+    tokio::spawn(tick_loop(hub.clone()));
 
+    // The two static routes are the app's own; every API route comes from `crates/api`,
+    // which owns the read/write split (ADR 0001, 0007). Merging rather than re-declaring
+    // means this file cannot quietly add a write surface of its own.
     let app = Router::new()
         .route("/", get(|| async { Redirect::temporary("/live") }))
         .route("/live", get(|| async { Html(TRAINING_HTML) }))
-        .route("/ws", get(ws_handler))
-        .with_state(app_state);
+        .merge(api::router(hub));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8730));
     let listener = tokio::net::TcpListener::bind(addr)
@@ -257,35 +264,24 @@ fn broker_config() -> MqttConfig {
 ///
 /// Interpretation is not done here and never was: reads arrive over MQTT and go through
 /// `application::ingest_read` (see [`mqtt`]). This loop only re-derives what the screen
-/// shows.
-async fn tick_loop(app: AppState, clock: VirtualClock) {
-    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
+/// shows, which is why it is the one thing outside `crates/api` that still touches the live
+/// session -- it needs the mutable access `Hub::lock` gives the composition root and gives
+/// nobody else.
+async fn tick_loop(hub: Hub<Store>) {
+    let interval = std::time::Duration::from_millis(PUSH_INTERVAL_MS as u64);
+    let mut ticker = tokio::time::interval(interval);
     loop {
         ticker.tick().await;
-        let now = clock.now();
-        let mut hub = app.hub.lock().await;
+        let now = hub.now();
+        let mut state = hub.lock().await;
 
         // A class ends when its time is up (CLAUDE.md 12, as configured on the session).
-        apply_finish_policy(&mut hub.state, now);
+        apply_finish_policy(&mut state, now);
 
-        let payload = serde_json::to_string(&snapshot(&hub.state, now))
-            .expect("snapshot must serialise");
-        drop(hub);
+        let payload =
+            serde_json::to_string(&snapshot(&state, now)).expect("snapshot must serialise");
+        drop(state);
 
-        // Fails only when nobody is connected, which is normal.
-        let _ = app.tx.send(payload);
-    }
-}
-
-async fn ws_handler(ws: WebSocketUpgrade, State(app): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| push_snapshots(socket, app))
-}
-
-async fn push_snapshots(mut socket: WebSocket, app: AppState) {
-    let mut rx = app.tx.subscribe();
-    while let Ok(payload) = rx.recv().await {
-        if socket.send(Message::Text(payload.into())).await.is_err() {
-            break; // client went away
-        }
+        hub.publish(payload);
     }
 }

@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 domain = { path = "../../crates/domain" }
 application = { path = "../../crates/application" }
+api = { path = "../../crates/api" }
 contract = { path = "../../crates/contract" }
 transport = { path = "../../crates/transport" }
 axum = { version = "0.8", features = ["ws"] }

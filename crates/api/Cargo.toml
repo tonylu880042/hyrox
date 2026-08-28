@@ -1,0 +1,26 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# The delivery layer for HTTP and WebSocket (CLAUDE.md 22; ADR 0007). It sees `application`
+# and `domain` and nothing else: no `storage`, no `transport`, no sqlx, no rumqttc. The
+# store arrives as a generic parameter bounded by `application::HubStore`, exactly as it
+# does in the use cases, so a handler cannot reach a database even by accident and the whole
+# surface is testable against an in-memory fake (CLAUDE.md 24).
+[dependencies]
+domain = { path = "../domain" }
+application = { path = "../application" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["sync"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The tests drive the router in-process with `tower::ServiceExt::oneshot`: no listener, no
+# port, no broker, no SQLite (CLAUDE.md 24). `contract` appears only because the store port's
+# `RawCommit` carries a `CommitOutcome`, which the in-memory fake has to return.
+contract = { path = "../contract" }
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tower = { version = "0.5", features = ["util"] }

@@ -1,7 +1,8 @@
 # HYROX Central Hub
 
 On-site host system for HYROX competition and training sessions. See [CLAUDE.md](CLAUDE.md)
-for the full specification and [docs/decisions/](docs/decisions/) for architecture decisions.
+for the full specification, [docs/roadmap.md](docs/roadmap.md) for where the build has got to,
+and [docs/decisions/](docs/decisions/) for architecture decisions.
 
 ## Run
 
@@ -14,6 +15,8 @@ cargo run -p hub-server
 ```
 
 Then open <http://127.0.0.1:8730/live>. The screen is designed for a 2560x1440 projector.
+The REST and WebSocket API sits under `/api` and `/ws` — see `docs/api.md` for the endpoint
+table, the operator-identity header, and the freshness readout every read carries.
 
 The dev build also runs an emulated ESP32 in-process (`crates/simulator`) which publishes a
 scripted class **over the broker**, so the screen moves without hardware while still
@@ -59,7 +62,8 @@ exactly like a passing one. Point it elsewhere with `HYROX_TEST_MQTT_HOST` /
 | `crates/transport` | MQTT delivery: topic scheme, device status payloads, inbound classification, rumqttc client behind the default `broker` feature. |
 | `crates/simulator` | Emulated ESP32 collectors: presence/re-arm suppression, journal, link faults (CLAUDE.md 25). Over a real broker behind the `broker` feature. |
 | `crates/storage` | SQLite (WAL), migrations, raw + interpreted event stores, recovery. |
-| `apps/hub-server` | Axum server, WebSocket push, the MQTT ingestion loop, the dev venue and its emulated collector, generated static screens. |
+| `crates/api` | The REST / WebSocket surface: router, handlers, wire shapes (ADR 0007). Sees `application` and `domain` only — no SQLite, no MQTT. Endpoint table in `docs/api.md`. |
+| `apps/hub-server` | The composition root: opens the store, recovers the session, runs the MQTT ingestion loop and the dev venue, serves `crates/api`'s router plus the generated static screens. |
 | `design/live` | Screen design sources: station pictograms and the page generator. |
 
 ## Regenerating the screens

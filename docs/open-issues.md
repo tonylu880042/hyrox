@@ -56,6 +56,26 @@ a migration. Until then, do not build the table.
 
 ---
 
+## OPEN — Exception Inbox 的「accept as-is」與「改判」
+
+ADR 0001 D4 列了三個處理動作：accept as-is / void / 改判（改站點、改 ENTRY/EXIT、改選手）。
+只有 `void` 有 use case（`application::exceptions::void`），因此 `crates/api` 也只有
+`POST /api/operator/exceptions/{id}/void`。另外兩個是刻意缺席，不是遺漏。
+
+**accept as-is** 需要一個地方記下「有人看過這筆例外，決定不動它」。`interpreted_events`
+沒有這樣的欄位，而加一個欄位就要先回答：被 accept 的例外還算不算 D4 的 badge？
+重算時它如何參與？兩者都是產品規則。
+
+**改判**等於由 operator 產生一筆事件（不同站點、不同 ENTRY/EXIT、不同選手）。
+CLAUDE.md 20 明文允許，但它是一條獨立的寫入路徑：`raw_event_id` 為 `None` 的
+interpreted event，且必須完整走過 audit 與衍生值重算。它會需要自己的 use case
+與自己的測試。
+
+**Needs:** 先確定 accept as-is 之後那筆例外在 badge 與重算裡的身分。在那之前，
+現場的替代路徑是 void 加上人工紀錄——不理想，但不會產生一個沒人定義的狀態。
+
+---
+
 ## OPEN — competition finish rule
 
 CLAUDE.md 12. Training was answered (below); competition was not.

@@ -14,6 +14,9 @@
 //! cancelling it at a tick boundary could drop an acknowledgement mid-flight.
 
 use crate::{feeder, VirtualClock};
+// The dev clock's `now` comes from the API's clock port, which is the same clock the
+// screens read (ADR 0007).
+use api::Clock;
 use simulator::{
     mqtt::MqttDevice, AbsentTimeout, DeviceConfig, ReaderConfig, RfOutcome, SimDevice,
 };
