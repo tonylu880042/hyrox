@@ -79,6 +79,14 @@ pub enum FinishDecision { Finished, NotFinished, Undetermined }
 會重新推導出相同結果（CLAUDE.md 21）。寫一筆 FINISHED 等於捏造沒有 reader 觀測到的事件。
 被時間結束時仍在站內的選手，該站保持未關閉——沒有人回報他離站。
 
+**策略本身則必須被儲存**（ADR 0004）。推導的前提是策略不變；若重啟後由啟動端重新提供，
+一堂課就可能以不同於開課時的規則結束。`SessionConfig` 連同課表存為
+`session_configs.config_json`，恢復時以儲存值為準，找不到時回報
+`Recovery::ResumedWithoutStoredConfig` 並警告，不靜默退回。
+
+測試：`crates/storage/tests/recovery.rs::resumed::a_resumed_class_finishes_on_the_limit_it_was_armed_with`
+（以 `ClassDuration` 開課、重啟時呼叫端改提供 `CoachDecides`，仍以原限制結束選手）。
+
 測試：
 - `crates/domain/tests/course.rs`：`the_finish_policy_defaults_to_not_configured`、
   `an_unconfigured_finish_policy_never_decides_an_athlete_is_finished`
@@ -99,7 +107,8 @@ pub enum FinishDecision { Finished, NotFinished, Undetermined }
 1. 在 `FinishPolicy` 增加 variant，並在 `evaluate()` 實作。
 2. 先寫測試（CLAUDE.md 24），再實作。
 3. 更新本檔，並視影響範圍撰寫 ADR（CLAUDE.md 30）。
-4. `crates/storage` 需要新增 finish policy 的持久化與解析（目前 SessionConfig 尚未持久化）。
+4. 持久化不需再動：`SessionConfig` 整份以 JSON 儲存（ADR 0004），新增 variant 會自動
+   跟著存讀，不需要 migration。
 
 在此之前，任何模組都**不得**自行推論競賽選手是否完成。
 

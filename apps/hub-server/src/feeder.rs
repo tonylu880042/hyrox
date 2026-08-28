@@ -8,8 +8,7 @@
 //! simulator (CLAUDE.md 25) covers reconnects, resends and reboots; that arrives with MQTT.
 
 use domain::{
-    BindingLedger, Course, CourseStep, Instant, ReaderKey, ReaderMode, ReaderRegistration,
-    ReaderRegistry, StationTarget, TagId,
+    Course, CourseStep, Instant, ReaderKey, ReaderMode, ReaderRegistration, StationTarget, TagId,
 };
 use mqtt::EdgeEvent;
 
@@ -75,29 +74,31 @@ fn device_id() -> String {
     format!("esp32-{}", DEVICE_MAC.replace(':', ""))
 }
 
-/// The reader map the hub interprets reads through (CLAUDE.md 8). Held in memory: Phase 1
-/// has no table for reader configuration yet.
-pub fn readers() -> ReaderRegistry {
-    let mut registry = ReaderRegistry::new();
+/// The reader map the hub interprets reads through (CLAUDE.md 8). Handed to the registration
+/// use case at startup, which persists it: after the first run these come back from the
+/// store instead (ADR 0004).
+pub fn readers() -> Vec<ReaderRegistration> {
+    let mut out = Vec::new();
     for step in &course().steps {
         for mode in [ReaderMode::Entry, ReaderMode::Exit] {
             let key = ReaderKey::parse(&device_id(), &reader_id(&step.station, mode))
                 .expect("dev reader ids are canonical");
-            registry.register(ReaderRegistration::new(key, &step.station, mode));
+            out.push(ReaderRegistration::new(key, &step.station, mode));
         }
     }
-    registry
+    out
 }
 
-/// Bands handed out at check-in (ADR 0001 D3), pre-bound for the dev script.
-pub fn bindings(session_id: &str, at: Instant) -> BindingLedger {
-    let mut ledger = BindingLedger::new();
-    for i in 0..athletes().len() {
-        let id = athlete_id(i);
-        let tag = TagId::parse(&tag_for(&id)).expect("dev tag ids are non-empty");
-        ledger.bind(session_id, &tag, &id, at).expect("dev bindings do not collide");
-    }
-    ledger
+/// Bands handed out at check-in (ADR 0001 D3), bound through the check-in use case so they
+/// are stored and survive a restart like real ones.
+pub fn bands() -> Vec<(TagId, String)> {
+    (0..athletes().len())
+        .map(|i| {
+            let id = athlete_id(i);
+            let tag = TagId::parse(&tag_for(&id)).expect("dev tag ids are non-empty");
+            (tag, id)
+        })
+        .collect()
 }
 
 /// One class: each athlete walks the course, staggered at the start, with per-athlete pace.

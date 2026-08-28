@@ -8,7 +8,8 @@
 mod feeder;
 
 use application::{
-    apply_finish_policy, ingest_read, snapshot, LiveSession, Recovery, RosterEntry, SessionPlan,
+    apply_finish_policy, checkin::bind_tag, ingest_read, register_reader, snapshot, LiveSession,
+    OperatorCommand, Recovery, RosterEntry, SessionPlan,
 };
 use axum::{
     extract::{
@@ -99,19 +100,39 @@ async fn main() {
         .expect("recovery failed");
     match recovery {
         Recovery::Resumed => println!(
-            "resumed session {} with {} athletes, {} events already interpreted",
+            "resumed session {} ({:?}) with {} athletes, {} events already interpreted",
             state.session.id,
+            state.config.finish_policy,
             state.athletes.len(),
             state.session.interpreted_event_count
+        ),
+        // Said out loud rather than swallowed: the class is running under configuration that
+        // may not be the configuration it was armed with (ADR 0004).
+        Recovery::ResumedWithoutStoredConfig => eprintln!(
+            "WARNING: resumed session {} has no stored configuration; \
+             using the startup plan's course and finish rule",
+            state.session.id
         ),
         Recovery::Started => println!("started new session {}", state.session.id),
     }
 
-    // Reader map and tag bindings are dev configuration held in memory: Phase 1 has no
-    // tables for either, so they are rebuilt at startup rather than recovered.
+    // Dev venue provisioning. The reader map and the bands are recovered from the store by
+    // `resume_or_start`; these calls only fill in what a fresh database does not have yet.
+    // Registering an unchanged reader is a no-op, and a band already bound is left alone.
     let session_id = state.session.id.clone();
-    state.readers = feeder::readers();
-    state.bindings = feeder::bindings(&session_id, state.class_start);
+    let provisioning = OperatorCommand::new("DEV FEEDER", state.class_start);
+    for registration in feeder::readers() {
+        register_reader(&mut state, &store, &registration, &provisioning)
+            .await
+            .expect("dev reader registration");
+    }
+    for (tag, athlete_id) in feeder::bands() {
+        if state.bindings.athlete_for_tag(&session_id, &tag).is_none() {
+            bind_tag(&mut state, &store, &tag, &athlete_id, &provisioning)
+                .await
+                .expect("dev band binding");
+        }
+    }
 
     // Dev virtual clock only: pick up where the stored events left off instead of replaying
     // the class from zero. Not a business value.
