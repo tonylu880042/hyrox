@@ -12,8 +12,9 @@
 //! * An event leaves the edge only when the hub has said it is durable (CLAUDE.md 18) —
 //!   see [`journal`].
 //!
-//! It depends on `mqtt` for the wire contract and on nothing else: a real edge collector
-//! carries no business meaning (CLAUDE.md 8), so this one must not be able to either.
+//! It depends on `contract` for what it says and on `transport` for how it says it, and on
+//! nothing else: a real edge collector carries no business meaning (CLAUDE.md 8), so this one
+//! must not be able to either (ADR 0005).
 
 pub mod bench;
 pub mod device;

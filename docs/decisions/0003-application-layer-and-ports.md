@@ -5,6 +5,8 @@
 - 影響範圍：新增 `crates/application`；`crates/storage`（實作 port、新增 audit 表）、
   `crates/domain`（新增一個 exception reason）、`apps/hub-server`（改為只做接線與傳輸）
 - 不影響：MQTT 線路契約、既有資料表結構、計時規則
+- 註：本文原稱該 crate 為 `mqtt`；ADR 0005 之後契約在 `crates/contract`，傳輸在 `crates/transport`。
+  文中名稱已更新，決議本身未變
 
 ## 背景
 
@@ -23,7 +25,7 @@
 ```text
 hub-server (axum) ──▶ application ──▶ domain
                           │            ▲
-                          └─▶ mqtt     │
+                          └─▶ contract │
                                     storage（實作 port）
 ```
 
@@ -53,8 +55,8 @@ raw edge event
 
 ### 3. ACK 的型別保證不被削弱
 
-ADR 0002 規定只有 `mqtt::ingest` 能鑄造 `Ack`。ingestion use case 因此**不自己寫 raw**，
-而是把 `HubStore` 包成 `mqtt::EventStore` 交給 `mqtt::ingest`，只是額外把 raw row id
+ADR 0002 規定只有 `contract::ingest` 能鑄造 `Ack`。ingestion use case 因此**不自己寫 raw**，
+而是把 `HubStore` 包成 `contract::EventStore` 交給 `contract::ingest`，只是額外把 raw row id
 放進一個 atomic 帶回來（用來連結 interpreted 與 raw）。
 
 考慮過的替代方案：把 `EventStore::commit` 的回傳值改成含 row id。那會讓每一個 store

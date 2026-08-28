@@ -7,7 +7,7 @@
 //!
 //! This models the *transport*, not the broker: QoS 1 already permits every one of these.
 
-use mqtt::{AckPayload, EdgeEvent};
+use contract::{AckPayload, EdgeEvent};
 
 /// Whether the link delivers each message once or twice. QoS 1 is at-*least*-once, so a
 /// duplicate is correct behaviour, not a fault the transport must prevent (CLAUDE.md 15).

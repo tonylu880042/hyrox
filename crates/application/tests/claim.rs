@@ -16,7 +16,7 @@ use domain::{
     AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
     ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, TagId,
 };
-use mqtt::{EdgeEvent, ReceivedEvent};
+use contract::{EdgeEvent, ReceivedEvent};
 use support::FakeStore;
 
 const DEVICE: &str = "a4:cf:12:8b:3d:91";
@@ -24,8 +24,8 @@ const CLASS_START: Instant = Instant(1_000_000);
 
 fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
     let event = EdgeEvent {
-        device_id: mqtt::DeviceId::from_mac(DEVICE).expect("device id"),
-        reader_id: mqtt::ReaderId::new(reader).expect("reader id"),
+        device_id: contract::DeviceId::from_mac_str(DEVICE).expect("device id"),
+        reader_id: contract::ReaderId::parse(reader).expect("reader id"),
         boot_id: 7,
         sequence,
         tag_id: tag.to_string(),

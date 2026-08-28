@@ -4,7 +4,7 @@
 //! be lost on reflash and would make a swapped board indistinguishable from a new one.
 //! `reader_id` is a separate type because one ESP32 may host several readers later.
 
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 /// Canonical prefix. Named rather than inlined so the format lives in exactly one place.
@@ -22,6 +22,20 @@ pub enum DeviceIdError {
     WrongLength { found: usize },
     NotHex,
 }
+
+impl fmt::Display for DeviceIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingPrefix => write!(f, "device id must start with {DEVICE_ID_PREFIX:?}"),
+            Self::WrongLength { found } => {
+                write!(f, "device id needs {MAC_HEX_LEN} hex digits, found {found}")
+            }
+            Self::NotHex => f.write_str("device id must be hexadecimal"),
+        }
+    }
+}
+
+impl std::error::Error for DeviceIdError {}
 
 impl DeviceId {
     /// Parse a canonical `esp32-a4cf128b3d91`. Case-insensitive on input because CLAUDE.md
@@ -84,6 +98,17 @@ impl fmt::Display for DeviceId {
     }
 }
 
+/// Deserialisation goes through `parse`, so an id arriving on the wire is validated at the
+/// boundary rather than trusted (CLAUDE.md 16). Written by hand rather than derived because
+/// the serialised form stays the bare string `#[serde(transparent)]` already produces; only
+/// the way back in gains a check.
+impl<'de> Deserialize<'de> for DeviceId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
 fn hex_digit(nibble: u8) -> char {
     char::from(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 })
 }
@@ -99,6 +124,19 @@ pub enum ReaderIdError {
     Empty,
     InvalidCharacter { found: char },
 }
+
+impl fmt::Display for ReaderIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("reader id must not be empty"),
+            Self::InvalidCharacter { found } => {
+                write!(f, "reader id must be alphanumeric, '-' or '_' (found {found:?})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReaderIdError {}
 
 impl ReaderId {
     /// Lower-cased on parse for the same reason as `DeviceId`. Restricted to characters
@@ -126,5 +164,14 @@ impl ReaderId {
 impl fmt::Display for ReaderId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// Validated on the way in, for the same reason as [`DeviceId`]: a reader id that cannot be
+/// looked up in the registry must fail as a malformed payload, not as a mystery miss later.
+impl<'de> Deserialize<'de> for ReaderId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
     }
 }

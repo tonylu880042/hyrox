@@ -3,7 +3,7 @@
 //! The link is a deterministic fault model rather than a real network: duplication,
 //! reordering and ACK loss are switches, so a failure mode is a test and not a stakeout.
 
-use mqtt::{EventId, ReaderId};
+use contract::{EventId, ReaderId};
 use simulator::{
     AbsentTimeout, AckDelivery, Bench, DeviceConfig, Duplication, InMemoryHub, Link, LinkFaults,
     Ordering, ReaderConfig, SimDevice,
@@ -14,7 +14,7 @@ const TAG_B: &str = "E280117000005678";
 const T0: i64 = 1_787_734_800_000;
 
 fn rid(id: &str) -> ReaderId {
-    ReaderId::new(id).unwrap()
+    ReaderId::parse(id).unwrap()
 }
 
 fn device(mac: &str, readers: &[&str]) -> SimDevice {

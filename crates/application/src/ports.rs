@@ -8,11 +8,11 @@
 //! synchronous port would force the hub to block a Tokio worker. The cost is that these
 //! traits are not `dyn`-compatible, so the use cases are generic over them.
 
+use contract::CommitOutcome;
 use domain::{
     AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
     ReaderRegistry, Session, SessionConfig, TagBinding,
 };
-use mqtt::CommitOutcome;
 
 /// A raw reader event on its way to the immutable store (CLAUDE.md 16, 19).
 ///

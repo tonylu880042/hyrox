@@ -4,7 +4,8 @@
 //! one failure the system may never have (CLAUDE.md 31). It must be able to say so before
 //! it happens, and the hub must be able to surface it to an operator.
 
-use crate::DeviceId;
+use contract::WireError;
+use domain::DeviceId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,8 +29,8 @@ pub enum DeviceWarning {
 }
 
 impl DeviceStatus {
-    pub fn decode(payload: &[u8]) -> Result<Self, crate::WireError> {
-        serde_json::from_slice(payload).map_err(|e| crate::WireError::Malformed(e.to_string()))
+    pub fn decode(payload: &[u8]) -> Result<Self, WireError> {
+        serde_json::from_slice(payload).map_err(|e| WireError::Malformed(e.to_string()))
     }
 
     pub fn encode(&self) -> Vec<u8> {

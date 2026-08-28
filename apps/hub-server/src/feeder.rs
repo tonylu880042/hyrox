@@ -10,7 +10,7 @@
 use domain::{
     Course, CourseStep, Instant, ReaderKey, ReaderMode, ReaderRegistration, StationTarget, TagId,
 };
-use mqtt::EdgeEvent;
+use contract::EdgeEvent;
 
 /// One dev collector, standing in for the venue's ESP32s.
 const DEVICE_MAC: &str = "a4:cf:12:8b:3d:91";
@@ -130,8 +130,8 @@ pub fn script(class_start: Instant) -> Vec<ScriptedRead> {
         .map(|(seq, (t, station, mode, tag_id))| ScriptedRead {
             at: Instant(t),
             event: EdgeEvent {
-                device_id: mqtt::DeviceId::from_mac(DEVICE_MAC).expect("dev MAC"),
-                reader_id: mqtt::ReaderId::new(&reader_id(&station, mode)).expect("dev reader"),
+                device_id: contract::DeviceId::from_mac_str(DEVICE_MAC).expect("dev MAC"),
+                reader_id: contract::ReaderId::parse(&reader_id(&station, mode)).expect("dev reader"),
                 boot_id: BOOT_ID,
                 sequence: seq as i64 + 1,
                 tag_id,

@@ -4,10 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
-# Depends on the wire contract only. An emulated ESP32 knows no business meaning
-# (CLAUDE.md 8), so it must not be able to reach the domain or the store.
+# Depends on the contract it speaks and the transport it speaks it over, and on nothing
+# else. An emulated ESP32 knows no business meaning (CLAUDE.md 8), so it must not be able
+# to reach the domain, the use cases or the store (ADR 0005).
 [dependencies]
-mqtt = { path = "../mqtt", default-features = false }
+contract = { path = "../contract" }
+transport = { path = "../transport", default-features = false }
 serde = { workspace = true }
 thiserror = "2"
 

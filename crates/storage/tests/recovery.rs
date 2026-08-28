@@ -148,7 +148,7 @@ mod resumed {
         Interpreted, ReaderKey, ReaderMode, ReaderRegistration, Session, SessionConfig,
         SessionMode, StationTarget, TagId,
     };
-    use mqtt::{EdgeEvent, ReceivedEvent};
+    use contract::{EdgeEvent, ReceivedEvent};
     use storage::Store;
 
     const T0: i64 = 1_787_734_800_000;
@@ -190,8 +190,8 @@ mod resumed {
 
     fn read(reader: &str, tag: &str, sequence: i64, ms: i64) -> ReceivedEvent {
         let event = EdgeEvent {
-            device_id: mqtt::DeviceId::from_mac(DEVICE).expect("device id"),
-            reader_id: mqtt::ReaderId::new(reader).expect("reader id"),
+            device_id: contract::DeviceId::from_mac_str(DEVICE).expect("device id"),
+            reader_id: contract::ReaderId::parse(reader).expect("reader id"),
             boot_id: 7,
             sequence,
             tag_id: tag.to_string(),

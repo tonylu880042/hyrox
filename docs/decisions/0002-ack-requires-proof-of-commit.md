@@ -4,6 +4,11 @@
 - 日期：2026-08-27
 - 影響範圍：`crates/mqtt`（新增）、`crates/simulator`（新增）、未來的 Hub ingestion 接線
 - 不影響：`domain`、`storage`（本次未接線）
+- **2026-08-28 更新（ADR 0005）**：本文寫成時，契約與 ACK 協定都在 `crates/mqtt`。
+  之後契約與 ACK 協定移到 `crates/contract`，`crates/mqtt` 改名 `crates/transport`
+  且只留 topic / broker client。**型別保證原封不動**：`Ack` 仍無公開建構子、無
+  `Deserialize`，仍只能由 `Commit::into_ack` 取得，而 `Commit` 仍只在 `contract::ingest`
+  裡、commit 成功的下一行鑄造。以下內文的 `crates/mqtt` 請讀作 `crates/contract`。
 
 ## 背景
 
@@ -69,9 +74,15 @@ EventStore::commit() -> Ok(CommitOutcome)   ← port，Hub 之後以 SQLite 實�
 CLAUDE.md §3 的依賴方向：基礎設施依賴 domain，反之不可。
 線路層是契約，`storage` 是它的 adapter。
 
+> ADR 0005 修正了這一段的前半：契約**確實**依賴 `domain`，但只取身分型別
+> （`DeviceId` / `ReaderId`，CLAUDE.md 7.3）。當初在線路層另外複製一份身分型別
+> 的做法造成同一概念有兩個型別、兩套驗證，那是錯的。方向仍然朝內，`storage`
+> 與 `application` 仍然不可被契約看見。
+
 實務效果：`crates/mqtt` 與 `crates/simulator` 可以在完全沒有 SQLite、
 沒有 broker 的情況下編譯與測試（CLAUDE.md 24）。
-`crates/mqtt` 的 `broker` feature 關閉後，rumqttc 甚至不會進入建置。
+`crates/mqtt` 的 `broker` feature 關閉後，rumqttc 甚至不會進入建置
+（ADR 0005 之後：該 feature 在 `crates/transport`，`crates/contract` 根本不含 rumqttc）。
 
 `storage::RawEvent` 目前以 `String` / `i64` 表示同一組欄位，語意一致
 （同樣以 `device_id + boot_id + sequence` 判重），接線時做一次淺層轉換即可。

@@ -12,7 +12,7 @@ use domain::{
     AthleteState, BindingLedger, Instant, ReaderRegistration, ReaderRegistry, Session,
     SessionConfig, TagBinding,
 };
-use mqtt::CommitOutcome;
+use contract::CommitOutcome;
 
 impl HubStore for Store {
     type Error = StoreError;

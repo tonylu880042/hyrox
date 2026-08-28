@@ -3,7 +3,7 @@
 
 use application::{AuditEntry, HubStore, InterpretedWrite, RawRead};
 use domain::{ExceptionReason, Instant, Interpreted, Session, SessionMode};
-use mqtt::CommitOutcome;
+use contract::CommitOutcome;
 use storage::Store;
 
 const T0: i64 = 1_787_734_800_000;

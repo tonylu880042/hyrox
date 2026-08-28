@@ -21,7 +21,7 @@ use axum::{
     Router,
 };
 use domain::{Duration, FinishPolicy, Instant, Session, SessionConfig, SessionMode};
-use mqtt::ReceivedEvent;
+use contract::ReceivedEvent;
 use std::{
     net::SocketAddr,
     sync::Arc,

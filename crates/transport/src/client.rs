@@ -5,7 +5,9 @@
 //! testable with no broker in the build at all (CLAUDE.md 24). This module only moves
 //! bytes. Nothing here may grow a business rule (CLAUDE.md 29).
 
-use crate::{topic, Ack, DeviceId, EdgeEvent, DeviceStatus};
+use crate::{topic, DeviceStatus};
+use contract::{Ack, EdgeEvent};
+use domain::DeviceId;
 use rumqttc::{AsyncClient, ClientError, EventLoop, MqttOptions};
 
 /// QoS 1 for everything that matters: at-least-once delivery, with the application ACK and

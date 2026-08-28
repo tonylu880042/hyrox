@@ -3,8 +3,11 @@
 本檔是 ESP32 邊緣採集器與 Central Hub 之間的線路契約。
 **契約變更必須同步更新本檔與測試**（CLAUDE.md 30）。
 
-對應程式碼：`crates/mqtt/`（契約本身）、`crates/simulator/`（模擬 ESP32 行為）。
-兩個 crate 都不依賴 `domain` 或 `storage`：邊緣裝置不承載業務語意（CLAUDE.md 8）。
+對應程式碼：`crates/contract/`（契約本身：事件、idempotency key、ACK 協定）、
+`crates/transport/`（MQTT topic 與 broker client）、`crates/simulator/`（模擬 ESP32 行為）。
+三個 crate 都不依賴 `application` 或 `storage`：邊緣裝置不承載業務語意（CLAUDE.md 8）。
+`crates/contract` 只依賴 `domain` 的身分型別（`DeviceId` / `ReaderId`，CLAUDE.md 7.3），
+讓線路解碼直接落在 Hub 查表所用的同一個型別上（ADR 0005）。
 
 ---
 
@@ -18,9 +21,13 @@
 esp32-a4cf128b3d91
 ```
 
-`DeviceId::from_mac` 接受 `A4:CF:12:8B:3D:91`、`a4-cf-12-8b-3d-91`、`a4cf128b3d91`
-三種寫法，一律正規化為上述形式。不使用隨機 UUID：重新燒錄不得讓同一台機器
-變成兩台。
+`DeviceId::from_mac_str` 接受 `A4:CF:12:8B:3D:91`、`a4-cf-12-8b-3d-91`、`a4cf128b3d91`
+三種寫法（給設定檔與人手輸入用），一律正規化為上述形式。不使用隨機 UUID：
+重新燒錄不得讓同一台機器變成兩台。
+
+**線路上只接受正規形式**：`device_id` 欄位走 `DeviceId::parse`，大小寫不拘，
+但不接受分隔符號——`esp32-a4:cf:12:8b:3d:91` 會被判為 malformed。
+韌體送出的就是自己的正規 id，分隔符號只會出現在人寫的設定裡（ADR 0005）。
 
 ### reader_id
 
@@ -29,6 +36,10 @@ esp32-a4cf128b3d91
 `ReaderId` **不分大小寫**（`RFID-02` 與 `rfid-02` 視為同一個）。
 CLAUDE.md §8 內文寫 `RFID-02`、§16 JSON 範例寫 `rfid-02`，折疊大小寫避免
 兩種拼法在 Reader 對應表中變成兩列。**此為待人工確認事項**，見第 7 節。
+
+字元限定為英數字、`-`、`_`：這是 Hub 的 Reader 對應表本來就有的規則，
+現在線路解碼也套用同一條（ADR 0005），避免一個進得了資料庫、卻永遠查不到
+對應的 `reader_id`。空字串一律拒絕。
 
 ---
 
@@ -213,13 +224,14 @@ retained：新啟動的 Hub 應立刻看見在它上線前就已告警的裝置�
 
 | 主題 | 檔案 |
 |---|---|
-| 事件契約、idempotency key、官方時間 | `crates/mqtt/tests/protocol.rs` |
-| Topic 配置 | `crates/mqtt/tests/topics.rs` |
-| ACK 協定、commit 前不得 ACK | `crates/mqtt/tests/ack.rs` |
+| 事件契約、idempotency key、官方時間 | `crates/contract/tests/protocol.rs` |
+| Topic 配置 | `crates/transport/tests/topics.rs` |
+| ACK 協定、commit 前不得 ACK | `crates/contract/tests/ack.rs` |
 | Presence / re-arm 抑制 | `crates/simulator/tests/suppression.rs` |
 | Journal 語意 | `crates/simulator/tests/journal.rs` |
 | 單一裝置：Reader、Tag、重開機 | `crates/simulator/tests/device.rs` |
 | 斷線／重送／重複／亂序／ACK 遺失 | `crates/simulator/tests/fleet.rs` |
 
 全部不需要 MQTT broker、不需要 RFID 硬體（CLAUDE.md 24）。
-`crates/mqtt` 的 `broker` feature 關閉後，連 rumqttc 都不會進入建置。
+`crates/transport` 的 `broker` feature 關閉後，連 rumqttc 都不會進入建置；
+`crates/contract` 本來就沒有 rumqttc。

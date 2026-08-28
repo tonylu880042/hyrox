@@ -1,6 +1,6 @@
 //! An in-memory stand-in for the Central Hub's store.
 //!
-//! It implements [`mqtt::EventStore`] with the one behaviour the real SQLite store must
+//! It implements [`contract::EventStore`] with the one behaviour the real SQLite store must
 //! also have: idempotency on `device_id + boot_id + sequence` (CLAUDE.md 16). That is
 //! enough to exercise the whole edge → link → hub → ACK loop with no broker, no database
 //! and no hardware (CLAUDE.md 24).
@@ -8,7 +8,7 @@
 //! It is a test double. The real store is `crates/storage`, and wiring the two together is
 //! a separate piece of work.
 
-use mqtt::{CommitOutcome, EventId, EventStore, ReceivedEvent};
+use contract::{CommitOutcome, EventId, EventStore, ReceivedEvent};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 

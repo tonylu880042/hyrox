@@ -49,14 +49,14 @@ impl Default for AbsentTimeout {
 /// the same dwell behaviour.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReaderConfig {
-    pub reader_id: mqtt::ReaderId,
+    pub reader_id: contract::ReaderId,
     pub absent_timeout: AbsentTimeout,
 }
 
 impl ReaderConfig {
     pub fn new(reader_id: &str, absent_timeout: AbsentTimeout) -> Result<Self, ConfigError> {
         Ok(Self {
-            reader_id: mqtt::ReaderId::new(reader_id)?,
+            reader_id: contract::ReaderId::parse(reader_id)?,
             absent_timeout,
         })
     }

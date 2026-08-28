@@ -28,7 +28,11 @@ cargo test
 
 | Path | Contains |
 | --- | --- |
-| `crates/domain` | Session lifecycle, athlete state, reader interpretation, transition timing. No tokio, no axum, no IO. |
+| `crates/domain` | Session lifecycle, athlete state, reader interpretation, transition timing. Device and reader identity. No tokio, no axum, no IO. |
+| `crates/contract` | What the ESP32 and the hub agreed on: the edge event, the idempotency key, and the ACK-after-commit protocol (ADR 0002, ADR 0005). No broker, no database. |
+| `crates/application` | Use cases: ingestion, check-in, recovery, live snapshots. Ports only — no SQL, no HTTP, no MQTT. |
+| `crates/transport` | MQTT delivery: topic scheme, device status payloads, rumqttc client behind the default `broker` feature. |
+| `crates/simulator` | Emulated ESP32 collectors: presence/re-arm suppression, journal, link faults (CLAUDE.md 25). |
 | `crates/storage` | SQLite (WAL), migrations, raw + interpreted event stores, recovery. |
 | `apps/hub-server` | Axum server, WebSocket push, scripted event feeder, generated static screens. |
 | `design/live` | Screen design sources: station pictograms and the page generator. |

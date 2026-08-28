@@ -5,7 +5,7 @@
 //! this layer -- HTTP handlers, MQTT callbacks, Tauri commands -- may hold business logic
 //! (CLAUDE.md 29), which is exactly what this crate exists to make possible.
 //!
-//! Dependencies point inward (CLAUDE.md 3): `domain` for the rules, `mqtt` for the wire
+//! Dependencies point inward (CLAUDE.md 3): `domain` for the rules, `contract` for the wire
 //! contract, and ports for everything else. No axum, no sqlx, no OS-specific API, so the
 //! whole crate compiles and tests with no database, no broker and no HTTP (CLAUDE.md 24).
 //!

@@ -11,7 +11,7 @@ use domain::{
     AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
     ReaderRegistry, Session, SessionConfig, TagBinding,
 };
-use mqtt::CommitOutcome;
+use contract::CommitOutcome;
 use std::sync::Mutex;
 
 /// What the store was asked to do, in order. The ingestion contract is as much about

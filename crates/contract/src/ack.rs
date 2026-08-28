@@ -12,6 +12,11 @@
 //! [`Commit::into_ack`], and a [`Commit`] is only minted inside [`ingest`] on the line
 //! after [`EventStore::commit`] returned `Ok`. Code that wants to ACK early has nothing to
 //! ACK with.
+//!
+//! It lives beside the event contract rather than in `application` because the ACK is what
+//! the *edge* waits for: `AckPayload` is parsed by firmware, and the emulated device in
+//! `crates/simulator` drives this same loop. One minting site for both sides is what keeps
+//! the guarantee single-valued (ADR 0005).
 
 use crate::{DeviceId, EdgeEvent, EventId, ReceivedEvent, WireError};
 use serde::{Deserialize, Serialize};

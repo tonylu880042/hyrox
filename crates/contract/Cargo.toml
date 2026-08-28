@@ -1,0 +1,20 @@
+[package]
+name = "contract"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# The agreement between the ESP32 and the hub, and nothing else. It depends on `domain`
+# only for identity (CLAUDE.md 7.3), which the wire carries and the registry is keyed by;
+# depending on it in the other direction would be the violation (CLAUDE.md 3).
+#
+# No transport, no storage, no tokio: the contract, the idempotency key and the ACK rule
+# compile and test with no broker and no database anywhere in the build (CLAUDE.md 24).
+[dependencies]
+domain = { path = "../domain" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

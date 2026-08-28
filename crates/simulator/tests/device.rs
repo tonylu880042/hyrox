@@ -1,6 +1,7 @@
 //! A single emulated ESP32: identity, readers, counters and reboot (CLAUDE.md 16, 18, 25).
 
-use mqtt::{AckStatus, DeviceWarning, ReaderId};
+use contract::{AckStatus, ReaderId};
+use transport::DeviceWarning;
 use simulator::{AbsentTimeout, DeviceConfig, DeviceError, JournalConfig, ReaderConfig, RfOutcome, SimDevice};
 
 const TAG_A: &str = "E280117000001234";
@@ -20,7 +21,7 @@ fn two_reader_device() -> SimDevice {
 }
 
 fn rid(id: &str) -> ReaderId {
-    ReaderId::new(id).unwrap()
+    ReaderId::parse(id).unwrap()
 }
 
 #[test]

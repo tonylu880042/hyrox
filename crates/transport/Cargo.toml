@@ -1,18 +1,20 @@
 [package]
-name = "mqtt"
+name = "transport"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
-# No domain, no storage: this is the wire layer. Everything above it depends on the
-# contract, never the other way round (CLAUDE.md 3).
+# Delivery only: topics, QoS, the broker client. What is carried is `contract`; what the
+# hub does with it is `application`. Neither is reachable from here in the other direction
+# (CLAUDE.md 3).
 #
-# `rumqttc` sits behind the `broker` feature so the protocol, idempotency and ACK logic
+# `rumqttc` sits behind the `broker` feature so the topic scheme and the status payloads
 # can be compiled and tested with no broker anywhere in the build (CLAUDE.md 24).
 [dependencies]
+contract = { path = "../contract" }
+domain = { path = "../domain" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = "2"
 rumqttc = { version = "0.24", optional = true }
 
 [features]

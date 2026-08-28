@@ -9,7 +9,8 @@ use crate::{
     AbsentTimeout, AckResult, ConfigError, DeviceError, Journal, JournalConfig, PresenceDecision,
     ReaderConfig, TagPresence,
 };
-use mqtt::{AckPayload, AckStatus, DeviceId, DeviceStatus, EdgeEvent, EventId, ReaderId};
+use contract::{AckPayload, AckStatus, DeviceId, EdgeEvent, EventId, ReaderId};
+use transport::DeviceStatus;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
@@ -24,7 +25,7 @@ impl DeviceConfig {
     /// identity (CLAUDE.md 7.3).
     pub fn new(mac: &str) -> Result<Self, ConfigError> {
         Ok(Self {
-            device_id: DeviceId::from_mac(mac)?,
+            device_id: DeviceId::from_mac_str(mac)?,
             readers: Vec::new(),
             journal: JournalConfig::default(),
         })

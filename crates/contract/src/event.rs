@@ -1,4 +1,8 @@
 //! The ESP32 → Central Hub event contract (CLAUDE.md 16).
+//!
+//! `device_id` and `reader_id` decode straight into the `domain` identity types
+//! (CLAUDE.md 7.3): the wire lands on the very type the reader registry is keyed by, so
+//! there is no conversion step between them to drift out of step (ADR 0005).
 
 use crate::{DeviceId, EventId, ReaderId};
 use serde::{Deserialize, Serialize};

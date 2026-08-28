@@ -2,7 +2,7 @@
 //!
 //! Nothing here touches a broker: the contract is data, and data is testable on its own.
 
-use mqtt::{DeviceId, EdgeEvent, EventId, ReaderId, ReceivedEvent, WireError};
+use contract::{DeviceId, EdgeEvent, EventId, ReaderId, ReceivedEvent, WireError};
 
 /// The exact payload documented in CLAUDE.md 16.
 const CANONICAL: &str = r#"{
@@ -102,7 +102,7 @@ fn rejects_an_empty_tag_id() {
 fn device_id_is_derived_from_the_base_mac() {
     for mac in ["A4:CF:12:8B:3D:91", "a4-cf-12-8b-3d-91", "a4cf128b3d91"] {
         assert_eq!(
-            DeviceId::from_mac(mac).unwrap().as_str(),
+            DeviceId::from_mac_str(mac).unwrap().as_str(),
             "esp32-a4cf128b3d91",
             "{mac} must normalise to the canonical device id"
         );
@@ -111,24 +111,24 @@ fn device_id_is_derived_from_the_base_mac() {
 
 #[test]
 fn device_id_rejects_something_that_is_not_a_mac() {
-    assert!(DeviceId::from_mac("not-a-mac").is_err());
-    assert!(DeviceId::from_mac("a4cf128b3d9").is_err(), "11 nibbles");
-    assert!(DeviceId::from_mac("").is_err());
+    assert!(DeviceId::from_mac_str("not-a-mac").is_err());
+    assert!(DeviceId::from_mac_str("a4cf128b3d9").is_err(), "11 nibbles");
+    assert!(DeviceId::from_mac_str("").is_err());
 }
 
 #[test]
 fn device_id_parses_back_from_its_canonical_form() {
-    let id = DeviceId::from_mac("a4:cf:12:8b:3d:91").unwrap();
-    assert_eq!(id.as_str().parse::<DeviceId>().unwrap(), id);
-    assert!("esp32-zzzz".parse::<DeviceId>().is_err());
+    let id = DeviceId::from_mac_str("a4:cf:12:8b:3d:91").unwrap();
+    assert_eq!(DeviceId::parse(id.as_str()).unwrap(), id);
+    assert!(DeviceId::parse("esp32-zzzz").is_err());
 }
 
 #[test]
 fn reader_id_is_case_insensitive() {
     // Section 8 writes `RFID-02` in prose and `rfid-02` in the JSON example; folding case
     // stops the two spellings mapping to two different stations.
-    assert_eq!(ReaderId::new("RFID-02").unwrap(), ReaderId::new("rfid-02").unwrap());
-    assert!(ReaderId::new("").is_err());
+    assert_eq!(ReaderId::parse("RFID-02").unwrap(), ReaderId::parse("rfid-02").unwrap());
+    assert!(ReaderId::parse("").is_err());
 }
 
 // --- idempotency key (CLAUDE.md 16) --------------------------------------------------
@@ -169,8 +169,8 @@ fn a_reboot_makes_a_repeated_sequence_a_different_event() {
 fn different_devices_never_share_a_key() {
     let mut a = canonical_event();
     let mut b = canonical_event();
-    a.device_id = DeviceId::from_mac("a4cf128b3d91").unwrap();
-    b.device_id = DeviceId::from_mac("a4cf128b3d92").unwrap();
+    a.device_id = DeviceId::from_mac_str("a4cf128b3d91").unwrap();
+    b.device_id = DeviceId::from_mac_str("a4cf128b3d92").unwrap();
     assert_ne!(EventId::of(&a), EventId::of(&b));
 }
 

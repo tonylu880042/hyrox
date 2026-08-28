@@ -13,7 +13,8 @@
 //! match.
 
 use crate::{ConfigError, JournalError};
-use mqtt::{DeviceWarning, EdgeEvent, EventId};
+use contract::{EdgeEvent, EventId};
+use transport::DeviceWarning;
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

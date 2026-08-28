@@ -1,9 +1,10 @@
 //! Topic scheme (CLAUDE.md 5, 8, 15, 17).
 
-use mqtt::{topic, DeviceId};
+use domain::DeviceId;
+use transport::topic;
 
 fn device() -> DeviceId {
-    DeviceId::from_mac("a4cf128b3d91").unwrap()
+    DeviceId::from_mac_str("a4cf128b3d91").unwrap()
 }
 
 #[test]

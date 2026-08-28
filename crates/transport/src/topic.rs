@@ -12,7 +12,7 @@
 //! The `v1` segment exists so a contract change is a new topic rather than a silent
 //! reinterpretation of the old one (CLAUDE.md 30).
 
-use crate::DeviceId;
+use domain::DeviceId;
 
 const ROOT: &str = "hyrox/v1";
 const EDGE: &str = "hyrox/v1/edge";
@@ -55,7 +55,7 @@ pub fn device_of_status(topic: &str) -> Option<DeviceId> {
 fn device_of(topic: &str, leaf: &str) -> Option<DeviceId> {
     let rest = topic.strip_prefix(EDGE)?.strip_prefix('/')?;
     let (device, tail) = rest.split_once('/')?;
-    (tail == leaf).then(|| device.parse().ok())?
+    (tail == leaf).then(|| DeviceId::parse(device).ok())?
 }
 
 /// The namespace both directions share, for logging and for broker ACL configuration.

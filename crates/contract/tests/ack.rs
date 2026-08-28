@@ -5,7 +5,7 @@
 //! be minted by `ingest` after the port returned `Ok` — these tests pin the behaviour, the
 //! type system pins the shape.
 
-use mqtt::{
+use contract::{
     ingest, ingest_payload, AckPayload, AckStatus, CommitOutcome, EdgeEvent, EventId, EventStore,
     IngestError, ReceivedEvent, WireError,
 };

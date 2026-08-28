@@ -10,7 +10,7 @@ use domain::{
     AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
     ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, TagId,
 };
-use mqtt::{AckStatus, EdgeEvent, ReceivedEvent};
+use contract::{AckStatus, EdgeEvent, ReceivedEvent};
 use support::{Call, FakeStore};
 
 const DEVICE: &str = "a4:cf:12:8b:3d:91";
@@ -18,8 +18,8 @@ const CLASS_START: Instant = Instant(1_000_000);
 
 fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
     let event = EdgeEvent {
-        device_id: mqtt::DeviceId::from_mac(DEVICE).expect("device id"),
-        reader_id: mqtt::ReaderId::new(reader).expect("reader id"),
+        device_id: contract::DeviceId::from_mac_str(DEVICE).expect("device id"),
+        reader_id: contract::ReaderId::parse(reader).expect("reader id"),
         boot_id: 7,
         sequence,
         tag_id: tag.to_string(),
@@ -157,7 +157,7 @@ async fn a_device_id_that_is_not_canonical_is_an_unknown_reader() {
     let mut state = armed_session();
     // A device the registry has never heard of: same shape, different board.
     let mut event = read("rfid-01", "TAG-A1", 1, 1_010_000).into_event();
-    event.device_id = mqtt::DeviceId::from_mac("00:00:00:00:00:01").unwrap();
+    event.device_id = contract::DeviceId::from_mac_str("00:00:00:00:00:01").unwrap();
 
     let out = ingest_read(&mut state, &store, &ReceivedEvent::new(event, 1_010_250))
         .await

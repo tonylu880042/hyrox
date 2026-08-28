@@ -4,13 +4,14 @@
 //! events, ACK loss is safe, duplicate resend is safe, and space is reclaimed in batches
 //! rather than erased on every ACK.
 
-use mqtt::{DeviceId, DeviceWarning, EdgeEvent, EventId, ReaderId};
+use contract::{DeviceId, EdgeEvent, EventId, ReaderId};
+use transport::DeviceWarning;
 use simulator::{AckResult, Journal, JournalConfig, JournalError};
 
 fn event(boot_id: i64, sequence: i64) -> EdgeEvent {
     EdgeEvent {
-        device_id: DeviceId::from_mac("a4cf128b3d91").unwrap(),
-        reader_id: ReaderId::new("rfid-02").unwrap(),
+        device_id: DeviceId::from_mac_str("a4cf128b3d91").unwrap(),
+        reader_id: ReaderId::parse("rfid-02").unwrap(),
         boot_id,
         sequence,
         tag_id: "E280117000001234".into(),

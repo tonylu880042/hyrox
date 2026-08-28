@@ -17,8 +17,8 @@
 
 use crate::live_session::LiveSession;
 use crate::ports::{HubStore, InterpretedWrite, RawRead};
+use contract::{Ack, AckStatus, CommitOutcome, EventStore, ReceivedEvent, WireError};
 use domain::{ExceptionReason, Instant, Interpreted, ReaderKey, TagId};
-use mqtt::{Ack, AckStatus, CommitOutcome, EventStore, ReceivedEvent, WireError};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 /// What one committed read turned out to mean.
@@ -71,12 +71,12 @@ pub async fn ingest_read<S: HubStore>(
     received: &ReceivedEvent,
 ) -> Result<Ingested, IngestError<S::Error>> {
     let sink = RawSink { store, raw_event_id: AtomicI64::new(0) };
-    // Routed through `mqtt::ingest` on purpose: it is the only place an `Ack` can be minted,
-    // and only on the line after a successful commit (ADR 0002). Doing the commit here and
-    // building an ACK beside it would reopen exactly the hole that ADR closed.
-    let ack = mqtt::ingest(&sink, received).await.map_err(|e| match e {
-        mqtt::IngestError::Storage(e) => IngestError::Storage(e),
-        mqtt::IngestError::Malformed(w) => IngestError::Malformed(w),
+    // Routed through `contract::ingest` on purpose: it is the only place an `Ack` can be
+    // minted, and only on the line after a successful commit (ADR 0002). Doing the commit here
+    // and building an ACK beside it would reopen exactly the hole that ADR closed.
+    let ack = contract::ingest(&sink, received).await.map_err(|e| match e {
+        contract::IngestError::Storage(e) => IngestError::Storage(e),
+        contract::IngestError::Malformed(w) => IngestError::Malformed(w),
     })?;
     if ack.payload().status == AckStatus::Duplicate {
         return Ok(Ingested { ack, outcome: IngestOutcome::Duplicate });
@@ -187,7 +187,7 @@ pub(crate) async fn attribute_read<S: HubStore>(
     Ok(event)
 }
 
-/// Adapts the hub's store to `mqtt::EventStore` so the ACK keeps its type-level guarantee,
+/// Adapts the hub's store to `contract::EventStore` so the ACK keeps its type-level guarantee,
 /// while still surfacing the row id the interpretation has to be linked to.
 ///
 /// The id is stashed in an atomic rather than returned because `EventStore::commit` is the

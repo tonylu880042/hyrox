@@ -4,16 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
-# Depends on `domain` (the rules) and on `mqtt` (the wire contract), and on nothing else
-# (CLAUDE.md 3). No axum, no sqlx, no storage: persistence is a port here and `crates/storage`
-# is the adapter for it, so the dependency arrow points inward.
-#
-# `mqtt` is taken without its `broker` feature: the use cases need the event and ACK types,
-# never a broker connection, and the whole crate must test with no MQTT in the build
-# (CLAUDE.md 24).
+# Depends on `domain` (the rules) and on `contract` (what the edge and the hub agreed on),
+# and on nothing else (CLAUDE.md 3). No axum, no sqlx, no storage, and — since ADR 0005 —
+# no transport: persistence and delivery are ports here, `crates/storage` and
+# `crates/transport` are the adapters, so every dependency arrow points inward.
 [dependencies]
 domain = { path = "../domain" }
-mqtt = { path = "../mqtt", default-features = false }
+contract = { path = "../contract" }
 serde = { workspace = true }
 thiserror = "2"
 

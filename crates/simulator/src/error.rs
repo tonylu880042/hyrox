@@ -1,6 +1,6 @@
 //! Every way the emulated edge can refuse (CLAUDE.md 29).
 
-use mqtt::{IdError, ReaderId};
+use contract::{DeviceIdError, ReaderId, ReaderIdError};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
@@ -16,8 +16,12 @@ pub enum ConfigError {
     ZeroReclaimBatch,
     #[error("a device needs at least one reader")]
     NoReaders,
+    // Both halves of an edge identity come from `domain` (CLAUDE.md 7.3), so a
+    // misconfigured simulator fails on exactly the rule the hub would apply.
     #[error("identity: {0}")]
-    Id(#[from] IdError),
+    Device(#[from] DeviceIdError),
+    #[error("identity: {0}")]
+    Reader(#[from] ReaderIdError),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

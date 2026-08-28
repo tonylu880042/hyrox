@@ -6,7 +6,7 @@
 //! reproducible statement about the system (CLAUDE.md 21, 24).
 
 use crate::{InMemoryHub, Link, SimDevice};
-use mqtt::{ingest, ReceivedEvent};
+use contract::{ingest, ReceivedEvent};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlushReport {
