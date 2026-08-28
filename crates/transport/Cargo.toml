@@ -22,4 +22,6 @@ default = ["broker"]
 broker = ["dep:rumqttc"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+# `tests/broker.rs` needs a timer and a real runtime; it is the only test in the workspace
+# that needs a broker, and it skips itself when none answers (CLAUDE.md 24).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }

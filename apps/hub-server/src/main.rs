@@ -1,14 +1,30 @@
 //! HYROX Central Hub server.
 //!
-//! Transport and wiring only: it opens the store, builds the session, serves HTTP and
-//! WebSocket, and pushes the read model. Every business decision -- what a read means, when
-//! a class ends, what may be acknowledged -- belongs to `application` and `domain`
-//! (CLAUDE.md 3, 29). Nothing in this file may grow a rule.
+//! Transport and wiring only: it opens the store, builds the session, subscribes to the
+//! broker, serves HTTP and WebSocket, and pushes the read model. Every business decision --
+//! what a read means, when a class ends, what may be acknowledged -- belongs to
+//! `application` and `domain` (CLAUDE.md 3, 29). Nothing in this file may grow a rule.
+//!
+//! ```text
+//! ESP32 --MQTT--> mqtt::run --> application::ingest_read --> storage
+//!                     |                                        |
+//!                     +------------- ACK <---------------------+   (only after COMMIT)
+//! ```
+//!
+//! `HYROX_DB`, `HYROX_MQTT_HOST`, `HYROX_MQTT_PORT`, `HYROX_MQTT_CLIENT_ID` and `HYROX_SIM`
+//! configure it; see `README.md`.
 
 mod feeder;
+mod mqtt;
+
+/// The emulated collector that keeps `/live` moving on a developer's machine, publishing
+/// over the real broker so nothing short-circuits ingestion (CLAUDE.md 25; ADR 0006).
+/// `--no-default-features` leaves it out of a venue build entirely.
+#[cfg(feature = "dev-simulator")]
+mod sim;
 
 use application::{
-    apply_finish_policy, checkin::bind_tag, ingest_read, register_reader, snapshot, LiveSession,
+    apply_finish_policy, checkin::bind_tag, register_reader, snapshot, LiveSession,
     OperatorCommand, Recovery, RosterEntry, SessionPlan,
 };
 use axum::{
@@ -21,7 +37,6 @@ use axum::{
     Router,
 };
 use domain::{Duration, FinishPolicy, Instant, Session, SessionConfig, SessionMode};
-use contract::ReceivedEvent;
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -29,11 +44,18 @@ use std::{
 };
 use storage::Store;
 use tokio::sync::{broadcast, Mutex};
+use transport::MqttConfig;
 
 /// Development clock speed. The class script covers ~20 minutes of real training;
 /// running it faster keeps the screen moving while iterating on the UI.
 /// ponytail: dev-only knob. Real ingestion uses detected_at straight from the edge.
 const SPEED: i64 = 12;
+
+/// The hub's MQTT client id. Stable on purpose: with `clean_session = false` the broker
+/// holds this client's QoS 1 subscription and its queued messages while the hub is down, so
+/// events published during a restart are delivered afterwards rather than lost
+/// (CLAUDE.md 15, 21). A per-run id would throw that queue away every restart.
+const DEFAULT_CLIENT_ID: &str = "hyrox-hub";
 
 /// The dev class runs for twenty (virtual) minutes. A session's finish rule is
 /// configuration, never code (CLAUDE.md 12): this is the value for the demo script, not a
@@ -44,10 +66,44 @@ const TRAINING_HTML: &str = include_str!("../static/training.html");
 
 struct Hub {
     state: LiveSession,
-    /// Virtual-clock offset so a resumed session continues instead of rewinding.
-    resume_offset: i64,
-    script: Vec<feeder::ScriptedRead>,
-    cursor: usize,
+}
+
+/// The development clock: the class script's time, run fast.
+///
+/// Dev-only, and deliberately not on the ingestion path -- official timing is the
+/// `detected_at` the edge stamps (CLAUDE.md 17). This decides when the emulated venue
+/// *presents a tag*, and when the class's own duration is up; it never converts an arrival
+/// into a result.
+#[derive(Clone, Copy)]
+struct VirtualClock {
+    /// Where the class script's clock starts. Only the emulated collector needs it, so a
+    /// build without `dev-simulator` has no reader for it.
+    #[cfg_attr(not(feature = "dev-simulator"), allow(dead_code))]
+    class_start: Instant,
+    /// Where the clock resumes: the class start, plus how far the stored events already got.
+    base_ms: i64,
+    started_wall_ms: i64,
+    speed: i64,
+}
+
+impl VirtualClock {
+    fn start(class_start: Instant, resume_offset: i64, speed: i64) -> Self {
+        Self {
+            class_start,
+            base_ms: class_start.0 + resume_offset,
+            started_wall_ms: wall_clock_ms(),
+            speed,
+        }
+    }
+
+    fn now(&self) -> Instant {
+        Instant(self.base_ms + (wall_clock_ms() - self.started_wall_ms) * self.speed)
+    }
+
+    #[cfg_attr(not(feature = "dev-simulator"), allow(dead_code))]
+    fn class_start(&self) -> Instant {
+        self.class_start
+    }
 }
 
 #[derive(Clone)]
@@ -143,14 +199,30 @@ async fn main() {
         .map(|t| t.0 - state.class_start.0)
         .unwrap_or(0);
 
-    let script = feeder::script(state.class_start);
+    let clock = VirtualClock::start(state.class_start, resume_offset, SPEED);
     let store = Arc::new(store);
-    let hub = Arc::new(Mutex::new(Hub { state, resume_offset, script, cursor: 0 }));
+    let hub = Arc::new(Mutex::new(Hub { state }));
 
     let (tx, _) = broadcast::channel(16);
     let app_state = AppState { hub, store, tx };
 
-    tokio::spawn(tick_loop(app_state.clone()));
+    // Real ingestion: everything that reaches the screen from here on arrived over the
+    // broker (CLAUDE.md 15, 16).
+    let broker = broker_config();
+
+    #[cfg(feature = "dev-simulator")]
+    if std::env::var("HYROX_SIM").as_deref() != Ok("off") {
+        // A separate client id: the emulated collector is a different MQTT client from the
+        // hub, exactly as a real ESP32 is.
+        let device = MqttConfig {
+            client_id: format!("hyrox-sim-{}", feeder::DEVICE_MAC.replace(':', "")),
+            ..broker.clone()
+        };
+        tokio::spawn(sim::run(clock, device));
+    }
+
+    tokio::spawn(mqtt::run(app_state.clone(), broker));
+    tokio::spawn(tick_loop(app_state.clone(), clock));
 
     let app = Router::new()
         .route("/", get(|| async { Redirect::temporary("/live") }))
@@ -166,30 +238,32 @@ async fn main() {
     axum::serve(listener, app).await.expect("server stopped");
 }
 
-/// Advances the virtual clock, hands any due reads to the ingestion use case, and
-/// broadcasts the resulting snapshot. No interpretation happens here.
-async fn tick_loop(app: AppState) {
-    let started_wall = wall_clock_ms();
+/// Where the broker is. Defaults to a broker on this machine, which is the Phase 1 layout:
+/// hub, broker and SQLite on one box on the venue LAN (CLAUDE.md 5).
+fn broker_config() -> MqttConfig {
+    let client_id =
+        std::env::var("HYROX_MQTT_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
+    let mut config = MqttConfig::local(client_id);
+    if let Ok(host) = std::env::var("HYROX_MQTT_HOST") {
+        config.host = host;
+    }
+    if let Ok(port) = std::env::var("HYROX_MQTT_PORT") {
+        config.port = port.parse().unwrap_or_else(|e| panic!("HYROX_MQTT_PORT: {e}"));
+    }
+    config
+}
+
+/// Applies the session's finish rule on the class clock and broadcasts the read model.
+///
+/// Interpretation is not done here and never was: reads arrive over MQTT and go through
+/// `application::ingest_read` (see [`mqtt`]). This loop only re-derives what the screen
+/// shows.
+async fn tick_loop(app: AppState, clock: VirtualClock) {
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
     loop {
         ticker.tick().await;
+        let now = clock.now();
         let mut hub = app.hub.lock().await;
-        let now = Instant(
-            hub.state.class_start.0 + hub.resume_offset + (wall_clock_ms() - started_wall) * SPEED,
-        );
-
-        while hub.cursor < hub.script.len() && hub.script[hub.cursor].at <= now {
-            let event = hub.script[hub.cursor].event.clone();
-            hub.cursor += 1;
-            let received = ReceivedEvent::new(event, wall_clock_ms());
-            match ingest_read(&mut hub.state, &*app.store, &received).await {
-                // The ACK is dropped rather than published: there is no broker in the dev
-                // feeder. Dropping it is safe -- an unacknowledged event is resent -- while
-                // publishing one without a commit would not be (ADR 0002).
-                Ok(_) => {}
-                Err(e) => eprintln!("ingestion failed: {e}"),
-            }
-        }
 
         // A class ends when its time is up (CLAUDE.md 12, as configured on the session).
         apply_finish_policy(&mut hub.state, now);

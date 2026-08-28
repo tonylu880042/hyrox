@@ -1,24 +1,32 @@
-//! Scripted edge events for development. Stands in for MQTT ingestion (Milestone 3).
+//! The development venue: a course, a reader map, a set of bands, and a class script.
 //!
-//! It publishes what an ESP32 publishes -- device, reader, tag, boot, sequence, detected_at
-//! (CLAUDE.md 16) -- and nothing else. The hub resolves the reader and the tag itself, so
-//! the whole ingestion pipeline is exercised rather than short-circuited.
+//! It describes what happens in front of the antennas -- which tag is read at which reader,
+//! and when -- and nothing else. Turning that into wire events is the emulated collector's
+//! job (`crate::sim`, over `crates/simulator`), so boot ids, sequence numbers and journal
+//! behaviour come from the device model rather than being invented here (CLAUDE.md 16, 25).
 //!
-//! ponytail: deterministic script, no jitter, no dropouts, no duplicates. The real
-//! simulator (CLAUDE.md 25) covers reconnects, resends and reboots; that arrives with MQTT.
+//! ponytail: deterministic script, no jitter. The dropouts, resends, reboots and duplicates
+//! live in `crates/simulator` and its tests; the dev screen does not need them to be useful.
 
 use domain::{
-    Course, CourseStep, Instant, ReaderKey, ReaderMode, ReaderRegistration, StationTarget, TagId,
+    Course, CourseStep, Instant, ReaderId, ReaderKey, ReaderMode, ReaderRegistration,
+    StationTarget, TagId,
 };
-use contract::EdgeEvent;
 
-/// One dev collector, standing in for the venue's ESP32s.
-const DEVICE_MAC: &str = "a4:cf:12:8b:3d:91";
-const BOOT_ID: i64 = 1;
+/// One dev collector, standing in for the venue's ESP32s. Its base MAC is its identity
+/// (CLAUDE.md 7.3).
+pub const DEVICE_MAC: &str = "a4:cf:12:8b:3d:91";
 
+/// One tag presented to one reader at one moment. The moment is the *detection* time, which
+/// is the only timestamp a result may be computed from (CLAUDE.md 11, 17).
+///
+/// Only the emulated collector reads the script, so a build without `dev-simulator` has no
+/// caller for it. That is what the feature is for, not code to delete.
+#[cfg_attr(not(feature = "dev-simulator"), allow(dead_code))]
 pub struct ScriptedRead {
-    pub event: EdgeEvent,
     pub at: Instant,
+    pub reader_id: ReaderId,
+    pub tag_id: String,
 }
 
 pub fn course() -> Course {
@@ -102,6 +110,7 @@ pub fn bands() -> Vec<(TagId, String)> {
 }
 
 /// One class: each athlete walks the course, staggered at the start, with per-athlete pace.
+#[cfg_attr(not(feature = "dev-simulator"), allow(dead_code))]
 pub fn script(class_start: Instant) -> Vec<ScriptedRead> {
     let course = course();
     let mut reads = Vec::new();
@@ -122,22 +131,12 @@ pub fn script(class_start: Instant) -> Vec<ScriptedRead> {
     }
     reads.sort_by_key(|(t, _, _, _)| *t);
 
-    // Sequence numbers are assigned in publication order, as an edge collector would: the
-    // idempotency key is device + boot + sequence (CLAUDE.md 16).
     reads
         .into_iter()
-        .enumerate()
-        .map(|(seq, (t, station, mode, tag_id))| ScriptedRead {
+        .map(|(t, station, mode, tag_id)| ScriptedRead {
             at: Instant(t),
-            event: EdgeEvent {
-                device_id: contract::DeviceId::from_mac_str(DEVICE_MAC).expect("dev MAC"),
-                reader_id: contract::ReaderId::parse(&reader_id(&station, mode)).expect("dev reader"),
-                boot_id: BOOT_ID,
-                sequence: seq as i64 + 1,
-                tag_id,
-                detected_at: t,
-                uptime_ms: t - class_start.0,
-            },
+            reader_id: ReaderId::parse(&reader_id(&station, mode)).expect("dev reader"),
+            tag_id,
         })
         .collect()
 }

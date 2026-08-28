@@ -4,12 +4,24 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+# The composition root: it is allowed to see every layer, and it is the only place that
+# may (CLAUDE.md 3). `simulator` is here for the development venue only, which is why it is
+# optional -- `--no-default-features` builds a hub with no emulated hardware in it at all.
 [dependencies]
 domain = { path = "../../crates/domain" }
 application = { path = "../../crates/application" }
 contract = { path = "../../crates/contract" }
+transport = { path = "../../crates/transport" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 storage = { path = "../../crates/storage" }
+simulator = { path = "../../crates/simulator", features = ["broker"], optional = true }
+
+[features]
+default = ["dev-simulator"]
+# Runs the emulated ESP32 fleet in-process, publishing over the real broker, so
+# `cargo run -p hub-server` alone shows a moving class. Turn it off at runtime with
+# `HYROX_SIM=off`, or out of the build with `--no-default-features`.
+dev-simulator = ["dep:simulator"]

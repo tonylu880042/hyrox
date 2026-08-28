@@ -45,15 +45,21 @@ pub fn ack(device: &DeviceId) -> String {
 /// ours. Returning `None` rather than guessing keeps a stray publisher from being
 /// mistaken for a registered device.
 pub fn device_of_events(topic: &str) -> Option<DeviceId> {
-    device_of(topic, EVENTS_LEAF)
+    device_of(topic, EDGE, EVENTS_LEAF)
 }
 
 pub fn device_of_status(topic: &str) -> Option<DeviceId> {
-    device_of(topic, STATUS_LEAF)
+    device_of(topic, EDGE, STATUS_LEAF)
 }
 
-fn device_of(topic: &str, leaf: &str) -> Option<DeviceId> {
-    let rest = topic.strip_prefix(EDGE)?.strip_prefix('/')?;
+/// The device an arriving ACK is addressed to — the downlink direction, which only an edge
+/// collector subscribes to.
+pub fn device_of_ack(topic: &str) -> Option<DeviceId> {
+    device_of(topic, HUB, ACK_LEAF)
+}
+
+fn device_of(topic: &str, branch: &str, leaf: &str) -> Option<DeviceId> {
+    let rest = topic.strip_prefix(branch)?.strip_prefix('/')?;
     let (device, tail) = rest.split_once('/')?;
     (tail == leaf).then(|| DeviceId::parse(device).ok())?
 }

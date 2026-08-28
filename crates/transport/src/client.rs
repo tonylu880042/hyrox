@@ -5,10 +5,15 @@
 //! testable with no broker in the build at all (CLAUDE.md 24). This module only moves
 //! bytes. Nothing here may grow a business rule (CLAUDE.md 29).
 
-use crate::{topic, DeviceStatus};
+use crate::{topic, DeviceStatus, Inbound};
 use contract::{Ack, EdgeEvent};
 use domain::DeviceId;
-use rumqttc::{AsyncClient, ClientError, EventLoop, MqttOptions};
+use rumqttc::{Event, MqttOptions, Packet};
+
+/// Re-exported so a composition root can name a connection without depending on rumqttc
+/// itself: which broker library the hub uses is this crate's choice to make, and nothing
+/// above it should have to be rebuilt to change it (CLAUDE.md 3).
+pub use rumqttc::{AsyncClient, ClientError, ConnectionError, EventLoop};
 
 /// QoS 1 for everything that matters: at-least-once delivery, with the application ACK and
 /// hub-side deduplication making the "at least" safe (CLAUDE.md 15, 16).
@@ -64,9 +69,40 @@ pub fn connect(config: &MqttConfig) -> (AsyncClient, EventLoop) {
 }
 
 /// Subscribes the hub to every device's events and health.
+///
+/// Called again on every [`Inbound::Connected`]: a broker that restarted has forgotten the
+/// subscriptions it was holding for this session, and a hub that does not notice would go
+/// quiet without ever failing (CLAUDE.md 31).
 pub async fn subscribe_hub(client: &AsyncClient) -> Result<(), ClientError> {
     client.subscribe(topic::ALL_EVENTS, QOS).await?;
     client.subscribe(topic::ALL_STATUS, QOS).await
+}
+
+/// Subscribes one device to its own acknowledgements — the edge side of the loop, used by
+/// the simulator and by firmware-equivalent code paths.
+pub async fn subscribe_acks(client: &AsyncClient, device: &DeviceId) -> Result<(), ClientError> {
+    client.subscribe(topic::ack(device), QOS).await
+}
+
+/// Drives the connection one step and reports anything that arrived.
+///
+/// `Ok(None)` means the event loop made progress that the caller has no business caring
+/// about (a PUBACK, a ping). The caller must keep polling: this is what drives reconnection,
+/// so a hub that stops polling stops recovering.
+///
+/// Errors are returned, not swallowed, because only the caller can decide whether to log and
+/// retry or to give up — but note that rumqttc reconnects by itself on the next poll, so
+/// retrying is normally the right answer.
+pub async fn next_inbound(eventloop: &mut EventLoop) -> Result<Option<Inbound>, ConnectionError> {
+    match eventloop.poll().await? {
+        Event::Incoming(Packet::Publish(publish)) => {
+            Ok(Some(crate::inbound::classify(&publish.topic, &publish.payload)))
+        }
+        Event::Incoming(Packet::ConnAck(ack)) => Ok(Some(Inbound::Connected {
+            session_present: ack.session_present,
+        })),
+        _ => Ok(None),
+    }
 }
 
 /// Publishes an acknowledgement.

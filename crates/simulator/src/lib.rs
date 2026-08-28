@@ -24,10 +24,18 @@ pub mod journal;
 pub mod link;
 pub mod presence;
 
+/// The same device driven over a real broker instead of the in-process [`link`]. Behind the
+/// `broker` feature, so the deterministic scenarios above still build with no rumqttc
+/// anywhere (CLAUDE.md 24).
+#[cfg(feature = "broker")]
+pub mod mqtt;
+
 pub use bench::{Bench, FlushReport};
 pub use device::{DeviceConfig, RfOutcome, SimDevice};
 pub use error::{ConfigError, DeviceError, JournalError};
 pub use hub::{HubError, InMemoryHub};
 pub use journal::{AckResult, Journal, JournalConfig};
 pub use link::{AckDelivery, Duplication, Link, LinkFaults, Ordering};
+#[cfg(feature = "broker")]
+pub use mqtt::MqttDevice;
 pub use presence::{AbsentTimeout, PresenceDecision, ReaderConfig, TagPresence};

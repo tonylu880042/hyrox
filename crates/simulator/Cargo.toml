@@ -7,11 +7,20 @@ rust-version.workspace = true
 # Depends on the contract it speaks and the transport it speaks it over, and on nothing
 # else. An emulated ESP32 knows no business meaning (CLAUDE.md 8), so it must not be able
 # to reach the domain, the use cases or the store (ADR 0005).
+#
+# The `broker` feature adds one thing: the same device driven over a real broker
+# (`src/mqtt.rs`). Off by default, so every deterministic scenario still compiles and runs
+# with no rumqttc in the build (CLAUDE.md 24).
 [dependencies]
 contract = { path = "../contract" }
 transport = { path = "../transport", default-features = false }
 serde = { workspace = true }
 thiserror = "2"
+rumqttc = { version = "0.24", optional = true }
+
+[features]
+default = []
+broker = ["transport/broker", "dep:rumqttc"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

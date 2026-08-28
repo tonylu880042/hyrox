@@ -109,6 +109,31 @@ Hub 訂閱 `hyrox/v1/edge/+/events` 與 `hyrox/v1/edge/+/status`。
 
 `clean_session = false`：重連時 broker 端 QoS 1 session 不被清掉。
 
+Hub 的 client id 固定為 `hyrox-hub`（`HYROX_MQTT_CLIENT_ID` 可覆寫）。
+固定 id + `clean_session = false` 的效果是：**Hub 不在線時發布的事件，broker 會替它排隊，
+Hub 重啟後照樣送達**（CLAUDE.md 21）。每次啟動換一個 id 會把這個佇列丟掉。
+
+### 收件端行為（ADR 0006）
+
+```text
+訂閱 hyrox/v1/edge/+/events, hyrox/v1/edge/+/status
+  → transport::classify(topic, payload)
+  → application::ingest_read       （commit raw → 解讀 → commit interpreted）
+  → transport::client::publish_ack （只發它拿到的那一則 ACK）
+```
+
+每次 CONNACK 都重新訂閱一次：broker 若重啟，它為 `clean_session = false` 的 client
+保留的訂閱也一起消失，而不重新訂閱的 Hub 會安靜地收不到東西、卻不會報錯。
+
+**無法解碼的 payload**（不是本 crate 認得的事件／狀態）：
+不入 raw store（`raw_events` 以 `device_id + boot_id + sequence` 為鍵，
+而「無法解碼」的定義就是沒有這組鍵），**不 ACK**（沒有東西被持久化，
+依 ADR 0002 手上就沒有 ACK 可發，邊緣保留該筆），
+但**必定留下紀錄**：計數器 + 一行日誌，含 topic、解碼錯誤與 payload 的有界節錄。
+訂閱迴圈在任何 payload 上都不會 return、panic 或停止 poll——
+一台壞掉的裝置不得停掉一堂課（CLAUDE.md 31 第一優先）。
+是否改為寫入 quarantine 資料表，見 `docs/open-issues.md`。
+
 ---
 
 ## 5. Application ACK（CLAUDE.md 15）
@@ -226,12 +251,24 @@ retained：新啟動的 Hub 應立刻看見在它上線前就已告警的裝置�
 |---|---|
 | 事件契約、idempotency key、官方時間 | `crates/contract/tests/protocol.rs` |
 | Topic 配置 | `crates/transport/tests/topics.rs` |
+| 收件分類、無法解碼的 payload | `crates/transport/tests/inbound.rs` |
 | ACK 協定、commit 前不得 ACK | `crates/contract/tests/ack.rs` |
 | Presence / re-arm 抑制 | `crates/simulator/tests/suppression.rs` |
 | Journal 語意 | `crates/simulator/tests/journal.rs` |
 | 單一裝置：Reader、Tag、重開機 | `crates/simulator/tests/device.rs` |
 | 斷線／重送／重複／亂序／ACK 遺失 | `crates/simulator/tests/fleet.rs` |
 
-全部不需要 MQTT broker、不需要 RFID 硬體（CLAUDE.md 24）。
+以上全部不需要 MQTT broker、不需要 RFID 硬體（CLAUDE.md 24）。
 `crates/transport` 的 `broker` feature 關閉後，連 rumqttc 都不會進入建置；
 `crates/contract` 本來就沒有 rumqttc。
+
+唯一需要 broker 的是 `crates/transport/tests/broker.rs`：connect / subscribe /
+publish event / receive event / publish ack / receive ack / retained status /
+壞 payload 不中斷訂閱。它在 `127.0.0.1:1883` 沒有回應時**自己跳過**，
+所以沒有 broker 的機器上 `cargo test --workspace` 仍然全綠。
+
+```
+cargo test -p transport --test broker -- --nocapture
+```
+
+`--nocapture` 是必要的：跳過的測試會印出 `SKIPPED: …`，否則看起來與通過完全一樣。

@@ -37,6 +37,25 @@ that it stays a faithful stand-in.
 
 ---
 
+## OPEN — should an undecodable payload be quarantined in the database?
+
+Decided for now (ADR 0006): a payload that arrives on one of our topics and does not decode
+is **counted and logged** — topic, decode error, and a bounded excerpt of the bytes — and is
+neither stored nor acknowledged. Not stored because `raw_events` is keyed by
+`device_id + boot_id + sequence` and an undecodable payload has no such key; writing a row
+would mean inventing one. Not acknowledged because nothing was made durable, so under
+ADR 0002 there is nothing to acknowledge with, and the edge keeps its copy.
+
+A quarantine table would be more durable than a log line. It needs two things this project
+does not have: a retention rule for it, and a reason to believe a device will ever produce
+one. It also hands a faulty device a way to fill the disk.
+
+**Needs:** evidence from the venue. If undecodable payloads ever appear in the field, the
+full bytes are already in hand at `Inbound::Undecodable` and the change is one match arm plus
+a migration. Until then, do not build the table.
+
+---
+
 ## OPEN — competition finish rule
 
 CLAUDE.md 12. Training was answered (below); competition was not.
@@ -62,9 +81,13 @@ deliberately separate so one ESP32 can host several readers later.
 If each reader carries its own MAC, the "one collector, many readers" model needs revisiting.
 The casing half of the question is settled (below); this half is not.
 
-**Not blocking the hub** today, but it fixes the wire contract, so settle it with the
-firmware team before MQTT ingestion lands. Both questions on this page are in
-`docs/event-protocol.md` section 7, which is the handoff sheet for that conversation.
+**Not blocking the hub** today, but it fixes the wire contract. Both questions on this page
+are in `docs/event-protocol.md` section 7, which is the handoff sheet for that conversation.
+
+**2026-08-28:** MQTT ingestion has landed (ADR 0006) without this being settled. Nothing was
+guessed — the hub treats `reader_id` exactly as the contract already documented, as an
+identifier separate from `device_id`. If each reader turns out to carry its own MAC, what
+changes is the reader map and the emulated device's shape, not the wire format.
 
 ---
 
