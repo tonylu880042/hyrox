@@ -212,3 +212,38 @@ fn an_unbound_tag_resolves_to_none_rather_than_panicking() {
     assert_eq!(ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")), None);
     assert_eq!(ledger.tag_for_athlete("s1", "a1"), None);
 }
+
+#[test]
+fn a_restored_ledger_keeps_its_closed_bindings() {
+    // What a restart must not do is drop the history (CLAUDE.md 20, 21): a closed binding is
+    // how "who was wearing this band at 10:15" stays answerable after the band moved on.
+    let mut original = BindingLedger::new();
+    original.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+    original.rebind_athlete("s1", "a1", &tag("E28011700000BBBB"), at(5_000)).unwrap();
+
+    let restored = BindingLedger::restore(original.history().to_vec());
+
+    assert_eq!(restored.history().len(), 2, "the closed row must come back too");
+    assert_eq!(restored.athlete_for_tag("s1", &tag("E28011700000BBBB")), Some("a1"));
+    assert_eq!(
+        restored.athlete_for_tag("s1", &tag("E28011700000AAAA")),
+        None,
+        "the band handed back belongs to nobody"
+    );
+    assert_eq!(restored.active().count(), 1);
+}
+
+#[test]
+fn a_restored_ledger_still_enforces_one_band_one_wrist() {
+    // The invariants are checked against whatever the ledger holds, so they survive the
+    // rebuild rather than only applying to bindings made in this process.
+    let mut original = BindingLedger::new();
+    original.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+
+    let mut restored = BindingLedger::restore(original.history().to_vec());
+    let err = restored
+        .bind("s1", &tag("E28011700000AAAA"), "a2", at(1_000))
+        .expect_err("the band is already on a wrist");
+
+    assert!(matches!(err, BindingError::TagAlreadyBound { .. }));
+}

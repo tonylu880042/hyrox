@@ -4,8 +4,13 @@
 //! unused helpers are expected here rather than a sign of dead code.
 #![allow(dead_code)]
 
-use application::{AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead};
-use domain::{AthleteState, Instant, Interpreted, MemberRef, Session};
+use application::{
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredRawRead,
+};
+use domain::{
+    AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
+    ReaderRegistry, Session, SessionConfig, TagBinding,
+};
 use mqtt::CommitOutcome;
 use std::sync::Mutex;
 
@@ -27,10 +32,17 @@ pub struct FakeError(pub &'static str);
 #[derive(Default)]
 struct Inner {
     calls: Vec<Call>,
-    raw: Vec<(String, i64, i64)>, // device_id, boot_id, sequence -> index + 1 is the row id
-    interpreted: Vec<(String, Interpreted)>,
+    /// Whole reads, not just their keys: retroactive claim reads them back out (ADR 0001 D3),
+    /// so the fake has to be able to answer that query. Index + 1 is the row id.
+    raw: Vec<RawRead>,
+    /// The raw row each interpretation points at, which is what makes a claimed read
+    /// unclaimable a second time.
+    interpreted: Vec<(String, Option<i64>, Interpreted)>,
     audits: Vec<AuditEntry>,
     sessions: Vec<Session>,
+    configs: Vec<SessionConfig>,
+    readers: Vec<ReaderRegistration>,
+    bindings: Vec<TagBinding>,
     athletes: Vec<AthleteState>,
     created_at: Option<Instant>,
 }
@@ -58,13 +70,45 @@ impl FakeStore {
     }
 
     /// Seed a session as if a previous run had left it behind (CLAUDE.md 21).
+    ///
+    /// Its configuration is seeded too, because arming a session stores both: a session row
+    /// with no configuration means a database written before ADR 0004, which
+    /// [`Self::with_unconfigured_session`] is for.
     pub fn with_session(self, session: Session, created_at: Instant) -> Self {
+        let config = SessionConfig::new(&session.id);
+        self.with_session_config(session, created_at, Some(config))
+    }
+
+    /// A session left behind by a build that did not store configuration.
+    pub fn with_unconfigured_session(self, session: Session, created_at: Instant) -> Self {
+        self.with_session_config(session, created_at, None)
+    }
+
+    pub fn with_session_config(
+        self,
+        session: Session,
+        created_at: Instant,
+        config: Option<SessionConfig>,
+    ) -> Self {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.sessions.push(session);
+            inner.configs.extend(config);
             inner.created_at = Some(created_at);
         }
         self
+    }
+
+    pub fn saved_bindings(&self) -> Vec<TagBinding> {
+        self.inner.lock().unwrap().bindings.clone()
+    }
+
+    pub fn saved_readers(&self) -> Vec<ReaderRegistration> {
+        self.inner.lock().unwrap().readers.clone()
+    }
+
+    pub fn saved_configs(&self) -> Vec<SessionConfig> {
+        self.inner.lock().unwrap().configs.clone()
     }
 
     pub fn with_rebuilt_athletes(self, athletes: Vec<AthleteState>) -> Self {
@@ -81,7 +125,24 @@ impl FakeStore {
     }
 
     pub fn interpreted(&self) -> Vec<(String, Interpreted)> {
-        self.inner.lock().unwrap().interpreted.clone()
+        self.inner
+            .lock()
+            .unwrap()
+            .interpreted
+            .iter()
+            .map(|(a, _, e)| (a.clone(), e.clone()))
+            .collect()
+    }
+
+    /// Just the events, for comparing one run against another (ADR 0001 D3 equivalence).
+    pub fn interpreted_events(&self) -> Vec<Interpreted> {
+        self.inner
+            .lock()
+            .unwrap()
+            .interpreted
+            .iter()
+            .map(|(_, _, e)| e.clone())
+            .collect()
     }
 
     pub fn audits(&self) -> Vec<AuditEntry> {
@@ -104,14 +165,16 @@ impl HubStore for FakeStore {
         inner
             .calls
             .push(Call::Raw { tag_id: raw.tag_id.clone(), sequence: raw.sequence });
-        let key = (raw.device_id.clone(), raw.boot_id, raw.sequence);
-        if let Some(i) = inner.raw.iter().position(|k| k == &key) {
+        let existing = inner.raw.iter().position(|r| {
+            r.device_id == raw.device_id && r.boot_id == raw.boot_id && r.sequence == raw.sequence
+        });
+        if let Some(i) = existing {
             return Ok(RawCommit {
                 raw_event_id: i as i64 + 1,
                 outcome: CommitOutcome::AlreadyStored,
             });
         }
-        inner.raw.push(key);
+        inner.raw.push(raw.clone());
         Ok(RawCommit {
             raw_event_id: inner.raw.len() as i64,
             outcome: CommitOutcome::Stored,
@@ -129,7 +192,7 @@ impl HubStore for FakeStore {
         });
         inner
             .interpreted
-            .push((w.athlete_id.to_string(), w.event.clone()));
+            .push((w.athlete_id.to_string(), w.raw_event_id, w.event.clone()));
         Ok(inner.interpreted.len() as i64)
     }
 
@@ -179,7 +242,7 @@ impl HubStore for FakeStore {
             .unwrap()
             .interpreted
             .iter()
-            .filter(|(_, e)| matches!(e, Interpreted::Exception { .. }))
+            .filter(|(_, _, e)| matches!(e, Interpreted::Exception { .. }))
             .count())
     }
 
@@ -188,6 +251,101 @@ impl HubStore for FakeStore {
         inner.calls.push(Call::Audit { action: entry.action.clone() });
         inner.audits.push(entry.clone());
         Ok(())
+    }
+
+    async fn save_session_config(&self, config: &SessionConfig) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.configs.iter_mut().find(|c| c.session_id == config.session_id) {
+            Some(existing) => *existing = config.clone(),
+            None => inner.configs.push(config.clone()),
+        }
+        Ok(())
+    }
+
+    async fn session_config(&self, session_id: &str) -> Result<Option<SessionConfig>, FakeError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .configs
+            .iter()
+            .find(|c| c.session_id == session_id)
+            .cloned())
+    }
+
+    async fn save_reader(&self, registration: &ReaderRegistration) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.readers.iter_mut().find(|r| r.key == registration.key) {
+            Some(existing) => *existing = registration.clone(),
+            None => inner.readers.push(registration.clone()),
+        }
+        Ok(())
+    }
+
+    async fn readers(&self) -> Result<ReaderRegistry, FakeError> {
+        let mut registry = ReaderRegistry::new();
+        for r in &self.inner.lock().unwrap().readers {
+            registry.register(r.clone());
+        }
+        Ok(registry)
+    }
+
+    /// Append or close, never re-attribute: the same contract the real table enforces.
+    async fn save_binding(&self, binding: &TagBinding) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let key = |b: &TagBinding| {
+            (b.session_id.clone(), b.tag_id.clone(), b.bound_at)
+        };
+        match inner.bindings.iter_mut().find(|b| key(b) == key(binding)) {
+            Some(existing) => existing.unbound_at = binding.unbound_at,
+            None => inner.bindings.push(binding.clone()),
+        }
+        Ok(())
+    }
+
+    async fn bindings(&self) -> Result<BindingLedger, FakeError> {
+        let mut entries = self.inner.lock().unwrap().bindings.clone();
+        entries.sort_by_key(|b| b.bound_at);
+        Ok(BindingLedger::restore(entries))
+    }
+
+    async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, FakeError> {
+        let mut seen: Vec<String> = Vec::new();
+        for r in &self.inner.lock().unwrap().raw {
+            if r.detected_at >= since && !seen.contains(&r.tag_id) {
+                seen.push(r.tag_id.clone());
+            }
+        }
+        Ok(seen)
+    }
+
+    async fn unclaimed_reads_for_tag(
+        &self,
+        tag_id: &str,
+        since: Instant,
+    ) -> Result<Vec<StoredRawRead>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        let mut out: Vec<StoredRawRead> = inner
+            .raw
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                r.tag_id.eq_ignore_ascii_case(tag_id)
+                    && r.detected_at >= since
+                    && !inner
+                        .interpreted
+                        .iter()
+                        .any(|(_, raw_id, _)| *raw_id == Some(*i as i64 + 1))
+            })
+            .map(|(i, r)| StoredRawRead {
+                raw_event_id: i as i64 + 1,
+                device_id: r.device_id.clone(),
+                reader_id: r.reader_id.clone(),
+                detected_at: r.detected_at,
+            })
+            .collect();
+        out.sort_by_key(|r| (r.detected_at, r.raw_event_id));
+        Ok(out)
     }
 }
 

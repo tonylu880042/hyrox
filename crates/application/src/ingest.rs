@@ -87,13 +87,6 @@ pub async fn ingest_read<S: HubStore>(
     // Official timing, always (CLAUDE.md 11, 17).
     let at = Instant(edge.detected_at);
 
-    // Reader resolution (CLAUDE.md 8). A pair that parses but is not registered, and a pair
-    // that does not even parse, are the same thing to an operator: hardware the hub has no
-    // mapping for.
-    let reader = ReaderKey::parse(edge.device_id.as_str(), edge.reader_id.as_str())
-        .ok()
-        .and_then(|key| state.readers.resolve(&key).ok().map(|r| r.binding()));
-
     let Ok(tag) = TagId::parse(&edge.tag_id) else {
         return Ok(Ingested { ack, outcome: IngestOutcome::Unattributable });
     };
@@ -111,19 +104,76 @@ pub async fn ingest_read<S: HubStore>(
     };
 
     let on_roster = bound_session == state.session.id && state.athlete(&athlete_id).is_some();
+    let event = match attribute_read(
+        state,
+        store,
+        &athlete_id,
+        on_roster,
+        edge.device_id.as_str(),
+        edge.reader_id.as_str(),
+        Some(raw_event_id),
+        at,
+    )
+    .await
+    {
+        Ok(event) => event,
+        Err(source) => return Err(IngestError::Interpretation { ack, source }),
+    };
+    if let Err(source) = store.save_session(&state.session, state.class_start).await {
+        return Err(IngestError::Interpretation { ack, source });
+    }
+
+    Ok(Ingested { ack, outcome: IngestOutcome::Interpreted { athlete_id, event } })
+}
+
+/// Interprets one read for a known athlete and folds it in -- but only after the store has
+/// taken it.
+///
+/// The write comes between `domain::decide` and `domain::apply` deliberately. Doing both
+/// halves first (what `domain::interpret` does) advanced the in-memory athlete before the
+/// event log knew about it, so a failed write left memory claiming a station the log had
+/// never recorded, and the two disagreed until the next restart. Deciding is pure, so
+/// nothing is lost by deciding early; applying is what must wait (CLAUDE.md 21, 29).
+///
+/// Shared with the retroactive claim in [`crate::checkin`] so a read claimed after the fact
+/// goes through exactly the same resolution and the same folding as one interpreted live
+/// (ADR 0001 D3).
+pub(crate) async fn attribute_read<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    athlete_id: &str,
+    on_roster: bool,
+    device_id: &str,
+    reader_id: &str,
+    raw_event_id: Option<i64>,
+    at: Instant,
+) -> Result<Interpreted, S::Error> {
+    // Reader resolution (CLAUDE.md 8). A pair that parses but is not registered, and a pair
+    // that does not even parse, are the same thing to an operator: hardware the hub has no
+    // mapping for.
+    let reader = ReaderKey::parse(device_id, reader_id)
+        .ok()
+        .and_then(|key| state.readers.resolve(&key).ok().map(|r| r.binding()));
+
     let event = match (on_roster, reader) {
         (false, _) => Interpreted::Exception { reason: ExceptionReason::AthleteNotInSession, at },
         // The reader is unknown but the athlete is not: attribute the exception to them, so
         // it shows up against the person the operator has to talk to.
         (true, None) => Interpreted::Exception { reason: ExceptionReason::UnknownReader, at },
         (true, Some(binding)) => {
-            // Cloned because `decide` reads the session while the athlete is borrowed
-            // mutably. A Session is an id, a name and two small fields.
-            let session = state.session.clone();
-            let athlete = state.athlete_mut(&athlete_id).expect("checked by on_roster");
-            domain::interpret(athlete, &binding, at, &session)
+            let athlete = state.athlete(athlete_id).expect("checked by on_roster");
+            domain::decide(athlete, &binding, at, &state.session)
         }
     };
+
+    store
+        .commit_interpreted(InterpretedWrite {
+            session_id: &state.session.id,
+            athlete_id,
+            raw_event_id,
+            event: &event,
+        })
+        .await?;
 
     match event {
         // Exceptions are recorded but are not progress: the count gates ARMED -> DRAFT
@@ -131,21 +181,10 @@ pub async fn ingest_read<S: HubStore>(
         Interpreted::Exception { .. } => state.exception_count += 1,
         _ => state.session.interpreted_event_count += 1,
     }
-
-    let write = InterpretedWrite {
-        session_id: &state.session.id,
-        athlete_id: &athlete_id,
-        raw_event_id: Some(raw_event_id),
-        event: &event,
-    };
-    if let Err(source) = store.commit_interpreted(write).await {
-        return Err(IngestError::Interpretation { ack, source });
+    if let Some(athlete) = state.athlete_mut(athlete_id) {
+        domain::apply(athlete, &event);
     }
-    if let Err(source) = store.save_session(&state.session, state.class_start).await {
-        return Err(IngestError::Interpretation { ack, source });
-    }
-
-    Ok(Ingested { ack, outcome: IngestOutcome::Interpreted { athlete_id, event } })
+    Ok(event)
 }
 
 /// Adapts the hub's store to `mqtt::EventStore` so the ACK keeps its type-level guarantee,

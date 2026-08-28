@@ -7,9 +7,9 @@
 
 use crate::athlete::{AthleteState, AthleteStatus};
 use crate::time::{Duration, Instant};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FinishPolicy {
     /// No rule has been chosen. Competition still sits here (CLAUDE.md 12, 28).

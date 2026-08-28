@@ -11,13 +11,12 @@
 //!
 //! ## Known gaps
 //!
-//! * The reader registry and the binding ledger are held in memory and supplied at startup:
-//!   Phase 1 has no tables for either, so they do not survive a restart the way events do.
-//! * A read of an unbound tag is stored and listed for `/checkin`, but binding the tag does
-//!   not yet go back and re-interpret the reads that happened before it (ADR 0001 D3 asks
-//!   for that). Nothing is lost -- the raw rows are there -- but the claim is manual today.
 //! * Being finished by a class-duration rule is derived on each tick, never stored. That is
 //!   deliberate (see [`finish`]), but it means a finish is only as durable as the policy.
+//! * `Session::interpreted_event_count` is read back from the session row rather than
+//!   re-counted from the log, so a crash between writing an interpretation and saving the
+//!   session can leave it one behind. It gates only ARMED -> DRAFT (ADR 0001 D2); athlete
+//!   state and the exception badge are both re-derived and are unaffected.
 
 pub mod checkin;
 pub mod finish;
@@ -26,6 +25,7 @@ pub mod live;
 pub mod live_session;
 pub mod operator;
 pub mod ports;
+pub mod readers;
 pub mod recover;
 pub mod session;
 
@@ -36,6 +36,7 @@ pub use live_session::LiveSession;
 pub use operator::{OperatorCommand, OperatorError};
 pub use ports::{
     AuditEntry, DirectoryError, HubStore, InterpretedWrite, MemberDirectory, RawCommit, RawRead,
-    UnconfiguredDirectory,
+    StoredRawRead, UnconfiguredDirectory,
 };
+pub use readers::register_reader;
 pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};

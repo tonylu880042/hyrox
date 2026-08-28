@@ -4,10 +4,16 @@
 //! replaying its interpreted events, which is why a restart cannot disagree with the log --
 //! the log is the only source.
 //!
-//! The reader registry and the binding ledger are *not* recovered here: Phase 1 has no
-//! tables for them, so the caller supplies them at startup. That gap is real and is called
-//! out in the crate docs.
+//! Configuration is recovered the same way. A resumed session comes back with the course and
+//! the finish policy it was **armed with**, never with a default and never with whatever the
+//! caller happened to pass in: a class that started under a one-hour limit must not finish
+//! under a different rule because the process restarted (ADR 0004).
+//!
+//! The same applies to the reader map and the binding ledger. Both are loaded from the store
+//! rather than rebuilt by the caller, so a read resolves after a restart exactly as it did
+//! before one, and a band still belongs to the athlete it was handed to.
 
+use crate::checkin::pending_tags_since;
 use crate::live_session::LiveSession;
 use crate::ports::HubStore;
 use domain::{AthleteState, Instant, Session, SessionConfig};
@@ -28,8 +34,15 @@ pub struct RosterEntry {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Recovery {
-    /// An ARMED session was found and rebuilt from its events.
+    /// An ARMED session was found and rebuilt from its events and its stored configuration.
     Resumed,
+    /// An ARMED session was found, but it has no stored configuration -- a session armed by
+    /// a build older than ADR 0004. The plan's configuration was used, which means the
+    /// course and the finish rule may not be the ones the class started under.
+    ///
+    /// Reported rather than hidden: the caller has to be able to say so, because this is
+    /// precisely the silent substitution the stored configuration exists to prevent.
+    ResumedWithoutStoredConfig,
     Started,
 }
 
@@ -49,12 +62,19 @@ pub async fn resume_or_start<S: HubStore>(
                 .session_created_at(&existing.id)
                 .await?
                 .unwrap_or(plan.class_start);
+            let stored = store.session_config(&existing.id).await?;
+            let recovery = match stored {
+                Some(_) => Recovery::Resumed,
+                None => Recovery::ResumedWithoutStoredConfig,
+            };
+            let config = stored.unwrap_or(plan.config);
             let athletes = store.rebuild_athletes(&existing.id).await?;
             let exceptions = store.exception_count(&existing.id).await?;
-            let mut state = LiveSession::new(existing, plan.config, class_start)
+            let mut state = LiveSession::new(existing, config, class_start)
                 .with_athletes(athletes);
             state.exception_count = exceptions;
-            return Ok((state, Recovery::Resumed));
+            load_venue(store, &mut state).await?;
+            return Ok((state, recovery));
         }
     }
 
@@ -63,6 +83,8 @@ pub async fn resume_or_start<S: HubStore>(
         .arm()
         .expect("a fresh draft always arms; CLOSED is handled by the reopen use case");
     store.save_session(&session, plan.class_start).await?;
+    // After the session row, not before: the configuration belongs to a session that exists.
+    store.save_session_config(&plan.config).await?;
 
     let mut athletes = Vec::with_capacity(plan.roster.len());
     for (i, entry) in plan.roster.iter().enumerate() {
@@ -72,6 +94,23 @@ pub async fn resume_or_start<S: HubStore>(
         athletes.push(AthleteState::ready(&entry.athlete_id, &entry.display_name));
     }
 
-    let state = LiveSession::new(session, plan.config, plan.class_start).with_athletes(athletes);
+    let mut state =
+        LiveSession::new(session, plan.config, plan.class_start).with_athletes(athletes);
+    // A new class in a venue that already has readers and bands should see them.
+    load_venue(store, &mut state).await?;
     Ok((state, Recovery::Started))
+}
+
+/// Loads the reader map, the binding ledger and the check-in queue into a session.
+///
+/// The queue is derived, not stored: a tag that a reader has seen since the class started
+/// and that still belongs to nobody is still waiting to be claimed (ADR 0001 D3). Deriving
+/// it means a crash cannot lose it, and cannot resurrect a tag someone bound in the meantime.
+async fn load_venue<S: HubStore>(store: &S, state: &mut LiveSession) -> Result<(), S::Error> {
+    state.readers = store.readers().await?;
+    state.bindings = store.bindings().await?;
+    for tag in pending_tags_since(store, &state.bindings, state.class_start).await? {
+        state.note_pending_tag(tag);
+    }
+    Ok(())
 }

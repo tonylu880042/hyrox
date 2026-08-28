@@ -6,10 +6,10 @@
 //! the competition path in the interpretation layer.
 
 use crate::time::Duration;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What the athlete is meant to do at one step. Optional per step (CLAUDE.md 9.2).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StationTarget {
     Distance { meters: u32 },
@@ -21,7 +21,7 @@ pub enum StationTarget {
     Duration { duration: Duration },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CourseStep {
     pub station: String,
     pub target: Option<StationTarget>,
@@ -40,7 +40,7 @@ impl CourseStep {
 
 /// An ordered list of steps. A station repeats simply by appearing more than once, and
 /// each occurrence keeps its own target -- the two runs of an interval are different legs.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Course {
     pub name: String,
     pub steps: Vec<CourseStep>,

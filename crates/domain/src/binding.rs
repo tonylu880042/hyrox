@@ -75,6 +75,16 @@ impl BindingLedger {
         Self::default()
     }
 
+    /// Rebuild a ledger from stored rows (CLAUDE.md 21). Closed bindings are kept, not
+    /// filtered: the history is the audit trail, and a restart that dropped it would make
+    /// "who was wearing this band at 10:15" unanswerable after the fact (CLAUDE.md 20).
+    ///
+    /// Order must be `bound_at` ascending, which is the order the invariants were checked
+    /// in when the rows were first written.
+    pub fn restore(entries: Vec<TagBinding>) -> Self {
+        Self { entries }
+    }
+
     /// Bind a tag to an athlete for a session.
     ///
     /// Idempotent for an identical, already-active pair: the check-in tablet double-taps,

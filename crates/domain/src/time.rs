@@ -3,12 +3,12 @@
 //! Newtypes rather than bare i64 so an instant can never be handed to something
 //! expecting a duration. Official timing is always `detected_at` (CLAUDE.md 11, 17).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Instant(pub i64);
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Duration(pub i64);
 
 impl Instant {

@@ -8,7 +8,10 @@
 //! synchronous port would force the hub to block a Tokio worker. The cost is that these
 //! traits are not `dyn`-compatible, so the use cases are generic over them.
 
-use domain::{AthleteState, Instant, Interpreted, MemberRef, Session};
+use domain::{
+    AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
+    ReaderRegistry, Session, SessionConfig, TagBinding,
+};
 use mqtt::CommitOutcome;
 
 /// A raw reader event on its way to the immutable store (CLAUDE.md 16, 19).
@@ -48,6 +51,20 @@ pub struct InterpretedWrite<'a> {
     /// `None` for an event an operator added by hand (CLAUDE.md 20).
     pub raw_event_id: Option<i64>,
     pub event: &'a Interpreted,
+}
+
+/// A raw read fetched back out of the immutable store, with the row id an interpretation
+/// has to point at (CLAUDE.md 19).
+///
+/// Identifiers come back as the wire spelled them, exactly as they went in: resolving them
+/// is interpretation, and interpretation is not the raw store's job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredRawRead {
+    pub raw_event_id: i64,
+    pub device_id: String,
+    pub reader_id: String,
+    /// Official timing (CLAUDE.md 11, 17). Claiming replays in this order.
+    pub detected_at: Instant,
 }
 
 /// An audit record for anything an operator changed (CLAUDE.md 20; ADR 0001 D1).
@@ -103,6 +120,59 @@ pub trait HubStore {
 
     /// The session to resume after a restart (CLAUDE.md 21).
     async fn active_session(&self) -> Result<Option<Session>, Self::Error>;
+
+    /// Store the course and the policies a session was armed with (ADR 0004).
+    ///
+    /// Written once, when the session is armed. Editing configuration is only legal in
+    /// DRAFT (ADR 0001 D2), so a running class cannot have its finish rule changed underneath
+    /// it -- which is the whole point of storing it.
+    async fn save_session_config(&self, config: &SessionConfig) -> Result<(), Self::Error>;
+
+    /// The configuration a session was armed with, or `None` for a session stored before
+    /// configuration was persisted. `None` is not an error, but it is not a default either:
+    /// the caller must decide, and say so (see [`crate::Recovery`]).
+    async fn session_config(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionConfig>, Self::Error>;
+
+    /// Register or reconfigure one reader (CLAUDE.md 8). Keyed on `(device_id, reader_id)`,
+    /// so re-registering a reader replaces its mapping rather than adding a second one.
+    async fn save_reader(&self, registration: &ReaderRegistration)
+        -> Result<(), Self::Error>;
+
+    /// The venue's reader map. Readers belong to the building, not to a session, so this
+    /// is not scoped by session id.
+    async fn readers(&self) -> Result<ReaderRegistry, Self::Error>;
+
+    /// Append or close one binding row (CLAUDE.md 7.2; ADR 0001 D3).
+    ///
+    /// Append-only, exactly like the domain ledger: an implementation may stamp
+    /// `unbound_at` on a row it already holds, and may never rewrite who held the tag.
+    async fn save_binding(&self, binding: &TagBinding) -> Result<(), Self::Error>;
+
+    /// Every binding ever made, closed ones included, oldest first. Dropping the closed
+    /// ones would leave "who was wearing this band at 10:15" unanswerable (CLAUDE.md 20).
+    async fn bindings(&self) -> Result<BindingLedger, Self::Error>;
+
+    /// Distinct tag ids seen by any reader since `since`, oldest first.
+    ///
+    /// The check-in queue is derived from this rather than remembered, so a crash cannot
+    /// lose it (ADR 0001 D3): a tag that was read and is still unbound is still waiting.
+    async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, Self::Error>;
+
+    /// Stored reads of one tag that no interpretation points at yet, oldest first
+    /// (ADR 0001 D3, retroactive claim).
+    ///
+    /// "No interpretation points at it" is what makes claiming idempotent: a read claimed
+    /// once is never replayed into a second interpreted event, however often a band is
+    /// rebound. Tag comparison ignores case, because the raw row keeps the wire spelling
+    /// while `TagId` upper-cases.
+    async fn unclaimed_reads_for_tag(
+        &self,
+        tag_id: &str,
+        since: Instant,
+    ) -> Result<Vec<StoredRawRead>, Self::Error>;
 
     /// Rebuild every athlete by replaying the non-voided interpreted events (CLAUDE.md 21).
     async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, Self::Error>;

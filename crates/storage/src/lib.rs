@@ -5,9 +5,11 @@
 
 mod hub_store;
 
-use application::AuditEntry;
+use application::{AuditEntry, StoredRawRead};
 use domain::{
-    AthleteState, ExceptionReason, Instant, Interpreted, Session, SessionMode, SessionStatus,
+    AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
+    ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, SessionStatus,
+    TagBinding, TagId,
 };
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::str::FromStr;
@@ -375,6 +377,202 @@ fn parse_reason(s: &str) -> Result<ExceptionReason, StoreError> {
         "UNKNOWN_READER" => Ok(ExceptionReason::UnknownReader),
         "ATHLETE_NOT_IN_SESSION" => Ok(ExceptionReason::AthleteNotInSession),
         other => Err(StoreError::Corrupt(format!("exception reason {other}"))),
+    }
+}
+
+/// Configuration, reader map and binding ledger (ADR 0004).
+///
+/// These three are what a restart used to lose. Athlete state has always been rebuilt from
+/// the interpreted log; without these, a resumed session was rebuilt against whatever
+/// configuration the caller supplied, which could differ from the one it was armed under.
+impl Store {
+    /// Stores the course and the policies as one JSON document.
+    ///
+    /// A column rather than a set of tables: the course is nested, ordered and repeatable,
+    /// the hub reads and writes it whole, and nothing queries inside it. The trade is that
+    /// SQL cannot ask "which sessions used SKIERG"; when something needs that, it can be
+    /// indexed alongside without changing this column.
+    pub async fn save_session_config(&self, config: &SessionConfig) -> Result<(), StoreError> {
+        let json = serde_json::to_string(config)
+            .map_err(|e| StoreError::Corrupt(format!("session config: {e}")))?;
+        sqlx::query(
+            "INSERT INTO session_configs (session_id, config_json) VALUES (?1, ?2)
+             ON CONFLICT(session_id) DO UPDATE SET config_json = excluded.config_json",
+        )
+        .bind(&config.session_id)
+        .bind(json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn session_config(&self, id: &str) -> Result<Option<SessionConfig>, StoreError> {
+        let json: Option<String> =
+            sqlx::query_scalar("SELECT config_json FROM session_configs WHERE session_id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        json.map(|j| {
+            serde_json::from_str(&j)
+                .map_err(|e| StoreError::Corrupt(format!("session config for {id}: {e}")))
+        })
+        .transpose()
+    }
+
+    pub async fn save_reader(&self, r: &ReaderRegistration) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO readers (device_id, reader_id, station, zone, mode)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(device_id, reader_id) DO UPDATE SET
+                station = excluded.station, zone = excluded.zone, mode = excluded.mode",
+        )
+        .bind(r.key.device_id.as_str())
+        .bind(r.key.reader_id.as_str())
+        .bind(&r.station)
+        .bind(r.zone.as_deref())
+        .bind(reader_mode_str(r.mode))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The venue's reader map. Insertion order is the operator screen's order, so rows come
+    /// back sorted rather than in whatever order SQLite happens to hold them.
+    pub async fn readers(&self) -> Result<ReaderRegistry, StoreError> {
+        let rows = sqlx::query(
+            "SELECT device_id, reader_id, station, zone, mode FROM readers
+             ORDER BY device_id, reader_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut registry = ReaderRegistry::new();
+        for r in &rows {
+            let device: String = r.get("device_id");
+            let reader: String = r.get("reader_id");
+            let key = ReaderKey::parse(&device, &reader)
+                .map_err(|e| StoreError::Corrupt(format!("reader {device}/{reader}: {e:?}")))?;
+            let mut registration = ReaderRegistration::new(
+                key,
+                r.get::<String, _>("station"),
+                parse_reader_mode(r.get::<String, _>("mode").as_str())?,
+            );
+            if let Some(zone) = r.get::<Option<String>, _>("zone") {
+                registration = registration.with_zone(zone);
+            }
+            registry.register(registration);
+        }
+        Ok(registry)
+    }
+
+    /// Appends a binding, or stamps `unbound_at` on one already stored.
+    ///
+    /// `athlete_id` is deliberately not in the update list: a stored row may be closed, never
+    /// re-attributed, which is what keeps the ledger usable as an audit trail (CLAUDE.md 20).
+    pub async fn save_binding(&self, b: &TagBinding) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO tag_bindings (session_id, tag_id, athlete_id, bound_at, unbound_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(session_id, tag_id, bound_at) DO UPDATE SET
+                unbound_at = excluded.unbound_at",
+        )
+        .bind(&b.session_id)
+        .bind(b.tag_id.as_str())
+        .bind(&b.athlete_id)
+        .bind(b.bound_at.0)
+        .bind(b.unbound_at.map(|t| t.0))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn bindings(&self) -> Result<BindingLedger, StoreError> {
+        let rows = sqlx::query(
+            "SELECT session_id, tag_id, athlete_id, bound_at, unbound_at FROM tag_bindings
+             ORDER BY bound_at, rowid",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let raw: String = r.get("tag_id");
+            entries.push(TagBinding {
+                session_id: r.get("session_id"),
+                tag_id: TagId::parse(&raw)
+                    .map_err(|e| StoreError::Corrupt(format!("tag {raw}: {e:?}")))?,
+                athlete_id: r.get("athlete_id"),
+                bound_at: Instant(r.get::<i64, _>("bound_at")),
+                unbound_at: r.get::<Option<i64>, _>("unbound_at").map(Instant),
+            });
+        }
+        Ok(BindingLedger::restore(entries))
+    }
+
+    /// Distinct tags any reader has seen since `since`, first sighting first. The check-in
+    /// queue is derived from this (ADR 0001 D3) rather than held in memory.
+    pub async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT tag_id FROM raw_events WHERE detected_at >= ?1
+             GROUP BY tag_id ORDER BY MIN(detected_at), MIN(id)",
+        )
+        .bind(since.0)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("tag_id")).collect())
+    }
+
+    /// Reads of one tag that no interpreted event points at, oldest first (ADR 0001 D3).
+    ///
+    /// The `NOT EXISTS` is the idempotency: once a read has an interpretation -- including a
+    /// voided one, which an operator removed on purpose -- claiming will not produce a
+    /// second. Matching is case-insensitive because the raw row keeps the wire spelling
+    /// while `TagId` upper-cases.
+    pub async fn unclaimed_reads_for_tag(
+        &self,
+        tag_id: &str,
+        since: Instant,
+    ) -> Result<Vec<StoredRawRead>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT r.id, r.device_id, r.reader_id, r.detected_at FROM raw_events r
+             WHERE r.tag_id = ?1 COLLATE NOCASE AND r.detected_at >= ?2
+               AND NOT EXISTS (
+                   SELECT 1 FROM interpreted_events i WHERE i.raw_event_id = r.id)
+             ORDER BY r.detected_at, r.id",
+        )
+        .bind(tag_id)
+        .bind(since.0)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| StoredRawRead {
+                raw_event_id: r.get("id"),
+                device_id: r.get("device_id"),
+                reader_id: r.get("reader_id"),
+                detected_at: Instant(r.get::<i64, _>("detected_at")),
+            })
+            .collect())
+    }
+}
+
+fn reader_mode_str(m: ReaderMode) -> &'static str {
+    match m {
+        ReaderMode::Entry => "ENTRY",
+        ReaderMode::Exit => "EXIT",
+        ReaderMode::Toggle => "TOGGLE",
+        ReaderMode::Checkpoint => "CHECKPOINT",
+        ReaderMode::Passage => "PASSAGE",
+    }
+}
+fn parse_reader_mode(s: &str) -> Result<ReaderMode, StoreError> {
+    match s {
+        "ENTRY" => Ok(ReaderMode::Entry),
+        "EXIT" => Ok(ReaderMode::Exit),
+        "TOGGLE" => Ok(ReaderMode::Toggle),
+        "CHECKPOINT" => Ok(ReaderMode::Checkpoint),
+        "PASSAGE" => Ok(ReaderMode::Passage),
+        other => Err(StoreError::Corrupt(format!("reader mode {other}"))),
     }
 }
 

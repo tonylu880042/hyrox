@@ -5,8 +5,13 @@
 //! store means writing another adapter here, not touching a use case.
 
 use crate::{RawEvent, Store, StoreError};
-use application::{AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead};
-use domain::{AthleteState, Instant, Session};
+use application::{
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredRawRead,
+};
+use domain::{
+    AthleteState, BindingLedger, Instant, ReaderRegistration, ReaderRegistry, Session,
+    SessionConfig, TagBinding,
+};
 use mqtt::CommitOutcome;
 
 impl HubStore for Store {
@@ -69,5 +74,41 @@ impl HubStore for Store {
 
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {
         self.save_audit(entry).await
+    }
+
+    async fn save_session_config(&self, config: &SessionConfig) -> Result<(), StoreError> {
+        Store::save_session_config(self, config).await
+    }
+
+    async fn session_config(&self, session_id: &str) -> Result<Option<SessionConfig>, StoreError> {
+        Store::session_config(self, session_id).await
+    }
+
+    async fn save_reader(&self, registration: &ReaderRegistration) -> Result<(), StoreError> {
+        Store::save_reader(self, registration).await
+    }
+
+    async fn readers(&self) -> Result<ReaderRegistry, StoreError> {
+        Store::readers(self).await
+    }
+
+    async fn save_binding(&self, binding: &TagBinding) -> Result<(), StoreError> {
+        Store::save_binding(self, binding).await
+    }
+
+    async fn bindings(&self) -> Result<BindingLedger, StoreError> {
+        Store::bindings(self).await
+    }
+
+    async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, StoreError> {
+        Store::raw_tags_since(self, since).await
+    }
+
+    async fn unclaimed_reads_for_tag(
+        &self,
+        tag_id: &str,
+        since: Instant,
+    ) -> Result<Vec<StoredRawRead>, StoreError> {
+        Store::unclaimed_reads_for_tag(self, tag_id, since).await
     }
 }

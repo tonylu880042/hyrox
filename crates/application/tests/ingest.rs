@@ -331,3 +331,64 @@ async fn a_read_with_an_unusable_tag_is_stored_but_cannot_be_attributed() {
     assert_eq!(store.raw_count(), 1);
     assert!(state.pending_tags().is_empty(), "an unusable tag is not a check-in to-do");
 }
+
+#[tokio::test]
+async fn an_interpretation_that_cannot_be_stored_does_not_advance_memory() {
+    // The drift the previous phase documented. `domain::interpret` decided and applied in one
+    // step, so a failed write left the in-memory athlete inside a station the event log had
+    // never heard of, and the two disagreed until a restart. Deciding is pure, so it can
+    // happen early; applying now waits for the write (CLAUDE.md 21, 29).
+    let store = FakeStore::failing_interpreted();
+    let mut state = armed_session();
+
+    let err = ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 1_010_000))
+        .await
+        .expect_err("the interpretation write failed");
+    assert!(matches!(err, IngestError::Interpretation { .. }));
+
+    let athlete = state.athlete("a1").expect("on the roster");
+    assert_eq!(athlete.status, domain::AthleteStatus::Ready, "memory must not run ahead");
+    assert_eq!(athlete.station_state, domain::StationState::Outside);
+    assert!(athlete.runs.is_empty());
+    assert_eq!(athlete.started_at, None);
+    assert_eq!(state.session.interpreted_event_count, 0);
+    // The raw read is still durable, which is the guarantee that matters (CLAUDE.md 31).
+    assert_eq!(store.raw_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_exception_write_does_not_advance_the_inbox_badge() {
+    // Same rule on the exception path: an unstored exception must not be counted, or the
+    // badge would claim work the operator cannot find (ADR 0001 D4).
+    let store = FakeStore::failing_interpreted();
+    let mut state = armed_session();
+
+    ingest_read(&mut state, &store, &read("rfid-99", "TAG-A1", 1, 1_010_000))
+        .await
+        .expect_err("the interpretation write failed");
+
+    assert_eq!(state.exception_count, 0);
+}
+
+#[tokio::test]
+async fn memory_and_the_log_agree_after_a_recovered_write_failure() {
+    // What the ordering buys: replaying the log rebuilds exactly the state memory holds, so
+    // the failed read is missing from both rather than from one (CLAUDE.md 21).
+    let store = FakeStore::new();
+    let mut state = armed_session();
+    ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 1_010_000))
+        .await
+        .expect("stored");
+
+    let replayed = domain::replay(
+        "a1",
+        "CHEN YU-TING",
+        store.interpreted().iter().map(|(_, e)| e).collect::<Vec<_>>(),
+    );
+    let live = state.athlete("a1").expect("on the roster");
+    assert_eq!(replayed.status, live.status);
+    assert_eq!(replayed.station_state, live.station_state);
+    assert_eq!(replayed.current_station, live.current_station);
+    assert_eq!(replayed.started_at, live.started_at);
+    assert_eq!(replayed.runs.len(), live.runs.len());
+}
