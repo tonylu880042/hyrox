@@ -3,6 +3,9 @@
 //! Raw events are append-only and never modified. Athlete state is not stored: it is rebuilt
 //! by replaying the non-voided interpreted events, so a restart cannot disagree with the log.
 
+mod hub_store;
+
+use application::AuditEntry;
 use domain::{
     AthleteState, ExceptionReason, Instant, Interpreted, Session, SessionMode, SessionStatus,
 };
@@ -258,6 +261,38 @@ impl Store {
         Ok(())
     }
 
+    /// Appends an audit record (CLAUDE.md 20). Append-only, like the raw events: a
+    /// correction trail that could itself be corrected would prove nothing.
+    pub async fn save_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO audit_log
+                (at, operator, action, subject, reason, before_state, after_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(entry.at.0)
+        .bind(&entry.operator)
+        .bind(&entry.action)
+        .bind(&entry.subject)
+        .bind(entry.reason.as_deref())
+        .bind(entry.before.as_deref())
+        .bind(entry.after.as_deref())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Live exceptions in a session. Voided rows are excluded, so clearing one in the
+    /// inbox clears the badge too (CLAUDE.md 20; ADR 0001 D4).
+    pub async fn exception_count(&self, session_id: &str) -> Result<i64, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT COUNT(*) FROM interpreted_events
+             WHERE session_id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
     pub async fn raw_event_count(&self) -> Result<i64, StoreError> {
         Ok(sqlx::query_scalar("SELECT COUNT(*) FROM raw_events")
             .fetch_one(&self.pool)
@@ -329,6 +364,7 @@ fn reason_str(r: &ExceptionReason) -> &'static str {
         ExceptionReason::ImpossibleTransition => "IMPOSSIBLE_TRANSITION",
         ExceptionReason::AlreadyFinished => "ALREADY_FINISHED",
         ExceptionReason::UnknownReader => "UNKNOWN_READER",
+        ExceptionReason::AthleteNotInSession => "ATHLETE_NOT_IN_SESSION",
     }
 }
 fn parse_reason(s: &str) -> Result<ExceptionReason, StoreError> {
@@ -337,6 +373,7 @@ fn parse_reason(s: &str) -> Result<ExceptionReason, StoreError> {
         "IMPOSSIBLE_TRANSITION" => Ok(ExceptionReason::ImpossibleTransition),
         "ALREADY_FINISHED" => Ok(ExceptionReason::AlreadyFinished),
         "UNKNOWN_READER" => Ok(ExceptionReason::UnknownReader),
+        "ATHLETE_NOT_IN_SESSION" => Ok(ExceptionReason::AthleteNotInSession),
         other => Err(StoreError::Corrupt(format!("exception reason {other}"))),
     }
 }

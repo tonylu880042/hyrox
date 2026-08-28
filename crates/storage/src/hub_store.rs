@@ -1,0 +1,73 @@
+//! `Store` as the application's persistence port (CLAUDE.md 3).
+//!
+//! The dependency runs this way round on purpose: the application declares what it needs
+//! and this crate satisfies it. `application` knows nothing about SQLite, and swapping the
+//! store means writing another adapter here, not touching a use case.
+
+use crate::{RawEvent, Store, StoreError};
+use application::{AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead};
+use domain::{AthleteState, Instant, Session};
+use mqtt::CommitOutcome;
+
+impl HubStore for Store {
+    type Error = StoreError;
+
+    /// Returns `Ok` only once SQLite has committed, which is what the ACK is issued against
+    /// (CLAUDE.md 15; ADR 0002).
+    async fn commit_raw(&self, raw: &RawRead) -> Result<RawCommit, StoreError> {
+        let (id, inserted) = self
+            .save_raw(&RawEvent {
+                device_id: raw.device_id.clone(),
+                reader_id: raw.reader_id.clone(),
+                boot_id: raw.boot_id,
+                sequence: raw.sequence,
+                tag_id: raw.tag_id.clone(),
+                detected_at: raw.detected_at,
+                received_at: raw.received_at,
+            })
+            .await?;
+        Ok(RawCommit {
+            raw_event_id: id,
+            outcome: if inserted { CommitOutcome::Stored } else { CommitOutcome::AlreadyStored },
+        })
+    }
+
+    async fn commit_interpreted(&self, w: InterpretedWrite<'_>) -> Result<i64, StoreError> {
+        self.save_interpreted(w.session_id, w.athlete_id, w.raw_event_id, w.event)
+            .await
+    }
+
+    async fn save_session(&self, session: &Session, created_at: Instant) -> Result<(), StoreError> {
+        Store::save_session(self, session, created_at).await
+    }
+
+    async fn save_athlete(
+        &self,
+        session_id: &str,
+        athlete_id: &str,
+        display_name: &str,
+        bib: i64,
+    ) -> Result<(), StoreError> {
+        Store::save_athlete(self, session_id, athlete_id, display_name, bib).await
+    }
+
+    async fn active_session(&self) -> Result<Option<Session>, StoreError> {
+        Store::active_session(self).await
+    }
+
+    async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, StoreError> {
+        Store::rebuild_athletes(self, session_id).await
+    }
+
+    async fn session_created_at(&self, session_id: &str) -> Result<Option<Instant>, StoreError> {
+        Store::session_created_at(self, session_id).await
+    }
+
+    async fn exception_count(&self, session_id: &str) -> Result<usize, StoreError> {
+        Ok(Store::exception_count(self, session_id).await? as usize)
+    }
+
+    async fn record_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {
+        self.save_audit(entry).await
+    }
+}

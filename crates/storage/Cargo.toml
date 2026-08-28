@@ -6,6 +6,10 @@ rust-version.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
+# The application declares the ports; this crate implements them (CLAUDE.md 3). The arrow
+# runs storage -> application and never the other way.
+application = { path = "../application" }
+mqtt = { path = "../mqtt", default-features = false }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
