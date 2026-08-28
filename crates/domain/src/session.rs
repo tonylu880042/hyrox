@@ -53,6 +53,16 @@ impl Session {
         self.status == SessionStatus::Armed
     }
 
+    /// Whether the course and the finish rule may still be changed (D2).
+    ///
+    /// Only DRAFT. Once a class is armed it keeps the rule it was armed under, which is
+    /// what makes a resumed session trustworthy (ADR 0004) -- and it is stated here rather
+    /// than restated in every caller, so an operator screen and the use case that refuses
+    /// the edit are reading the same sentence.
+    pub fn accepts_config_edits(&self) -> bool {
+        self.status == SessionStatus::Draft
+    }
+
     pub fn arm(&mut self) -> Result<(), SessionError> {
         match self.status {
             // CLOSED -> ARMED is deliberately allowed: a mis-tap on a busy gym floor must not

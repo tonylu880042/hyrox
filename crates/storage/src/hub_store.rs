@@ -6,7 +6,7 @@
 
 use crate::{RawEvent, Store, StoreError};
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredRawRead,
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead,
 };
 use domain::{
     AthleteState, BindingLedger, Instant, ReaderRegistration, ReaderRegistry, Session,
@@ -60,6 +60,10 @@ impl HubStore for Store {
         Store::active_session(self).await
     }
 
+    async fn session(&self, session_id: &str) -> Result<Option<Session>, StoreError> {
+        Store::session(self, session_id).await
+    }
+
     async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, StoreError> {
         Store::rebuild_athletes(self, session_id).await
     }
@@ -70,6 +74,20 @@ impl HubStore for Store {
 
     async fn exception_count(&self, session_id: &str) -> Result<usize, StoreError> {
         Ok(Store::exception_count(self, session_id).await? as usize)
+    }
+
+    async fn exceptions(&self, session_id: &str) -> Result<Vec<StoredException>, StoreError> {
+        Store::exceptions(self, session_id).await
+    }
+
+    async fn void_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: &str,
+        reason: &str,
+    ) -> Result<bool, StoreError> {
+        Store::void_interpreted(self, interpreted_event_id, at, operator, reason).await
     }
 
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {

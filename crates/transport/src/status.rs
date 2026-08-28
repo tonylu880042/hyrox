@@ -8,6 +8,11 @@ use contract::WireError;
 use domain::DeviceId;
 use serde::{Deserialize, Serialize};
 
+// The warning vocabulary moved to `domain` when the operator's reader health view needed
+// it too (ADR 0007). Re-exported here so the wire's spelling still has one name, and so
+// nothing that already said `transport::DeviceWarning` had to change.
+pub use domain::DeviceWarning;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceStatus {
     pub device_id: DeviceId,
@@ -17,15 +22,6 @@ pub struct DeviceStatus {
     pub journal_capacity: u64,
     /// `None` while the device is healthy.
     pub warning: Option<DeviceWarning>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DeviceWarning {
-    /// Past the configured warning threshold: still recording, but an operator should look.
-    JournalNearlyFull,
-    /// No reclaimable space left. The next RF read cannot be journalled.
-    JournalFull,
 }
 
 impl DeviceStatus {

@@ -4,15 +4,23 @@
 //! what keeps SQLite, MQTT and 健身管 out of the business rules and lets every use case be
 //! tested against in-memory fakes with no database and no broker (CLAUDE.md 24).
 //!
-//! `async fn` in trait is used deliberately (see ADR 0002): the real adapters are async, a
-//! synchronous port would force the hub to block a Tokio worker. The cost is that these
-//! traits are not `dyn`-compatible, so the use cases are generic over them.
+//! Asynchronous by design (see ADR 0002): the real adapters are async, and a synchronous
+//! port would force the hub to block a Tokio worker. The cost is that these traits are not
+//! `dyn`-compatible, so the use cases are generic over them.
+//!
+//! The methods are written as `-> impl Future<..> + Send` rather than as `async fn`, which
+//! is the same thing with one promise added: the returned future is `Send`. An `async fn`
+//! in a trait leaves that unknown to generic callers, and every use case in this crate is
+//! generic over the port -- so an HTTP handler awaiting one could not be proved safe to run
+//! on a multi-threaded executor, and `crates/api` would not compile (ADR 0007). Adapters
+//! still write plain `async fn`; only the promise is new.
 
 use contract::CommitOutcome;
 use domain::{
-    AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
-    ReaderRegistry, Session, SessionConfig, TagBinding,
+    AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, MemberRef,
+    ReaderRegistration, ReaderRegistry, Session, SessionConfig, TagBinding,
 };
+use std::future::Future;
 
 /// A raw reader event on its way to the immutable store (CLAUDE.md 16, 19).
 ///
@@ -67,6 +75,21 @@ pub struct StoredRawRead {
     pub detected_at: Instant,
 }
 
+/// One live exception, as the operator's inbox lists it (ADR 0001 D4).
+///
+/// `interpreted_event_id` is what an operator action names: voiding is done to the
+/// interpretation, never to the raw read, which stays immutable (CLAUDE.md 19, 20).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredException {
+    pub interpreted_event_id: i64,
+    pub athlete_id: String,
+    pub reason: ExceptionReason,
+    /// Official timing (CLAUDE.md 11, 17): when the reader saw it, not when it was stored.
+    pub at: Instant,
+    /// The raw read behind it, when there is one. `None` for an exception an operator added.
+    pub raw_event_id: Option<i64>,
+}
+
 /// An audit record for anything an operator changed (CLAUDE.md 20; ADR 0001 D1).
 ///
 /// `operator` is the device name, not a person: there is no login, and D1 accepted that
@@ -96,70 +119,98 @@ pub struct AuditEntry {
 /// commit succeeded (CLAUDE.md 15; ADR 0002). A store that buffers and writes later must
 /// not return `Ok` yet, because the ACK the hub sends on the strength of it releases the
 /// only other copy of the event.
-#[allow(async_fn_in_trait)]
 pub trait HubStore {
     type Error;
 
     /// Append a raw event. Must be idempotent on `device_id + boot_id + sequence`:
     /// a redelivery reports `AlreadyStored` and the id of the existing row, never a
     /// second row (CLAUDE.md 16).
-    async fn commit_raw(&self, raw: &RawRead) -> Result<RawCommit, Self::Error>;
+    fn commit_raw(
+        &self,
+        raw: &RawRead,
+    ) -> impl Future<Output = Result<RawCommit, Self::Error>> + Send;
 
-    async fn commit_interpreted(&self, write: InterpretedWrite<'_>) -> Result<i64, Self::Error>;
+    fn commit_interpreted(
+        &self,
+        write: InterpretedWrite<'_>,
+    ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
 
-    async fn save_session(&self, session: &Session, created_at: Instant)
-        -> Result<(), Self::Error>;
+    fn save_session(
+        &self,
+        session: &Session,
+        created_at: Instant,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
-    async fn save_athlete(
+    fn save_athlete(
         &self,
         session_id: &str,
         athlete_id: &str,
         display_name: &str,
         bib: i64,
-    ) -> Result<(), Self::Error>;
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// The session to resume after a restart (CLAUDE.md 21).
-    async fn active_session(&self) -> Result<Option<Session>, Self::Error>;
+    fn active_session(&self) -> impl Future<Output = Result<Option<Session>, Self::Error>> + Send;
+
+    /// One session by id, whether or not it is the active one.
+    ///
+    /// Results outlive the class that produced them: `/result/{id}` has to be able to name
+    /// a session the hub is no longer running (CLAUDE.md 22).
+    fn session(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Option<Session>, Self::Error>> + Send;
 
     /// Store the course and the policies a session was armed with (ADR 0004).
     ///
     /// Written once, when the session is armed. Editing configuration is only legal in
     /// DRAFT (ADR 0001 D2), so a running class cannot have its finish rule changed underneath
     /// it -- which is the whole point of storing it.
-    async fn save_session_config(&self, config: &SessionConfig) -> Result<(), Self::Error>;
+    fn save_session_config(
+        &self,
+        config: &SessionConfig,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// The configuration a session was armed with, or `None` for a session stored before
     /// configuration was persisted. `None` is not an error, but it is not a default either:
     /// the caller must decide, and say so (see [`crate::Recovery`]).
-    async fn session_config(
+    fn session_config(
         &self,
         session_id: &str,
-    ) -> Result<Option<SessionConfig>, Self::Error>;
+    ) -> impl Future<Output = Result<Option<SessionConfig>, Self::Error>> + Send;
 
     /// Register or reconfigure one reader (CLAUDE.md 8). Keyed on `(device_id, reader_id)`,
     /// so re-registering a reader replaces its mapping rather than adding a second one.
-    async fn save_reader(&self, registration: &ReaderRegistration)
-        -> Result<(), Self::Error>;
+    fn save_reader(
+        &self,
+        registration: &ReaderRegistration,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// The venue's reader map. Readers belong to the building, not to a session, so this
     /// is not scoped by session id.
-    async fn readers(&self) -> Result<ReaderRegistry, Self::Error>;
+    fn readers(&self) -> impl Future<Output = Result<ReaderRegistry, Self::Error>> + Send;
 
     /// Append or close one binding row (CLAUDE.md 7.2; ADR 0001 D3).
     ///
     /// Append-only, exactly like the domain ledger: an implementation may stamp
     /// `unbound_at` on a row it already holds, and may never rewrite who held the tag.
-    async fn save_binding(&self, binding: &TagBinding) -> Result<(), Self::Error>;
+    fn save_binding(
+        &self,
+        binding: &TagBinding,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Every binding ever made, closed ones included, oldest first. Dropping the closed
     /// ones would leave "who was wearing this band at 10:15" unanswerable (CLAUDE.md 20).
-    async fn bindings(&self) -> Result<BindingLedger, Self::Error>;
+    fn bindings(&self) -> impl Future<Output = Result<BindingLedger, Self::Error>> + Send;
 
     /// Distinct tag ids seen by any reader since `since`, oldest first.
     ///
     /// The check-in queue is derived from this rather than remembered, so a crash cannot
     /// lose it (ADR 0001 D3): a tag that was read and is still unbound is still waiting.
-    async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, Self::Error>;
+    fn raw_tags_since(
+        &self,
+        since: Instant,
+    ) -> impl Future<Output = Result<Vec<String>, Self::Error>> + Send;
 
     /// Stored reads of one tag that no interpretation points at yet, oldest first
     /// (ADR 0001 D3, retroactive claim).
@@ -168,23 +219,58 @@ pub trait HubStore {
     /// once is never replayed into a second interpreted event, however often a band is
     /// rebound. Tag comparison ignores case, because the raw row keeps the wire spelling
     /// while `TagId` upper-cases.
-    async fn unclaimed_reads_for_tag(
+    fn unclaimed_reads_for_tag(
         &self,
         tag_id: &str,
         since: Instant,
-    ) -> Result<Vec<StoredRawRead>, Self::Error>;
+    ) -> impl Future<Output = Result<Vec<StoredRawRead>, Self::Error>> + Send;
 
     /// Rebuild every athlete by replaying the non-voided interpreted events (CLAUDE.md 21).
-    async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, Self::Error>;
+    fn rebuild_athletes(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Vec<AthleteState>, Self::Error>> + Send;
 
-    async fn session_created_at(&self, session_id: &str) -> Result<Option<Instant>, Self::Error>;
+    fn session_created_at(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Option<Instant>, Self::Error>> + Send;
 
     /// How many live (non-voided) exceptions the session has recorded, for the operator's
     /// inbox badge after a restart (ADR 0001 D4). Counted in the store rather than tracked
     /// in memory, because the badge must survive the process that produced it.
-    async fn exception_count(&self, session_id: &str) -> Result<usize, Self::Error>;
+    fn exception_count(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send;
 
-    async fn record_audit(&self, entry: &AuditEntry) -> Result<(), Self::Error>;
+    /// The live exceptions themselves, oldest first, for the operator's inbox (ADR 0001 D4).
+    /// Voided ones are excluded: clearing one in the inbox clears it from the list as well
+    /// as from the badge.
+    fn exceptions(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Vec<StoredException>, Self::Error>> + Send;
+
+    /// Void one interpretation (CLAUDE.md 20; ADR 0001 D4). Reports whether a row was
+    /// actually voided, so an operator who named an id that does not exist is told so
+    /// rather than shown a success.
+    ///
+    /// The interpretation is marked voided, never deleted, and the raw read it points at is
+    /// not touched at all (CLAUDE.md 19). A voided event must disappear from every replay,
+    /// which is what makes the derived values recomputable after the fact.
+    fn void_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: &str,
+        reason: &str,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    fn record_audit(
+        &self,
+        entry: &AuditEntry,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 /// 健身管, the member system of record (CLAUDE.md 7.1).

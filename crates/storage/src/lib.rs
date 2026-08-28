@@ -5,7 +5,7 @@
 
 mod hub_store;
 
-use application::{AuditEntry, StoredRawRead};
+use application::{AuditEntry, StoredException, StoredRawRead};
 use domain::{
     AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
     ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, SessionStatus,
@@ -196,6 +196,57 @@ impl Store {
         .transpose()
     }
 
+    /// One session by id, active or not. `/result/{id}` has to be able to name a session
+    /// the hub stopped running hours ago (CLAUDE.md 22).
+    pub async fn session(&self, id: &str) -> Result<Option<Session>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, name, mode, status, interpreted_event_count FROM sessions
+             WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            Ok(Session {
+                id: r.get("id"),
+                name: r.get("name"),
+                mode: parse_mode(r.get::<String, _>("mode").as_str())?,
+                status: parse_status(r.get::<String, _>("status").as_str())?,
+                interpreted_event_count: r.get::<i64, _>("interpreted_event_count") as u64,
+            })
+        })
+        .transpose()
+    }
+
+    /// The session's live exceptions, oldest first (ADR 0001 D4). Ordered by `detected_at`
+    /// like the replay, so the inbox reads in the order the venue produced it.
+    pub async fn exceptions(&self, session_id: &str) -> Result<Vec<StoredException>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, athlete_id, raw_event_id, detected_at, exception_reason
+             FROM interpreted_events
+             WHERE session_id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL
+             ORDER BY detected_at, id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(StoredException {
+                    interpreted_event_id: r.get("id"),
+                    athlete_id: r.get("athlete_id"),
+                    reason: parse_reason(
+                        r.get::<Option<String>, _>("exception_reason")
+                            .unwrap_or_default()
+                            .as_str(),
+                    )?,
+                    at: Instant(r.get::<i64, _>("detected_at")),
+                    raw_event_id: r.get("raw_event_id"),
+                })
+            })
+            .collect()
+    }
+
     /// Rebuilds every athlete in the session by replaying the non-voided interpreted events
     /// in `detected_at` order (CLAUDE.md 21). Voided rows are excluded, which is how an
     /// operator correction reaches the derived values (CLAUDE.md 20).
@@ -242,14 +293,17 @@ impl Store {
         Ok(out)
     }
 
+    /// Marks one interpretation voided, and reports whether a row matched. Voiding is an
+    /// UPDATE and never a DELETE: the corrected event has to stay readable afterwards
+    /// (CLAUDE.md 19, 20).
     pub async fn void_interpreted(
         &self,
         id: i64,
         at: Instant,
         operator: &str,
         reason: &str,
-    ) -> Result<(), StoreError> {
-        sqlx::query(
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
             "UPDATE interpreted_events
              SET voided_at = ?2, voided_by = ?3, void_reason = ?4
              WHERE id = ?1",
@@ -260,7 +314,7 @@ impl Store {
         .bind(reason)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Appends an audit record (CLAUDE.md 20). Append-only, like the raw events: a

@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredRawRead,
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead,
 };
 use domain::{
     AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
@@ -38,6 +38,10 @@ struct Inner {
     /// The raw row each interpretation points at, which is what makes a claimed read
     /// unclaimable a second time.
     interpreted: Vec<(String, Option<i64>, Interpreted)>,
+    /// Row ids of voided interpretations. Voided, never removed: the real table marks them
+    /// too, because a correction trail that deleted its subject would prove nothing
+    /// (CLAUDE.md 19, 20).
+    voided: Vec<i64>,
     audits: Vec<AuditEntry>,
     sessions: Vec<Session>,
     configs: Vec<SessionConfig>,
@@ -227,8 +231,39 @@ impl HubStore for FakeStore {
         Ok(self.inner.lock().unwrap().sessions.first().cloned())
     }
 
+    async fn session(&self, session_id: &str) -> Result<Option<Session>, FakeError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .cloned())
+    }
+
+    /// Replays the non-voided interpretations over the seeded roster, like the real store.
+    /// Seeded athletes with no interpretations come back untouched, which is what the
+    /// recovery tests rely on.
     async fn rebuild_athletes(&self, _session_id: &str) -> Result<Vec<AthleteState>, FakeError> {
-        Ok(self.inner.lock().unwrap().athletes.clone())
+        let inner = self.inner.lock().unwrap();
+        if inner.interpreted.is_empty() {
+            return Ok(inner.athletes.clone());
+        }
+        let mut out: Vec<AthleteState> = inner
+            .athletes
+            .iter()
+            .map(|a| AthleteState::ready(&a.athlete_id, &a.display_name))
+            .collect();
+        for (i, (athlete_id, _, event)) in inner.interpreted.iter().enumerate() {
+            if inner.voided.contains(&(i as i64 + 1)) {
+                continue;
+            }
+            if let Some(state) = out.iter_mut().find(|a| &a.athlete_id == athlete_id) {
+                domain::apply(state, event);
+            }
+        }
+        Ok(out)
     }
 
     async fn session_created_at(&self, _session_id: &str) -> Result<Option<Instant>, FakeError> {
@@ -236,14 +271,54 @@ impl HubStore for FakeStore {
     }
 
     async fn exception_count(&self, _session_id: &str) -> Result<usize, FakeError> {
-        Ok(self
-            .inner
-            .lock()
-            .unwrap()
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
             .interpreted
             .iter()
-            .filter(|(_, _, e)| matches!(e, Interpreted::Exception { .. }))
+            .enumerate()
+            .filter(|(i, (_, _, e))| {
+                matches!(e, Interpreted::Exception { .. })
+                    && !inner.voided.contains(&(*i as i64 + 1))
+            })
             .count())
+    }
+
+    /// Row ids are index + 1, exactly as `commit_interpreted` hands them out, and voided
+    /// rows are filtered here for the same reason the real table filters them.
+    async fn exceptions(&self, _session_id: &str) -> Result<Vec<StoredException>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .interpreted
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !inner.voided.contains(&(*i as i64 + 1)))
+            .filter_map(|(i, (athlete_id, raw_event_id, event))| match event {
+                Interpreted::Exception { reason, at } => Some(StoredException {
+                    interpreted_event_id: i as i64 + 1,
+                    athlete_id: athlete_id.clone(),
+                    reason: reason.clone(),
+                    at: *at,
+                    raw_event_id: *raw_event_id,
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
+    async fn void_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        _at: Instant,
+        _operator: &str,
+        _reason: &str,
+    ) -> Result<bool, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let exists = interpreted_event_id >= 1
+            && interpreted_event_id as usize <= inner.interpreted.len();
+        if exists {
+            inner.voided.push(interpreted_event_id);
+        }
+        Ok(exists)
     }
 
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), FakeError> {

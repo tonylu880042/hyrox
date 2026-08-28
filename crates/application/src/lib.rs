@@ -19,6 +19,9 @@
 //!   state and the exception badge are both re-derived and are unaffected.
 
 pub mod checkin;
+pub mod config;
+pub mod devices;
+pub mod exceptions;
 pub mod finish;
 pub mod ingest;
 pub mod live;
@@ -27,16 +30,23 @@ pub mod operator;
 pub mod ports;
 pub mod readers;
 pub mod recover;
+pub mod results;
 pub mod session;
 
+pub use config::configure;
+pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceReport};
 pub use finish::{apply_finish_policy, end_class};
 pub use ingest::{ingest_read, Ingested, IngestError, IngestOutcome};
-pub use live::{course_view, snapshot, AthleteView, CourseStation, Snapshot};
+pub use live::{
+    checkin_view, course_view, last_event_age_ms, reader_views, snapshot, AthleteView,
+    CheckInAthlete, CheckInView, CourseStation, ReaderView, Snapshot, SplitView,
+};
 pub use live_session::LiveSession;
 pub use operator::{OperatorCommand, OperatorError};
 pub use ports::{
     AuditEntry, DirectoryError, HubStore, InterpretedWrite, MemberDirectory, RawCommit, RawRead,
-    StoredRawRead, UnconfiguredDirectory,
+    StoredException, StoredRawRead, UnconfiguredDirectory,
 };
 pub use readers::register_reader;
 pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
+pub use results::{results, ResultRow, SessionResults, SplitRow};

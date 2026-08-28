@@ -5,7 +5,7 @@
 //! reason, offered as quick reason keys rather than free typing, so the audit trail
 //! required by CLAUDE.md 20 survives a fast gym floor.
 
-use domain::{BindingError, Instant, SessionError};
+use domain::{BindingError, Instant, SessionError, SessionStatus};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperatorCommand {
@@ -50,6 +50,14 @@ pub enum OperatorError<E> {
     NoFinishRule,
     #[error("athlete {0:?} is not in this session")]
     UnknownAthlete(String),
+    /// Configuration may only be edited while the session is DRAFT (ADR 0001 D2). Not a
+    /// `SessionError`: nothing was asked of the state machine, so it has nothing to say.
+    #[error("configuration cannot be edited while the session is {status:?}")]
+    NotEditable { status: SessionStatus },
+    /// No interpreted event has that id, so there was nothing to correct. Reported rather
+    /// than silently succeeding: an operator who voided nothing must not be told they did.
+    #[error("no interpreted event with id {0}")]
+    UnknownEvent(i64),
     #[error("store write failed")]
     Storage(E),
 }

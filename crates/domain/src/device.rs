@@ -113,6 +113,24 @@ fn hex_digit(nibble: u8) -> char {
     char::from(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 })
 }
 
+/// What an edge device says about its own journal (CLAUDE.md 18).
+///
+/// Here rather than in `crates/transport` because two layers now need the same vocabulary:
+/// the transport decodes it off the status topic, and the application carries it on the
+/// operator's reader health view (ADR 0001 D5). `transport` re-exports this type, so the
+/// wire spelling is unchanged -- the serialised form is still SCREAMING_SNAKE_CASE.
+///
+/// The hub never derives one of these. A warning is the device's own assessment; inventing
+/// one from a message count would be the hub guessing at firmware internals.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DeviceWarning {
+    /// Past the configured warning threshold: still recording, but an operator should look.
+    JournalNearlyFull,
+    /// No reclaimable space left. The next RF read cannot be journalled.
+    JournalFull,
+}
+
 /// Reader identity, scoped to its device. Kept apart from `DeviceId` so a `reader_id`
 /// can never be used on its own to identify hardware (CLAUDE.md 7.3).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize)]

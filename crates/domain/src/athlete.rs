@@ -2,7 +2,7 @@
 
 use crate::session::Session;
 use crate::time::{Duration, Instant};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -20,7 +20,10 @@ pub enum StationState {
 }
 
 /// Interpretation belongs to the hub, never to the ESP32 (CLAUDE.md 8).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+///
+/// `Deserialize` as well as `Serialize`: registering a reader is an operator action over
+/// HTTP (ADR 0007), so the mode has to survive the trip in as well as out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ReaderMode {
     Entry,

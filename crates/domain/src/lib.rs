@@ -17,7 +17,7 @@ pub use athlete::{
 pub use binding::{BindingError, BindingLedger, TagBinding, TagId, TagIdError};
 pub use config::SessionConfig;
 pub use course::{Course, CourseStep, StationTarget};
-pub use device::{DeviceId, DeviceIdError, ReaderId, ReaderIdError};
+pub use device::{DeviceId, DeviceIdError, DeviceWarning, ReaderId, ReaderIdError};
 pub use finish::{finish, FinishDecision, FinishPolicy};
 pub use member::{Gender, MemberRef, MembershipStatus};
 pub use reader::{ReaderKey, ReaderKeyError, ReaderRegistration, ReaderRegistry, UnknownReader};

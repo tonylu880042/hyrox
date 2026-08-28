@@ -5,8 +5,10 @@
 //! roster and interpreted events all come back from the store on restart (CLAUDE.md 21),
 //! and this struct is the working copy the use cases advance.
 
+use crate::devices::DeviceHealth;
 use domain::{
-    AthleteState, BindingLedger, Instant, ReaderRegistry, Session, SessionConfig, TagId,
+    AthleteState, BindingLedger, DeviceId, Instant, ReaderRegistry, Session, SessionConfig,
+    TagId,
 };
 
 pub struct LiveSession {
@@ -26,6 +28,9 @@ pub struct LiveSession {
     pending_tags: Vec<TagId>,
     /// How many interpreted events were exceptions, for the operator's inbox badge (D4).
     pub exception_count: usize,
+    /// When each edge device was last heard from (ADR 0001 D5). In memory only, and
+    /// deliberately so -- see [`crate::devices`].
+    devices: Vec<DeviceHealth>,
 }
 
 impl LiveSession {
@@ -39,6 +44,7 @@ impl LiveSession {
             class_start,
             pending_tags: Vec::new(),
             exception_count: 0,
+            devices: Vec::new(),
         }
     }
 
@@ -86,5 +92,23 @@ impl LiveSession {
 
     pub fn clear_pending_tag(&mut self, tag: &TagId) {
         self.pending_tags.retain(|t| t != tag);
+    }
+
+    /// Edge devices the hub has heard from since it started, in the order it first heard
+    /// them. A device missing from here has said nothing this run (ADR 0001 D5).
+    pub fn devices(&self) -> &[DeviceHealth] {
+        &self.devices
+    }
+
+    pub fn device(&self, device_id: &DeviceId) -> Option<&DeviceHealth> {
+        self.devices.iter().find(|d| &d.device_id == device_id)
+    }
+
+    pub(crate) fn device_mut(&mut self, device_id: &DeviceId) -> Option<&mut DeviceHealth> {
+        self.devices.iter_mut().find(|d| &d.device_id == device_id)
+    }
+
+    pub(crate) fn push_device(&mut self, health: DeviceHealth) {
+        self.devices.push(health);
     }
 }
