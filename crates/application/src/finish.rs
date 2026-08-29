@@ -21,15 +21,21 @@ use domain::{AthleteStatus, FinishDecision, FinishPolicy, Instant};
 /// state at the next tick (CLAUDE.md 21). Writing a FINISHED row instead would invent an
 /// event no reader ever reported.
 pub fn apply_finish_policy(state: &mut LiveSession, now: Instant) -> Vec<String> {
-    let elapsed = state.class_elapsed(now);
     let policy = state.config.finish_policy;
+    let course = state.config.course.clone();
+    let class_start = state.class_start;
     let mut newly = Vec::new();
     for athlete in &mut state.athletes {
         if athlete.status == AthleteStatus::Finished {
             continue;
         }
-        if policy.evaluate(athlete, elapsed) == FinishDecision::Finished {
-            domain::finish(athlete, now);
+        // Finish at the moment the rule says they stopped, not at this tick. A poll that
+        // runs late -- or one that runs for the first time after a restart -- must not
+        // inflate a result (CLAUDE.md 11, 17).
+        if let FinishDecision::Finished { at } =
+            policy.evaluate(athlete, class_start, now, course.as_ref())
+        {
+            domain::finish(athlete, at);
             newly.push(athlete.athlete_id.clone());
         }
     }

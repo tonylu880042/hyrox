@@ -76,7 +76,7 @@ interpreted event，且必須完整走過 audit 與衍生值重算。它會需�
 
 ---
 
-## OPEN — competition finish rule
+## ANSWERED 2026-08-28 — competition finish rule
 
 CLAUDE.md 12. Training was answered (below); competition was not.
 
@@ -88,7 +88,16 @@ is `NotConfigured`, so no operator button can invent the rule either (ADR 0003).
 
 Questions still unanswered are listed in `docs/timing-rules.md`.
 
-**Blocks:** the competition screen. Building it without this would mean inventing the rule.
+Finishing is completing the configured course, and the exit of the final station is the
+result's recording point. Implemented as `FinishPolicy::CourseComplete`, which reads the
+finish instant off that exit rather than off the tick that noticed it.
+
+Race formats are courses, not rules: a half format is a shorter `Course`, so adding a format
+must never mean adding a `FinishPolicy` variant.
+
+**Still open:** whether a dedicated finish reader replaces the last station's exit later. The
+current rule needs no extra hardware, and a `FinishReader` variant could coexist if a venue
+installs one.
 
 ---
 
@@ -147,3 +156,24 @@ CLAUDE.md 16 (`rfid-02`): both now denote the same reader.
 
 No prior convention exists, so the hub defines it: `hyrox/v1/...`, as documented in
 `docs/event-protocol.md`. The firmware must match it.
+
+
+## OPEN — doubles and relay: bands per team, and the missing team concept
+
+The user asked what the official HYROX regulation is for bands per doubles team. That needs
+checking against the current rulebook; it is not recorded here because it is not yet known.
+
+Independently of that answer, doubles makes the TEAM the timing subject, and the domain has
+no team concept: `AthleteState` is per person and a binding is one band to one person.
+
+Two bands also buy less than they appear to. Partners split repetitions inside a station,
+which is exactly where RFID sees nothing (the hub knows which zone someone is in, never what
+they are doing), so a second band cannot tell us who did what work.
+
+Recommendation on file: two bands, because each partner is a member in their own right with
+their own binding and member record, but timing and finishing at the team level.
+
+**Sized as a Milestone 1 extension**, not a finish-policy variant. Relay is structurally the
+same problem, so a team model should cover both.
+
+**Blocks:** doubles and relay formats. Does NOT block singles competition.

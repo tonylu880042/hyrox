@@ -105,7 +105,7 @@ fn an_unconfigured_finish_policy_never_decides_an_athlete_is_finished() {
     interpret(&mut athlete, &exit, Instant(60_000), &session);
 
     assert_eq!(
-        FinishPolicy::NotConfigured.evaluate(&athlete, Duration(0)),
+        FinishPolicy::NotConfigured.evaluate(&athlete, Instant(0), Instant(0), None),
         FinishDecision::Undetermined,
         "an undecided rule must return Undetermined, never NotFinished by accident"
     );
@@ -148,8 +148,22 @@ fn a_class_ends_when_its_time_is_up_even_mid_course() {
     let a = athlete_mid_class();
     assert_eq!(a.runs.len(), 1, "still on the first station");
 
-    assert_eq!(policy.evaluate(&a, Duration(3_599_999)), FinishDecision::NotFinished);
-    assert_eq!(policy.evaluate(&a, Duration(3_600_000)), FinishDecision::Finished);
+    let start = Instant(0);
+    assert_eq!(
+        policy.evaluate(&a, start, Instant(3_599_999), None),
+        FinishDecision::NotFinished
+    );
+    assert_eq!(
+        policy.evaluate(&a, start, Instant(3_600_000), None),
+        FinishDecision::Finished { at: Instant(3_600_000) }
+    );
+    // Noticed late -- by a slow tick or by the first tick after a restart -- the result is
+    // still the moment the clock ran out, not the moment we looked.
+    assert_eq!(
+        policy.evaluate(&a, start, Instant(9_999_999), None),
+        FinishDecision::Finished { at: Instant(3_600_000) },
+        "a late look must not inflate the result"
+    );
 }
 
 #[test]
@@ -157,7 +171,7 @@ fn an_athlete_who_never_scanned_in_did_not_take_part() {
     let policy = FinishPolicy::ClassDuration { limit: Duration(3_600_000) };
     let never_started = AthleteState::ready("a2", "Lin");
     assert_eq!(
-        policy.evaluate(&never_started, Duration(7_200_000)),
+        policy.evaluate(&never_started, Instant(0), Instant(7_200_000), None),
         FinishDecision::NotFinished,
         "the class ended, but this athlete never started one"
     );
@@ -167,7 +181,10 @@ fn an_athlete_who_never_scanned_in_did_not_take_part() {
 fn coach_decides_never_finishes_anyone_on_its_own() {
     let policy = FinishPolicy::CoachDecides;
     let a = athlete_mid_class();
-    assert_eq!(policy.evaluate(&a, Duration(86_400_000)), FinishDecision::NotFinished);
+    assert_eq!(
+        policy.evaluate(&a, Instant(0), Instant(86_400_000), None),
+        FinishDecision::NotFinished
+    );
 }
 
 #[test]
@@ -193,7 +210,11 @@ fn a_finished_athlete_stays_finished_under_any_policy() {
         FinishPolicy::CoachDecides,
         FinishPolicy::ClassDuration { limit: Duration(3_600_000) },
     ] {
-        assert_eq!(policy.evaluate(&a, Duration(0)), FinishDecision::Finished);
+        assert_eq!(
+            policy.evaluate(&a, Instant(0), Instant(0), None),
+            FinishDecision::Finished { at: Instant(3_600_000) },
+            "and it keeps the instant it actually finished at"
+        );
     }
 }
 
@@ -230,4 +251,102 @@ fn an_unfinished_athletes_clock_still_runs() {
     let a = athlete_mid_class();
     assert_eq!(a.elapsed(Instant(60_000)), Some(Duration(60_000)));
     assert_eq!(a.elapsed(Instant(120_000)), Some(Duration(120_000)));
+}
+
+// --- competition finish rule (CLAUDE.md 12, settled with the user 2026-08-28) -----------
+
+/// A two-station course, and an athlete driven through as much of it as `stations` says.
+fn ran(stations: &[(&str, i64, i64)]) -> AthleteState {
+    let mut s = Session::new_draft("s1", "Race", SessionMode::Competition);
+    s.arm().unwrap();
+    let mut a = AthleteState::ready("a1", "Chen");
+    for (station, enter, exit) in stations {
+        let entry = ReaderBinding { station: (*station).into(), mode: ReaderMode::Entry };
+        let out = ReaderBinding { station: (*station).into(), mode: ReaderMode::Exit };
+        interpret(&mut a, &entry, Instant(*enter), &s);
+        interpret(&mut a, &out, Instant(*exit), &s);
+    }
+    a
+}
+
+fn two_station_course() -> Course {
+    Course::new("SPRINT", vec![CourseStep::new("SKIERG"), CourseStep::new("WALL BALLS")])
+}
+
+#[test]
+fn completing_the_course_finishes_at_the_last_stations_exit() {
+    // The user's rule: the exit of the final station is the result's recording point.
+    let course = two_station_course();
+    let a = ran(&[("SKIERG", 0, 110_000), ("WALL BALLS", 130_000, 260_000)]);
+
+    assert_eq!(
+        FinishPolicy::CourseComplete.evaluate(&a, Instant(0), Instant(999_999), Some(&course)),
+        FinishDecision::Finished { at: Instant(260_000) },
+        "the result is the exit instant, not whenever the rule was evaluated"
+    );
+}
+
+#[test]
+fn a_half_course_is_a_shorter_course_not_another_rule() {
+    // Full and half formats differ by course length; the finish rule is the same sentence.
+    let half = Course::new("HALF", vec![CourseStep::new("SKIERG")]);
+    let a = ran(&[("SKIERG", 0, 110_000)]);
+
+    assert_eq!(
+        FinishPolicy::CourseComplete.evaluate(&a, Instant(0), Instant(999_999), Some(&half)),
+        FinishDecision::Finished { at: Instant(110_000) }
+    );
+    // The same athlete has not finished the full course.
+    assert_eq!(
+        FinishPolicy::CourseComplete.evaluate(
+            &a,
+            Instant(0),
+            Instant(999_999),
+            Some(&two_station_course())
+        ),
+        FinishDecision::NotFinished
+    );
+}
+
+#[test]
+fn an_athlete_still_on_course_has_not_finished() {
+    let course = two_station_course();
+    let mid = ran(&[("SKIERG", 0, 110_000)]);
+    assert_eq!(
+        FinishPolicy::CourseComplete.evaluate(&mid, Instant(0), Instant(200_000), Some(&course)),
+        FinishDecision::NotFinished
+    );
+}
+
+#[test]
+fn a_station_still_open_does_not_count_as_completed() {
+    // Entered the last station but never exited: no recording point exists yet.
+    let course = two_station_course();
+    let mut a = ran(&[("SKIERG", 0, 110_000)]);
+    let s = {
+        let mut s = Session::new_draft("s1", "Race", SessionMode::Competition);
+        s.arm().unwrap();
+        s
+    };
+    interpret(
+        &mut a,
+        &ReaderBinding { station: "WALL BALLS".into(), mode: ReaderMode::Entry },
+        Instant(130_000),
+        &s,
+    );
+    assert_eq!(
+        FinishPolicy::CourseComplete.evaluate(&a, Instant(0), Instant(999_999), Some(&course)),
+        FinishDecision::NotFinished
+    );
+}
+
+#[test]
+fn course_completion_without_a_course_cannot_answer() {
+    // Undetermined, not NotFinished: a missing course is an unanswered question, and
+    // NotFinished would read as a decided negative (CLAUDE.md 28).
+    let a = ran(&[("SKIERG", 0, 110_000)]);
+    assert_eq!(
+        FinishPolicy::CourseComplete.evaluate(&a, Instant(0), Instant(999_999), None),
+        FinishDecision::Undetermined
+    );
 }
