@@ -13,7 +13,8 @@ fn tag(raw: &str) -> TagId {
 
 fn session() -> LiveSession {
     let mut s = Session::new_draft("s1", "THU 19:00", SessionMode::Training);
-    s.arm().expect("arm");
+    s.mark_ready().expect("arm");
+    s.start().expect("arm");
     LiveSession::new(s, SessionConfig::new("s1"), START).with_athletes(vec![
         AthleteState::ready("a1", "CHEN YU-TING"),
         AthleteState::ready("a2", "LIN WEI"),

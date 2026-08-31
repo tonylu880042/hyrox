@@ -17,7 +17,11 @@
 
 use crate::error::{storage, ApiError};
 use crate::state::ReadOnly;
-use crate::wire::{CoachResponse, Freshness, LiveResponse, ResultResponse, SessionResponse};
+use crate::wire::{
+    AthleteStages, CoachResponse, ExercisesResponse, Freshness, LiveResponse, ResultResponse,
+    SessionResponse, StagesResponse, TemplateResponse, TemplatesResponse,
+};
+use application::Health;
 use application::HubStore;
 use axum::extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -43,6 +47,16 @@ where
         .route("/api/coach", get(coach))
         .route("/api/session", get(session))
         .route("/api/result/{session_id}", get(result))
+        // The workout library is read here and written under /api/operator, so the
+        // read/write split stays structural: these paths carry no mutating verb at all
+        // (ADR 0007 §5).
+        .route("/api/exercises", get(exercises))
+        .route("/api/workout-templates", get(templates))
+        .route("/api/workout-templates/{template_id}", get(template))
+        .route("/api/stages", get(stages))
+        // Read by the appliance's maintenance window, and by the operator screen's update
+        // badge (ADR 0009). Read-only, like everything else on this surface.
+        .route("/api/health", get(health))
         .with_state(state)
 }
 
@@ -145,4 +159,83 @@ async fn push_snapshots<S>(mut socket: WebSocket, read: ReadOnly<S>) {
             break; // the client went away
         }
     }
+}
+
+// --- the workout library (ADR 0008) -----------------------------------------------------
+
+/// The exercises a builder screen may choose from (workout brief §3, §17).
+async fn exercises<S>(State(read): State<ReadOnly<S>>) -> Result<Json<ExercisesResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let exercises = read.exercises().await.map_err(storage)?;
+    Ok(Json(ExercisesResponse {
+        freshness: freshness(&read).await,
+        exercises: exercises.iter().cloned().collect(),
+    }))
+}
+
+/// Every template, system ones first (workout brief §13).
+async fn templates<S>(State(read): State<ReadOnly<S>>) -> Result<Json<TemplatesResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let templates = read.templates().await.map_err(storage)?;
+    Ok(Json(TemplatesResponse { freshness: freshness(&read).await, templates }))
+}
+
+async fn template<S>(
+    State(read): State<ReadOnly<S>>,
+    Path(template_id): Path<String>,
+) -> Result<Json<TemplateResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let template = read
+        .template(&template_id)
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| {
+            ApiError::not_found("UNKNOWN_TEMPLATE", format!("no template with id {template_id:?}"))
+        })?;
+    Ok(Json(TemplateResponse { freshness: freshness(&read).await, template }))
+}
+
+/// Every athlete's progress through the class, stage by stage (workout brief §10).
+///
+/// Derived on each request from the snapshot course and the replayed runs, never stored, so
+/// an operator's void changes it for free (CLAUDE.md 21).
+async fn stages<S>(State(read): State<ReadOnly<S>>) -> Json<StagesResponse>
+where
+    S: HubStore,
+{
+    let athletes = read
+        .stages()
+        .await
+        .into_iter()
+        .map(|p| AthleteStages {
+            athlete_id: p.athlete_id,
+            name: p.name,
+            current_stage: application::current_stage(&p.stages),
+            expectation: p.expectation,
+            stages: p.stages,
+        })
+        .collect();
+    Json(StagesResponse { freshness: freshness(&read).await, athletes })
+}
+
+/// Whether this machine may be stopped right now (ADR 0009 §6).
+///
+/// The nightly maintenance window asks this before it updates and powers the machine off,
+/// and does nothing on a `false`. Deliberately outside the `freshness` envelope every other
+/// read carries: this is consumed by a shell script, and `safe_to_stop` must be the whole
+/// answer without a client having to understand the rest of the API.
+async fn health<S>(State(read): State<ReadOnly<S>>) -> Json<Health>
+where
+    S: HubStore,
+{
+    Json(read.health().await)
 }

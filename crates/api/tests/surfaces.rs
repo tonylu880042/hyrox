@@ -5,21 +5,36 @@ mod support;
 
 use axum::http::StatusCode;
 use serde_json::json;
-use support::{anonymous, armed, call, get, post, NOW};
+use support::{anonymous, call, get, post, running, NOW};
 
 /// The read-only surfaces of ADR 0001. A write must not be reachable at any of them.
-const READ_ONLY_PATHS: [&str; 4] = [
+const READ_ONLY_PATHS: [&str; 9] = [
     "/api/live",
     "/api/coach",
     "/api/session",
     "/api/result/s1",
+    // The workout library is read here and written under /api/operator (ADR 0008), so
+    // these paths must carry no mutating verb either.
+    "/api/exercises",
+    "/api/workout-templates",
+    "/api/workout-templates/t1",
+    "/api/stages",
+    "/api/health",
 ];
 
 #[tokio::test]
 async fn every_read_only_surface_answers_a_read() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
-    for path in ["/api/live", "/api/coach", "/api/session"] {
+    for path in [
+        "/api/live",
+        "/api/coach",
+        "/api/session",
+        "/api/exercises",
+        "/api/workout-templates",
+        "/api/stages",
+        "/api/health",
+    ] {
         let (status, _) = call(&router, get(path)).await;
         assert_eq!(status, StatusCode::OK, "GET {path}");
     }
@@ -31,7 +46,7 @@ async fn every_read_only_surface_answers_a_read() {
 /// checked by the code compiling at all.
 #[tokio::test]
 async fn a_read_only_surface_has_no_write_route() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     for path in READ_ONLY_PATHS {
         for method in ["POST", "PUT", "DELETE"] {
@@ -49,9 +64,9 @@ async fn a_read_only_surface_has_no_write_route() {
 /// must not be able to touch the session's clock (ADR 0001).
 #[tokio::test]
 async fn the_narrow_write_surface_cannot_control_the_session() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
-    for path in ["/api/checkin/session/close", "/api/checkin/config"] {
+    for path in ["/api/checkin/session/complete", "/api/checkin/config"] {
         let (status, _) = call(&router, post(path, "DOOR TABLET", json!({}))).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path} must not exist");
     }
@@ -61,17 +76,22 @@ async fn the_narrow_write_surface_cannot_control_the_session() {
 /// CLAUDE.md 20. A write without one is refused rather than attributed to nobody.
 #[tokio::test]
 async fn a_write_without_an_operator_identity_is_refused() {
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let writes = [
-        ("POST", "/api/operator/session/close"),
+        ("POST", "/api/operator/session/complete"),
         ("POST", "/api/operator/session/reopen"),
-        ("POST", "/api/operator/session/arm"),
+        ("POST", "/api/operator/session/start"),
         ("POST", "/api/operator/session/draft"),
         ("POST", "/api/operator/session/end-class"),
         ("POST", "/api/operator/readers"),
         ("PUT", "/api/operator/config"),
         ("POST", "/api/operator/exceptions/1/void"),
+        ("POST", "/api/operator/templates"),
+        ("PUT", "/api/operator/templates/t1"),
+        ("DELETE", "/api/operator/templates/t1"),
+        ("POST", "/api/operator/templates/t1/duplicate"),
+        ("POST", "/api/operator/class"),
         ("POST", "/api/checkin/bind"),
         ("POST", "/api/checkin/rebind"),
     ];
@@ -91,11 +111,11 @@ async fn a_write_without_an_operator_identity_is_refused() {
 /// there" and tell a later reader of the audit trail exactly nothing.
 #[tokio::test]
 async fn a_blank_operator_name_is_not_an_identity() {
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let (status, body) = call(
         &router,
-        post("/api/operator/session/close", "   ", json!({})),
+        post("/api/operator/session/complete", "   ", json!({})),
     )
     .await;
 
@@ -108,7 +128,7 @@ async fn a_blank_operator_name_is_not_an_identity() {
 /// the same. Every read surface therefore carries the readout, not just the live one.
 #[tokio::test]
 async fn every_read_surface_reports_its_freshness() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     for path in ["/api/live", "/api/coach", "/api/session", "/api/operator"] {
         let (status, body) = call(&router, get(path)).await;
@@ -126,7 +146,7 @@ async fn every_read_surface_reports_its_freshness() {
 
 #[tokio::test]
 async fn the_check_in_surface_reports_its_freshness_too() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     let (status, body) = call(&router, get("/api/checkin")).await;
 
@@ -140,10 +160,10 @@ async fn the_check_in_surface_reports_its_freshness_too() {
 /// with no ranking and say what order they are in.
 #[tokio::test]
 async fn results_are_published_without_a_ranking() {
-    let (router, _) = armed();
+    let (router, _) = running();
     // `/result/{id}` reads from the store, not from memory, so the session has to have
     // reached it: closing the class is what puts it there.
-    let (status, _) = call(&router, post("/api/operator/session/close", "DESK", json!({}))).await;
+    let (status, _) = call(&router, post("/api/operator/session/complete", "DESK", json!({}))).await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = call(&router, get("/api/result/s1")).await;
@@ -157,7 +177,7 @@ async fn results_are_published_without_a_ranking() {
 
 #[tokio::test]
 async fn results_for_a_session_the_hub_never_stored_are_a_404() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     let (status, body) = call(&router, get("/api/result/no-such-session")).await;
 
@@ -168,7 +188,7 @@ async fn results_for_a_session_the_hub_never_stored_are_a_404() {
 /// A malformed body is a client error with this API's own shape, not axum's default.
 #[tokio::test]
 async fn a_body_that_will_not_parse_is_a_client_error() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     let (status, body) = call(
         &router,

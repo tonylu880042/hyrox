@@ -1,4 +1,5 @@
-//! Session lifecycle use cases: DRAFT -> ARMED -> CLOSED, and back (ADR 0001 D2).
+//! Session lifecycle use cases: DRAFT -> READY -> RUNNING <-> PAUSED -> COMPLETED, plus
+//! CANCELLED and the two corrections (ADR 0001 D2; ADR 0008).
 //!
 //! The invariants themselves live in `domain::Session`. What is added here is the part that
 //! is not a rule about states: persisting the new status and writing the audit record that
@@ -8,35 +9,79 @@
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
 use crate::ports::{AuditEntry, HubStore};
-use domain::{Session, SessionError, SessionStatus};
+use domain::{Instant, Session, SessionError, SessionStatus};
 
-/// DRAFT -> ARMED. From here the first valid read starts each athlete's clock
+/// DRAFT -> READY. The class is built and can be started; it is still editable, which is
+/// where a session-specific tweak to today's plan happens (ADR 0008).
+pub async fn mark_ready<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    cmd: &OperatorCommand,
+) -> Result<(), OperatorError<S::Error>> {
+    transition(state, store, cmd, "SESSION_READY", |s, _| s.mark_ready()).await
+}
+
+/// READY -> RUNNING. From here the first valid read starts each athlete's clock
 /// (CLAUDE.md 11); the session itself does not change status again on its own.
 ///
-/// Refuses a CLOSED session: bringing one back is a correction and goes through
+/// Refuses a completed session: bringing one back is a correction and goes through
 /// [`reopen`], which insists on a reason.
-pub async fn arm<S: HubStore>(
+pub async fn start<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    if state.session.status == SessionStatus::Closed {
+    if state.session.status.is_terminal() {
         return Err(OperatorError::ReasonRequired);
     }
-    transition(state, store, cmd, "SESSION_ARM", Session::arm).await
+    transition(state, store, cmd, "SESSION_START", |s, _| s.start()).await
 }
 
-pub async fn close<S: HubStore>(
+/// RUNNING -> PAUSED. The class clock stops here, and reads arriving during the pause are
+/// recorded as exceptions rather than splits (ADR 0008).
+///
+/// The pause is stamped with the operator's own `at`, not with a fresh clock read, for the
+/// same reason results are: the moment recorded must be the moment it happened.
+pub async fn pause<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    transition(state, store, cmd, "SESSION_CLOSE", Session::close).await
+    transition(state, store, cmd, "SESSION_PAUSE", |s, at| s.pause(at)).await
 }
 
-/// CLOSED -> ARMED. Allowed on purpose (ADR 0001 D2): a mis-tap on a busy floor must not
-/// force a new session, and there is deliberately no time window on it -- a window would be
-/// a magic constant nobody validated (CLAUDE.md 29).
+pub async fn resume<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    cmd: &OperatorCommand,
+) -> Result<(), OperatorError<S::Error>> {
+    transition(state, store, cmd, "SESSION_RESUME", |s, at| s.resume(at)).await
+}
+
+pub async fn complete<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    cmd: &OperatorCommand,
+) -> Result<(), OperatorError<S::Error>> {
+    transition(state, store, cmd, "SESSION_COMPLETE", |s, _| s.complete()).await
+}
+
+/// The class did not happen. Destructive -- it writes off everything recorded under the
+/// session -- so it insists on a reason (CLAUDE.md 20).
+pub async fn cancel<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    cmd: &OperatorCommand,
+) -> Result<(), OperatorError<S::Error>> {
+    if cmd.stated_reason().is_none() {
+        return Err(OperatorError::ReasonRequired);
+    }
+    transition(state, store, cmd, "SESSION_CANCEL", |s, _| s.cancel()).await
+}
+
+/// COMPLETED -> RUNNING. Allowed on purpose (ADR 0001 D2): a mis-tap on a busy floor must
+/// not force a new session, and there is deliberately no time window on it -- a window
+/// would be a magic constant nobody validated (CLAUDE.md 29).
 pub async fn reopen<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
@@ -45,17 +90,17 @@ pub async fn reopen<S: HubStore>(
     if cmd.stated_reason().is_none() {
         return Err(OperatorError::ReasonRequired);
     }
-    transition(state, store, cmd, "SESSION_REOPEN", Session::arm).await
+    transition(state, store, cmd, "SESSION_REOPEN", |s, _| s.reopen()).await
 }
 
-/// ARMED -> DRAFT, only while nothing has been interpreted (ADR 0001 D2). `domain::Session`
+/// Back to editing, only while nothing has been interpreted (ADR 0001 D2). `domain::Session`
 /// enforces that; the session is otherwise editable again and the roster may change.
 pub async fn return_to_draft<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    transition(state, store, cmd, "SESSION_BACK_TO_DRAFT", Session::back_to_draft).await
+    transition(state, store, cmd, "SESSION_BACK_TO_DRAFT", |s, _| s.back_to_draft()).await
 }
 
 /// Applies a domain transition, persists it, then records it. Persisting first means a
@@ -65,11 +110,11 @@ async fn transition<S: HubStore>(
     store: &S,
     cmd: &OperatorCommand,
     action: &str,
-    change: fn(&mut Session) -> Result<(), SessionError>,
+    change: fn(&mut Session, Instant) -> Result<(), SessionError>,
 ) -> Result<(), OperatorError<S::Error>> {
-    let before = status_name(state.session.status);
-    change(&mut state.session).map_err(OperatorError::Session)?;
-    let after = status_name(state.session.status);
+    let before = state.session.status.name();
+    change(&mut state.session, cmd.at).map_err(OperatorError::Session)?;
+    let after = state.session.status.name();
 
     store
         .save_session(&state.session, state.class_start)
@@ -91,9 +136,5 @@ async fn transition<S: HubStore>(
 }
 
 pub(crate) fn status_name(status: SessionStatus) -> &'static str {
-    match status {
-        SessionStatus::Draft => "DRAFT",
-        SessionStatus::Armed => "ARMED",
-        SessionStatus::Closed => "CLOSED",
-    }
+    status.name()
 }

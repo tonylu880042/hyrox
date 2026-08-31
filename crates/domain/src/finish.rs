@@ -7,7 +7,7 @@
 
 use crate::athlete::{AthleteState, AthleteStatus};
 use crate::course::Course;
-use crate::time::{Duration, Instant};
+use crate::time::{ClassClock, Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ impl FinishPolicy {
     pub fn evaluate(
         &self,
         state: &AthleteState,
-        class_start: Instant,
+        clock: ClassClock,
         now: Instant,
         course: Option<&Course>,
     ) -> FinishDecision {
@@ -62,14 +62,16 @@ impl FinishPolicy {
             FinishPolicy::CoachDecides => FinishDecision::NotFinished,
 
             FinishPolicy::ClassDuration { limit } => {
-                if now.since(class_start) < *limit {
+                // The class clock, not wall time: time spent paused is not class time, so a
+                // paused class must not run out while nobody is being timed (ADR 0008).
+                if clock.elapsed(now) < *limit {
                     return FinishDecision::NotFinished;
                 }
                 match state.status {
                     // Never scanned in: the class ended, but this athlete did not take part.
                     AthleteStatus::Ready => FinishDecision::NotFinished,
                     // The clock ran out at the limit, whenever we got around to looking.
-                    _ => FinishDecision::Finished { at: Instant(class_start.0 + limit.millis()) },
+                    _ => FinishDecision::Finished { at: clock.instant_at_elapsed(*limit) },
                 }
             }
 

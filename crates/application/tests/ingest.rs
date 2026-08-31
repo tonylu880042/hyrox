@@ -34,7 +34,8 @@ fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
 /// One armed training session, one athlete, a SKIERG entry reader, tag bound.
 fn armed_session() -> LiveSession {
     let mut session = Session::new_draft("s1", "THU 19:00", SessionMode::Training);
-    session.arm().expect("draft arms");
+    session.mark_ready().expect("draft arms");
+    session.start().expect("draft arms");
 
     let mut readers = ReaderRegistry::new();
     readers.register(ReaderRegistration::new(
@@ -252,7 +253,7 @@ async fn a_redelivered_event_is_acknowledged_but_interpreted_only_once() {
 async fn an_event_arriving_before_the_session_is_armed_is_an_exception() {
     let store = FakeStore::new();
     let mut state = armed_session();
-    state.session.close().expect("close");
+    state.session.complete().expect("complete");
 
     let out = ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 1_010_000))
         .await

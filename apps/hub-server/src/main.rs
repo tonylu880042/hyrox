@@ -39,7 +39,10 @@ use axum::{
     routing::get,
     Router,
 };
-use domain::{Duration, FinishPolicy, Instant, Session, SessionConfig, SessionMode};
+use domain::{
+    Duration, ExerciseLibrary, FinishPolicy, Instant, Session, SessionConfig, SessionMode,
+    WorkoutTemplate,
+};
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -74,6 +77,10 @@ const PUSH_INTERVAL_MS: i64 = 250;
 const SNAPSHOT_CHANNEL_CAPACITY: usize = 16;
 
 const TRAINING_HTML: &str = include_str!("../static/training.html");
+const WORKOUT_HTML: &str = include_str!("../static/workout.html");
+/// The interface dictionary both screens read their labels from (roadmap M7). Served from
+/// the hub, never a CDN: a venue with no internet must still get its own language.
+const I18N_JS: &str = include_str!("../static/i18n.js");
 
 /// The development clock: the class script's time, run fast.
 ///
@@ -132,6 +139,13 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("cannot open {db}: {e}"));
 
+    // First-run content: the exercise library and the starter templates (workout brief
+    // §3, §16). Idempotent -- both are keyed writes, so a hub that has been started before
+    // re-writes the same rows rather than accumulating copies, and a coach's edits to a
+    // template of their own are never touched because presets are SYSTEM and have their own
+    // stable ids.
+    seed_workout_library(&store).await;
+
     let class_start = Instant(wall_clock_ms());
     let plan = SessionPlan {
         session: Session::new_draft(
@@ -186,10 +200,23 @@ async fn main() {
             .expect("dev reader registration");
     }
     for (tag, athlete_id) in feeder::bands() {
-        if state.bindings.athlete_for_tag(&session_id, &tag).is_none() {
-            bind_tag(&mut state, &store, &tag, &athlete_id, &provisioning)
-                .await
-                .expect("dev band binding");
+        // Two reasons to leave a band alone, and both are the hub being right rather than
+        // the hub being in the way:
+        //
+        // * the athlete is not on this session's roster -- once a coach builds their own
+        //   class from a template, the roster is theirs, not the dev script's (ADR 0001 D4);
+        // * the band is already on somebody's wrist. Tag uniqueness is checked across
+        //   *every* session, not within one (migration 0003), so a band handed out in
+        //   yesterday's class is still bound today until someone unbinds it.
+        //
+        // Neither is an error worth refusing to boot over. A venue machine that will not
+        // start because of demo data is a far worse failure than a missing demo band.
+        let on_roster = state.athlete(&athlete_id).is_some();
+        let already_worn = state.bindings.active().any(|b| b.tag_id == tag);
+        if on_roster && !already_worn {
+            if let Err(e) = bind_tag(&mut state, &store, &tag, &athlete_id, &provisioning).await {
+                eprintln!("dev band {tag:?} not bound: {e:?}");
+            }
         }
     }
 
@@ -209,6 +236,9 @@ async fn main() {
         Arc::new(clock),
         PUSH_INTERVAL_MS,
         SNAPSHOT_CHANNEL_CAPACITY,
+        // The shipped artefact's version, which is what `/api/health` is asked for
+        // (ADR 0009) -- not any library crate's.
+        env!("CARGO_PKG_VERSION"),
     );
 
     // Real ingestion: everything that reaches the screen from here on arrived over the
@@ -235,14 +265,94 @@ async fn main() {
     let app = Router::new()
         .route("/", get(|| async { Redirect::temporary("/live") }))
         .route("/live", get(|| async { Html(TRAINING_HTML) }))
+        .route("/workout", get(|| async { Html(WORKOUT_HTML) }))
+        .route(
+            "/i18n.js",
+            get(|| async {
+                ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")], I18N_JS)
+            }),
+        )
         .merge(api::router(hub));
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8730));
+    let addr = bind_address();
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .unwrap_or_else(|e| panic!("cannot bind {addr}: {e}"));
     println!("HYROX Central Hub listening on http://{addr}/live");
-    axum::serve(listener, app).await.expect("server stopped");
+    println!("  workout builder: http://{addr}/workout");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server stopped");
+    println!("stopped");
+}
+
+/// Where the HTTP surface listens. `127.0.0.1:8730` unless `HYROX_BIND` says otherwise.
+///
+/// Loopback by default on purpose (ADR 0009 §5): running `cargo run` on a laptop must not
+/// put an unauthenticated write surface on the café's wifi. The appliance opts in through
+/// its unit file, and the network boundary there is the deployment layer's job -- there is
+/// no login, and ADR 0001 D1 accepted that trade deliberately.
+fn bind_address() -> SocketAddr {
+    match std::env::var("HYROX_BIND") {
+        Ok(value) => value
+            .parse()
+            .unwrap_or_else(|e| panic!("HYROX_BIND {value:?} is not an address: {e}")),
+        Err(_) => SocketAddr::from(([127, 0, 0, 1], 8730)),
+    }
+}
+
+/// Stops serving on SIGTERM (systemd) or Ctrl-C, letting in-flight requests finish.
+///
+/// Nothing is flushed here and nothing needs to be: every RFID event is durable before it
+/// is acknowledged (ADR 0002), and `synchronous = FULL` makes that survive a pulled plug as
+/// well as a signal (ADR 0009 §7). A read committed but not yet acknowledged is redelivered
+/// by the edge and skipped by its idempotency key, so an abrupt stop costs nothing but a
+/// duplicate delivery -- which the protocol is built to expect (CLAUDE.md 16).
+///
+/// Deciding *whether* it is a good moment to stop is not this function's business:
+/// `GET /api/health` answers that, and the maintenance window asks before it sends anything
+/// (ADR 0009 §6).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("cannot listen for Ctrl-C");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("cannot listen for SIGTERM")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => println!("interrupted, stopping"),
+        () = terminate => println!("SIGTERM, stopping"),
+    }
+}
+
+/// Writes the shipped exercise library and preset templates (workout brief §3, §16).
+///
+/// Runs on every start, not just the first: the writes are keyed on `code` and on the
+/// preset ids, so this brings a hub up to date with a build that added an exercise without
+/// duplicating anything. It never touches a coach's own templates -- those have different
+/// ids and are never SYSTEM.
+async fn seed_workout_library(store: &Store) {
+    for exercise in ExerciseLibrary::preset().iter() {
+        store
+            .save_exercise(exercise)
+            .await
+            .unwrap_or_else(|e| panic!("cannot seed exercise {}: {e}", exercise.code));
+    }
+    for template in WorkoutTemplate::presets() {
+        store
+            .save_template(&template)
+            .await
+            .unwrap_or_else(|e| panic!("cannot seed template {}: {e}", template.id));
+    }
 }
 
 /// Where the broker is. Defaults to a broker on this machine, which is the Phase 1 layout:

@@ -1,0 +1,14 @@
+# The nightly window: update if there is one, then power the machine off (ADR 0009 §6).
+# Does nothing at all if a class is still live.
+
+[Unit]
+Description=HYROX nightly update and shutdown
+After=network-online.target hyrox-hub.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/hyrox/maintenance
+# Long enough for a package download on venue wifi, short enough that a hung apt does not
+# hold the machine all night.
+TimeoutStartSec=1800

@@ -23,7 +23,8 @@ fn course() -> Course {
 
 fn session() -> LiveSession {
     let mut s = Session::new_draft("s1", "THU 19:00 HYROX CLASS", SessionMode::Training);
-    s.arm().expect("arm");
+    s.mark_ready().expect("arm");
+    s.start().expect("arm");
     let mut readers = ReaderRegistry::new();
     readers.register(ReaderRegistration::new(
         ReaderKey::parse("esp32-a4cf128b3d91", "rfid-01").unwrap(),
@@ -144,7 +145,7 @@ fn the_snapshot_reports_freshness_and_the_exception_badge() {
     assert_eq!(snap.pending_tags, 1);
     assert_eq!(snap.readers_online, 1);
     assert_eq!(snap.mode, "TRAINING");
-    assert_eq!(snap.status, "ARMED");
+    assert_eq!(snap.status, "RUNNING");
     assert_eq!(snap.class_elapsed_ms, 4_000);
 }
 

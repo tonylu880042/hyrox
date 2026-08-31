@@ -35,6 +35,11 @@ mask_css = "\n".join(
     'mask-image:url(data:image/png;base64,%s);}' % (k, v, v) for k, v in MASKS.items())
 
 head = io.open("leaderboard.html", encoding="utf-8").read().split("</head>")[0]
+# The shared interface dictionary (roadmap M7), served locally by the hub. Both screens read
+# their labels from the same file, so a label cannot say one thing on the projector and
+# another on the coach's tablet.
+head += '<script src="/i18n.js"></script>'
+
 head = head.replace("<title>HYROX Live Leaderboard</title>", "<title>HYROX Training Class</title>")
 head = head.replace("""        /* Rows share the leftover height evenly so nothing dead-spaces above the footer */
         .leaderboard-row {
@@ -82,7 +87,7 @@ body = r"""
 <body class="flex flex-col font-label-sm text-on-surface">
 <header class="relative w-full shrink-0 flex justify-between items-center px-margin-edge bg-surface border-b border-outline-variant h-[100px]">
 <div class="flex items-center gap-6">
-<h1 class="font-headline-md text-headline-md text-primary-fixed uppercase tracking-tighter">CENTRAL HUB</h1>
+<h1 class="font-headline-md text-headline-md text-primary-fixed uppercase tracking-tighter" data-i18n="live.hub">CENTRAL HUB</h1>
 <div class="h-6 w-gutter bg-outline-variant"></div>
 <div class="flex items-center gap-4">
 <span id="session-name" class="font-label-sm text-label-sm text-primary uppercase font-bold">&nbsp;</span>
@@ -92,25 +97,25 @@ body = r"""
 <div class="flex items-center gap-8">
 <div class="flex items-center gap-2">
 <span id="live-dot" class="w-3 h-3 rounded-full bg-[#6B6B6B]"></span>
-<span id="live-label" class="font-label-sm text-label-sm text-primary uppercase font-bold">CONNECTING</span>
+<span id="live-label" class="font-label-sm text-label-sm text-primary uppercase font-bold" data-i18n="live.connecting">CONNECTING</span>
 </div>
 <div class="h-6 w-gutter bg-outline-variant"></div>
-<span class="font-label-sm text-label-sm text-on-surface-variant uppercase foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">sensors</span> <span id="readers">--</span> READERS ONLINE</span>
-<span id="freshness" class="font-label-sm text-label-sm uppercase foot-stat fresh-bad"><span class="material-symbols-outlined" style="font-size:22px;">bolt</span> <span id="fresh-text">NO DATA</span></span>
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">sensors</span> <span id="readers">--</span> <span data-i18n="live.readersOnline">READERS ONLINE</span></span>
+<span id="freshness" class="font-label-sm text-label-sm uppercase foot-stat fresh-bad"><span class="material-symbols-outlined" style="font-size:22px;">bolt</span> <span id="fresh-text" data-i18n="live.noData">NO DATA</span></span>
 <div class="h-6 w-gutter bg-outline-variant"></div>
 <div class="flex items-center gap-3 text-on-surface-variant">
 <span class="material-symbols-outlined" style="font-size:26px;">timer</span>
-<span class="station-label" style="margin:0;">CLASS ELAPSED</span>
+<span class="station-label" style="margin:0;" data-i18n="live.classElapsed">CLASS ELAPSED</span>
 <span id="class-elapsed" class="font-telemetry-data text-[32px] font-bold text-primary tabular-nums tracking-tighter">--:--</span>
 </div>
 </div>
 </header>
 <main id="grid" class="w-full flex-grow min-h-0 overflow-hidden px-margin-edge py-[16px] class-grid bg-background"></main>
 <footer class="relative w-full shrink-0 flex items-center gap-10 px-margin-edge bg-surface-container-lowest border-t border-outline-variant h-[56px]">
-<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">groups</span> IN CLASS <span id="f-in">--</span></span>
-<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">flag</span> FINISHED <span id="f-done">--</span></span>
-<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">route</span> COURSE <span id="f-course">--</span> STATIONS</span>
-<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">report</span> EXCEPTIONS <span id="f-exc">--</span></span>
+<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">groups</span> <span data-i18n="live.inClass">IN CLASS</span> <span id="f-in">--</span></span>
+<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">flag</span> <span data-i18n="live.finished">FINISHED</span> <span id="f-done">--</span></span>
+<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">route</span> <span data-i18n="live.course">COURSE</span> <span id="f-course">--</span> <span data-i18n="live.stations">STATIONS</span></span>
+<span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">report</span> <span data-i18n="live.exceptions">EXCEPTIONS</span> <span id="f-exc">--</span></span>
 </footer>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -125,6 +130,46 @@ function clock(ms, tenths) {
   const p = (n) => String(n).padStart(2, "0");
   const base = h > 0 ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
   return tenths ? `${base}.${t}` : base;
+}
+
+// ── Translating what the snapshot calls things ───────────────────────────────────────────
+//
+// The snapshot carries `station` as the venue's station key -- "WALL BALLS" -- because that
+// string is simultaneously a course step, a reader's registration and this page's pictogram
+// slug (ADR 0008). It is an identifier, so it is translated here at the point of display and
+// nowhere else. The map comes from /api/exercises, which pairs each key with an
+// `Exercise.code`; an unmapped key falls back to itself.
+let STATION_NAME = {};
+
+async function loadStationNames() {
+  try {
+    const res = await fetch("/api/exercises");
+    for (const e of (await res.json()).exercises) {
+      const key = "ex." + e.code;
+      const text = I18N.t(key);
+      STATION_NAME[e.station_key] = text === key ? e.display_name : text;
+    }
+  } catch (err) {
+    // No names is survivable; a blank screen is not. Station keys are readable English.
+    console.warn("exercise names unavailable", err);
+  }
+}
+
+function stationName(key) {
+  return key ? STATION_NAME[key] || key : "";
+}
+
+// `plan` arrives pre-formatted by the hub -- "800 M", "50 REPS", "3:00 MIN" (see
+// `target_label` in crates/application/src/live.rs). Only the trailing unit token needs a
+// language; the number is the number. A token this map does not know is left alone.
+const PLAN_UNIT = { M: "METER", KM: "KILOMETER", REPS: "REPS", CAL: "CALORIE", MIN: "MINUTE", S: "SECOND" };
+
+function planLabel(plan) {
+  if (!plan) return "";
+  const at = plan.lastIndexOf(" ");
+  if (at < 0) return plan;
+  const unit = PLAN_UNIT[plan.slice(at + 1)];
+  return unit ? plan.slice(0, at) + " " + I18N.t("unit." + unit) : plan;
 }
 
 function segments(a, courseLen) {
@@ -151,29 +196,31 @@ function card(a, course) {
   if (finished) {
     cls += " done"; colour = "#FEE400";
     glyph = '<span class="material-symbols-outlined station-icon" style="color:#FEE400;">flag</span>';
-    label = "FINISHED";
-    sub = `<div class="station-label" style="margin-top:12px;"><span class="material-symbols-outlined" style="font-size:22px;vertical-align:-4px;">check_circle</span> ALL ${course.length} STATIONS COMPLETE</div>`;
+    label = I18N.t("live.finished");
+    sub = `<div class="station-label" style="margin-top:12px;"><span class="material-symbols-outlined" style="font-size:22px;vertical-align:-4px;">check_circle</span> ${I18N.t("live.allComplete", course.length)}</div>`;
   } else if (ready) {
     cls += " ready"; colour = "#6B6B6B";
     glyph = '<span class="material-symbols-outlined station-icon" style="color:#6B6B6B;">hourglass_empty</span>';
-    label = "READY";
-    sub = '<div class="station-label" style="margin-top:12px;">WAITING FOR FIRST SCAN</div>';
+    label = I18N.t("live.ready");
+    sub = '<div class="station-label" style="margin-top:12px;">' + I18N.t("live.waitingFirstScan") + "</div>";
   } else if (!inside) {
     cls += " transition"; colour = "#7DF4FF";
     glyph = '<span class="material-symbols-outlined station-icon" style="color:#7DF4FF;">directions_walk</span>';
-    label = "TRANSITION";
-    const next = a.next_station ? `MOVING TO ${a.next_station}` : "MOVING";
+    label = I18N.t("live.transition");
+    const next = a.next_station
+      ? I18N.t("live.movingTo", stationName(a.next_station))
+      : I18N.t("live.moving");
     sub = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;">
       <span class="font-telemetry-data text-[46px] font-bold tabular-nums" style="color:#7DF4FF;">${clock(a.leg_ms, true)}</span>
       <span class="station-label" style="margin:0;"><span class="material-symbols-outlined" style="font-size:22px;vertical-align:-4px;">east</span> ${next}</span></div>`;
   } else {
     glyph = `<span class="station-icon pg pg-${a.station_key}" style="color:#FFFFFF;"></span>`;
-    label = a.station;
+    label = stationName(a.station);
     // Station split is what the hub can actually derive from entry/exit reads.
     // Work done inside the station is equipment telemetry the hub never sees.
     sub = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;">
       <span class="font-telemetry-data text-[46px] font-bold tabular-nums text-primary">${clock(a.leg_ms, true)}</span>
-      <span class="station-label" style="margin:0;">${a.plan || ""}</span></div>`;
+      <span class="station-label" style="margin:0;">${planLabel(a.plan)}</span></div>`;
   }
 
   const watermark = inside && a.station_key
@@ -183,7 +230,9 @@ function card(a, course) {
         : (ready ? "" : '<span class="material-symbols-outlined card-watermark">directions_walk</span>'));
 
   // The leg time is already the headline number above; repeating it here just adds noise.
-  const legLabel = inside ? "IN STATION" : (finished ? "COMPLETE" : ready ? "NOT STARTED" : "IN TRANSITION");
+  const legLabel = I18N.t(
+    inside ? "live.inStation" : finished ? "live.complete" : ready ? "live.notStarted" : "live.inTransition"
+  );
 
   return `<div class="${cls}">
 ${watermark}
@@ -222,10 +271,10 @@ function render(s) {
   box.classList.remove("fresh-ok", "fresh-warn", "fresh-bad");
   if (age === null || age === undefined) {
     box.classList.add("fresh-bad");
-    $("fresh-text").textContent = "NO EVENTS YET";
+    $("fresh-text").textContent = I18N.t("live.noEvents");
   } else {
     box.classList.add(age < 10000 ? "fresh-ok" : age < 30000 ? "fresh-warn" : "fresh-bad");
-    $("fresh-text").textContent = `LAST EVENT ${Math.floor(age / 1000)}s AGO`;
+    $("fresh-text").textContent = I18N.t("freshness.ago", `${Math.floor(age / 1000)}s`);
   }
 
   $("grid").innerHTML = s.course.length
@@ -236,13 +285,13 @@ function render(s) {
 function setLink(up) {
   $("live-dot").style.backgroundColor = up ? "#22DD66" : "#FF4A4A";
   $("live-dot").classList.toggle("animate-pulse", up);
-  $("live-label").textContent = up ? "LIVE" : "DISCONNECTED";
+  $("live-label").textContent = I18N.t(up ? "live.live" : "live.disconnected");
   if (!up) {
     // A frozen screen must never be mistaken for a quiet gym (ADR 0001 D5).
     const box = $("freshness");
     box.classList.remove("fresh-ok", "fresh-warn");
     box.classList.add("fresh-bad");
-    $("fresh-text").textContent = "LINK DOWN";
+    $("fresh-text").textContent = I18N.t("live.linkDown");
   }
 }
 
@@ -253,6 +302,11 @@ function connect() {
   ws.onclose = () => { setLink(false); setTimeout(connect, 1000); };
   ws.onerror = () => ws.close();
 }
+// Labels first, then the socket: the screen must never flash English before it settles.
+// There is no language switcher here on purpose -- a projector is not an interactive screen.
+// Pin it with /live?lang=zh-Hans, which is remembered on that machine afterwards.
+I18N.apply();
+loadStationNames();
 connect();
 </script>
 </body></html>"""

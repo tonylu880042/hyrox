@@ -34,7 +34,7 @@ async fn an_empty_store_starts_and_persists_the_planned_session() {
     let (state, how) = resume_or_start(&store, plan()).await.expect("start");
 
     assert_eq!(how, Recovery::Started);
-    assert_eq!(state.session.status, SessionStatus::Armed);
+    assert_eq!(state.session.status, SessionStatus::Running);
     assert_eq!(state.athletes.len(), 1);
     assert_eq!(store.saved_sessions()[0].id, "s-new");
 }
@@ -42,7 +42,8 @@ async fn an_empty_store_starts_and_persists_the_planned_session() {
 #[tokio::test]
 async fn an_armed_session_is_resumed_and_its_athletes_rebuilt() {
     let mut existing = Session::new_draft("s-old", "WED 19:00", SessionMode::Training);
-    existing.arm().expect("arm");
+    existing.mark_ready().expect("arm");
+    existing.start().expect("arm");
     existing.interpreted_event_count = 4;
     let mut running = AthleteState::ready("b1", "LIN CHIA-HAO");
     running.status = domain::AthleteStatus::Active;
@@ -62,7 +63,8 @@ async fn an_armed_session_is_resumed_and_its_athletes_rebuilt() {
 #[tokio::test]
 async fn a_resumed_session_gets_its_exception_badge_back() {
     let mut existing = Session::new_draft("s-old", "WED 19:00", SessionMode::Training);
-    existing.arm().expect("arm");
+    existing.mark_ready().expect("arm");
+    existing.start().expect("arm");
     let store = FakeStore::new().with_session(existing, Instant(500_000));
     store
         .commit_interpreted(application::InterpretedWrite {
@@ -87,8 +89,9 @@ async fn a_resumed_session_gets_its_exception_badge_back() {
 #[tokio::test]
 async fn a_closed_session_is_not_resumed() {
     let mut closed = Session::new_draft("s-old", "WED 19:00", SessionMode::Training);
-    closed.arm().expect("arm");
-    closed.close().expect("close");
+    closed.mark_ready().expect("arm");
+    closed.start().expect("arm");
+    closed.complete().expect("complete");
     let store = FakeStore::new().with_session(closed, Instant(500_000));
 
     let (state, how) = resume_or_start(&store, plan()).await.expect("start");
@@ -181,7 +184,8 @@ async fn a_directory_answering_no_such_member_is_not_a_fault() {
 #[tokio::test]
 async fn a_resumed_session_keeps_counting_from_its_stored_event_count() {
     let mut existing = Session::new_draft("s-old", "WED 19:00", SessionMode::Training);
-    existing.arm().expect("arm");
+    existing.mark_ready().expect("arm");
+    existing.start().expect("arm");
     existing.interpreted_event_count = 4;
     let store = FakeStore::new().with_session(existing, Instant(500_000));
 
@@ -195,7 +199,8 @@ async fn a_resumed_session_keeps_counting_from_its_stored_event_count() {
 
 fn armed(id: &str) -> Session {
     let mut session = Session::new_draft(id, "WED 19:00", SessionMode::Training);
-    session.arm().expect("arm");
+    session.mark_ready().expect("arm");
+    session.start().expect("arm");
     session
 }
 

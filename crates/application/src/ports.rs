@@ -17,8 +17,9 @@
 
 use contract::CommitOutcome;
 use domain::{
-    AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, MemberRef,
-    ReaderRegistration, ReaderRegistry, Session, SessionConfig, TagBinding,
+    AthleteState, BindingLedger, ExceptionReason, ExerciseLibrary, Instant, Interpreted,
+    MemberRef, PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig,
+    StationMap, TagBinding, WorkoutTemplate,
 };
 use std::future::Future;
 
@@ -271,6 +272,51 @@ pub trait HubStore {
         &self,
         entry: &AuditEntry,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    // --- the workout library (ADR 0008) --------------------------------------------------
+    //
+    // Venue configuration, not session data: templates, exercises and machines outlive any
+    // one class, so none of these is scoped by session id.
+
+    /// Insert or replace one template, keyed on its id. Replacing is how an edit is saved;
+    /// the version the template carries is what distinguishes one save from the next.
+    fn save_template(
+        &self,
+        template: &WorkoutTemplate,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn template(
+        &self,
+        template_id: &str,
+    ) -> impl Future<Output = Result<Option<WorkoutTemplate>, Self::Error>> + Send;
+
+    /// Every template, system ones included, in listing order.
+    fn templates(&self) -> impl Future<Output = Result<Vec<WorkoutTemplate>, Self::Error>> + Send;
+
+    /// Reports whether a row was actually removed, so a coach who named an id that does not
+    /// exist is told so rather than shown a success.
+    ///
+    /// A real delete, not a void: a template is a plan, not a record of something that
+    /// happened. Deleting one cannot touch a class that already ran, because the class runs
+    /// off its own snapshot (ADR 0004, 0008).
+    fn delete_template(
+        &self,
+        template_id: &str,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    fn save_exercise(
+        &self,
+        exercise: &domain::Exercise,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn exercises(&self) -> impl Future<Output = Result<ExerciseLibrary, Self::Error>> + Send;
+
+    fn save_station(
+        &self,
+        station: &PhysicalStation,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn stations(&self) -> impl Future<Output = Result<StationMap, Self::Error>> + Send;
 }
 
 /// 健身管, the member system of record (CLAUDE.md 7.1).

@@ -1,0 +1,98 @@
+#!/bin/bash
+# The nightly window (ADR 0009 §6): ask, update, verify, power off.
+#
+#   1. ask the hub whether it may be stopped -- a live class wins, always
+#   2. update if there is an update
+#   3. verify the new version actually comes back up, and roll back if it does not
+#   4. power the machine off, update or no update
+#
+# Every exit is 0 except a genuine fault. "A class is still running" is a normal outcome of
+# a nightly job, not a failure, and a red unit in the morning should mean something.
+set -uo pipefail
+
+PACKAGE=hyrox-hub
+HEALTH="${HYROX_HEALTH_URL:-http://127.0.0.1:8730/api/health}"
+# How long the hub gets to answer after a restart before we call the update bad.
+VERIFY_TIMEOUT="${HYROX_VERIFY_TIMEOUT:-60}"
+
+log() { logger -t hyrox-maintenance -s -- "$*"; }
+
+# Ask the hub, not the clock. `safe_to_stop` is false while the session is READY, RUNNING or
+# PAUSED, or while an edge device still holds unacknowledged events (CLAUDE.md 18).
+safe_to_stop() {
+    local body
+    body=$(curl -sf --max-time 10 "$HEALTH") || {
+        # No answer is not permission. The hub might be mid-restart, or wedged with a class
+        # on the floor; either way this is not the moment to power the machine off.
+        log "hub did not answer $HEALTH -- leaving the machine up"
+        return 1
+    }
+    if [ "$(jq -r '.safe_to_stop' <<<"$body")" != "true" ]; then
+        log "not safe to stop: $(jq -rc '.blocked_by' <<<"$body")"
+        return 1
+    fi
+    return 0
+}
+
+installed_version() { dpkg-query -W -f='${Version}' "$PACKAGE" 2>/dev/null; }
+candidate_version() { apt-cache policy "$PACKAGE" | awk '/Candidate:/ {print $2}'; }
+
+# Comes back up and answers? That is the whole test. A binary that starts and then cannot
+# serve /api/health is not a working install.
+verify() {
+    local deadline=$((SECONDS + VERIFY_TIMEOUT))
+    while [ $SECONDS -lt $deadline ]; do
+        if curl -sf --max-time 5 -o /dev/null "$HEALTH"; then return 0; fi
+        sleep 1
+    done
+    return 1
+}
+
+if ! safe_to_stop; then
+    log "nothing done; will try again at the next window"
+    exit 0
+fi
+
+before=$(installed_version)
+
+if ! apt-get -qq update; then
+    # Offline, or S3 unreachable. Not a reason to stay powered on all night.
+    log "apt-get update failed -- powering off without updating"
+    exec systemctl poweroff
+fi
+
+candidate=$(candidate_version)
+if [ "$candidate" = "$before" ] || [ -z "$candidate" ]; then
+    log "no update ($before is current) -- powering off"
+    exec systemctl poweroff
+fi
+
+log "updating $PACKAGE $before -> $candidate"
+if DEBIAN_FRONTEND=noninteractive apt-get -qq -y \
+        -o Dpkg::Options::=--force-confold install "$PACKAGE" && verify; then
+    log "updated to $(installed_version) and verified"
+else
+    # A venue that opens to a machine which will not start is the worst outcome this script
+    # can produce, so a failed update is put back rather than left in place. The previous
+    # .deb is still in apt's cache, which is what makes this possible.
+    log "update to $candidate failed verification -- rolling back to $before"
+    if DEBIAN_FRONTEND=noninteractive apt-get -qq -y \
+            --allow-downgrades install "$PACKAGE=$before" && verify; then
+        log "rolled back to $before and verified"
+    else
+        # Both versions are unserviceable. Powering off would hide it; staying on at least
+        # leaves something for the morning, and the badge on /operator will say so.
+        log "ROLLBACK FAILED -- leaving the machine up for inspection"
+        exit 1
+    fi
+fi
+
+# A class starting between the health check and here is far-fetched at 23:30, but the check
+# costs one HTTP request and the failure it prevents is a class ending mid-station.
+if ! safe_to_stop; then
+    log "a class started during the update -- leaving the machine up"
+    exit 0
+fi
+
+log "powering off"
+exec systemctl poweroff

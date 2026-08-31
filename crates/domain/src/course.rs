@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 pub enum StationTarget {
     Distance { meters: u32 },
     Repetitions { count: u32 },
+    /// Ergs are commonly prescribed in calories rather than metres. Like every other
+    /// target this is a label the hub displays, not a number it can verify: RFID reports
+    /// entry and exit, nothing about what happened on the machine (ADR 0001).
+    Calories { count: u32 },
     /// The hub only learns entry/exit times from RFID, so a duration target is a label to
     /// display, not something it can verify (ADR 0001, 2026-08-27 addendum).
     // A struct variant, not a newtype: an internally tagged enum cannot serialise a

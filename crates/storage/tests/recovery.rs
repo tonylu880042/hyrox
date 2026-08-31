@@ -25,7 +25,8 @@ fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
 /// Ingests a short class into a fresh store and returns the live in-memory state.
 async fn ingest(store: &Store) -> (Session, AthleteState) {
     let mut session = Session::new_draft("s1", "Thursday Class", SessionMode::Training);
-    session.arm().unwrap();
+    session.mark_ready().unwrap();
+    session.start().unwrap();
     store.save_session(&session, at(0)).await.unwrap();
     store.save_athlete("s1", "a1", "CHEN YU-TING", 1).await.unwrap();
 
@@ -86,11 +87,11 @@ async fn redelivering_the_same_edge_event_does_not_duplicate_it() {
 #[tokio::test]
 async fn a_different_boot_id_is_a_different_event() {
     let store = Store::open_in_memory().await.unwrap();
-    let mut a = raw(1, 0);
+    let a = raw(1, 0);
     let mut b = raw(1, 0);
     b.boot_id = 19; // sequence numbers restart after a reboot
-    store.save_raw(&mut a).await.unwrap();
-    store.save_raw(&mut b).await.unwrap();
+    store.save_raw(&a).await.unwrap();
+    store.save_raw(&b).await.unwrap();
     assert_eq!(store.raw_event_count().await.unwrap(), 2);
 }
 
@@ -122,7 +123,8 @@ async fn an_unknown_reader_exception_survives_a_restart() {
 
     let store = Store::open_in_memory().await.unwrap();
     let mut session = Session::new_draft("s1", "Thursday Class", SessionMode::Training);
-    session.arm().unwrap();
+    session.mark_ready().unwrap();
+    session.start().unwrap();
     store.save_session(&session, at(0)).await.unwrap();
     store.save_athlete("s1", "a1", "CHEN YU-TING", 1).await.unwrap();
 

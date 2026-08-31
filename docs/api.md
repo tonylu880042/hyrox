@@ -4,7 +4,8 @@ The hub's local web service (CLAUDE.md 22). It binds the venue LAN only; there i
 authentication, because ADR 0001 D1 makes the network boundary the deployment layer's job
 and the device name the audit identity.
 
-Implemented in `crates/api`. Design rationale: `docs/decisions/0007-http-api-surface.md`.
+Implemented in `crates/api`. Design rationale: `docs/decisions/0007-http-api-surface.md`,
+and `docs/decisions/0008-workout-templates-compile-to-course.md` for the workout library.
 
 ---
 
@@ -40,6 +41,23 @@ without one.
 | `GET` | `/api/session` | — | — | `{ freshness, session, config, class_elapsed_ms, config_editable }` |
 | `GET` | `/api/result/{session_id}` | — | — | `{ freshness, results }`; `404 UNKNOWN_SESSION` |
 | `GET` | `/ws` | — | — | WebSocket; a `Snapshot` document per frame |
+| `GET` | `/api/exercises` | — | — | `{ freshness, exercises }` — the library a builder offers |
+| `GET` | `/api/workout-templates` | — | — | `{ freshness, templates }`; system ones first |
+| `GET` | `/api/workout-templates/{id}` | — | — | `{ freshness, template }`; `404 UNKNOWN_TEMPLATE` |
+| `GET` | `/api/stages` | — | — | `{ freshness, athletes }` — per-athlete stage list, `current_stage` and `expectation` (ADR 0008) |
+| `GET` | `/api/health` | — | — | `{ version, session_status, class_live, devices_with_backlog, safe_to_stop, blocked_by }` (ADR 0009) |
+
+`/api/health` is the one read with **no `freshness` envelope**. It is consumed by the
+appliance's nightly maintenance script, and `safe_to_stop` has to be the whole answer
+without a shell script needing to understand the rest of this API. `blocked_by` lists
+*every* reason — `CLASS_RUNNING` (the session is READY, RUNNING or PAUSED) and
+`DEVICE_BACKLOG` (an edge device still reports unacknowledged events) — so fixing one does
+not hide the other.
+
+The workout library is **read** here and **written** under `/api/operator` (below). That is
+deliberate: §5's third mechanism is that mutating routes exist only under two prefixes, and
+putting template writes on `/api/workout-templates` would put a write into a path space a
+test asserts is verb-free.
 
 ### Check-in — the narrow write surface
 
@@ -62,11 +80,29 @@ owned the band (ADR 0001 D3). Empty is the ordinary case.
 | `PUT` | `/api/operator/config` | ✎ | `finish_policy`; optional `course` | the new session view |
 | `GET` | `/api/operator/exceptions` | — | — | `{ freshness, exceptions }` |
 | `POST` | `/api/operator/exceptions/{id}/void` | ✎! | `reason` | the remaining inbox |
-| `POST` | `/api/operator/session/arm` | ✎ | — | the new session view |
-| `POST` | `/api/operator/session/close` | ✎ | — | the new session view |
+| `POST` | `/api/operator/session/ready` | ✎ | — | the new session view |
+| `POST` | `/api/operator/session/start` | ✎ | — | the new session view |
+| `POST` | `/api/operator/session/pause` | ✎ | — | the new session view |
+| `POST` | `/api/operator/session/resume` | ✎ | — | the new session view |
+| `POST` | `/api/operator/session/complete` | ✎ | — | the new session view |
+| `POST` | `/api/operator/session/cancel` | ✎! | `reason` | the new session view |
 | `POST` | `/api/operator/session/reopen` | ✎! | `reason` | the new session view |
 | `POST` | `/api/operator/session/draft` | ✎ | — | the new session view |
 | `POST` | `/api/operator/session/end-class` | ✎ | — | `{ freshness, finished }` |
+| `POST` | `/api/operator/templates` | ✎ | the whole template document | `{ freshness, templates }` |
+| `PUT` | `/api/operator/templates/{id}` | ✎ | same; the **path id wins** | `{ freshness, templates }` |
+| `DELETE` | `/api/operator/templates/{id}` | ✎! | `reason` | `{ freshness, templates }` |
+| `POST` | `/api/operator/templates/{id}/duplicate` | ✎ | `new_id`, `name`; optional `owner_id` | `{ freshness, templates }` |
+| `POST` | `/api/operator/class` | ✎ | `template_id`, `session_id`, `name`, `finish_policy` | the new session view |
+
+`POST /api/operator/templates` never takes a `source`: whether a template may be written is
+decided by the **stored** row, not by the payload, or the read-only rule on system templates
+would be bypassed by sending `"source": "COACH"`. `version` is likewise not accepted — the
+use case reads what is stored and moves it on, so a client cannot pin, rewind or skip one.
+
+`POST /api/operator/class` compiles the template, snapshots the result onto a new **DRAFT**
+session, and makes it the hub's active class. Today's tweaks then go through
+`PUT /api/operator/config`, which is accepted in DRAFT and READY and refused from RUNNING on.
 
 ### Served by the app, not by `crates/api`
 
@@ -176,9 +212,13 @@ A domain invariant saying no is an answer, not a fault. Only a failed store writ
 | 404 | `UNKNOWN_SESSION` | `/api/result/{id}` for a session the store does not hold |
 | 404 | `UNKNOWN_ATHLETE` | binding to somebody off the roster |
 | 404 | `UNKNOWN_EVENT` | voiding an interpreted event id that does not exist |
-| 409 | `ILLEGAL_TRANSITION` | e.g. closing a DRAFT session (ADR 0001 D2) |
+| 409 | `ILLEGAL_TRANSITION` | e.g. completing a DRAFT session, or starting one that was never made READY (ADR 0001 D2, 0008) |
 | 409 | `HAS_INTERPRETED_EVENTS` | ARMED → DRAFT after something was interpreted (D2) |
-| 409 | `SESSION_NOT_EDITABLE` | editing configuration outside DRAFT (D2) |
+| 409 | `SESSION_NOT_EDITABLE` | editing configuration outside DRAFT / READY (D2, ADR 0008) |
+| 409 | `TEMPLATE_NOT_EDITABLE` | editing or deleting a SYSTEM template; duplicate it first |
+| 409 | `CLASS_IN_PROGRESS` | creating a class while one is RUNNING or PAUSED |
+| 404 | `UNKNOWN_TEMPLATE` | a template id the store does not hold |
+| 422 | `TEMPLATE_NOT_RUNNABLE` | the template prescribes no walkable course (empty, unknown exercise, missing rounds, AMRAP) |
 | 409 | `NO_FINISH_RULE` | ending a class by hand where no finish rule is configured |
 | 409 | `TAG_ALREADY_BOUND` | that band is on someone's wrist (D3) |
 | 409 | `ATHLETE_ALREADY_BOUND` | that athlete already has a band; rebind to swap |

@@ -23,7 +23,7 @@ use domain::{AthleteStatus, FinishDecision, FinishPolicy, Instant};
 pub fn apply_finish_policy(state: &mut LiveSession, now: Instant) -> Vec<String> {
     let policy = state.config.finish_policy;
     let course = state.config.course.clone();
-    let class_start = state.class_start;
+    let clock = state.class_clock();
     let mut newly = Vec::new();
     for athlete in &mut state.athletes {
         if athlete.status == AthleteStatus::Finished {
@@ -33,7 +33,7 @@ pub fn apply_finish_policy(state: &mut LiveSession, now: Instant) -> Vec<String>
         // runs late -- or one that runs for the first time after a restart -- must not
         // inflate a result (CLAUDE.md 11, 17).
         if let FinishDecision::Finished { at } =
-            policy.evaluate(athlete, class_start, now, course.as_ref())
+            policy.evaluate(athlete, clock, now, course.as_ref())
         {
             domain::finish(athlete, at);
             newly.push(athlete.athlete_id.clone());
@@ -66,7 +66,7 @@ pub async fn end_class<S: HubStore>(
     }
 
     let before = status_name(state.session.status);
-    state.session.close().map_err(OperatorError::Session)?;
+    state.session.complete().map_err(OperatorError::Session)?;
     store
         .save_session(&state.session, state.class_start)
         .await

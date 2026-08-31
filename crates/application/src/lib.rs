@@ -23,6 +23,7 @@ pub mod config;
 pub mod devices;
 pub mod exceptions;
 pub mod finish;
+pub mod health;
 pub mod ingest;
 pub mod live;
 pub mod live_session;
@@ -32,10 +33,13 @@ pub mod readers;
 pub mod recover;
 pub mod results;
 pub mod session;
+pub mod stages;
+pub mod templates;
 
 pub use config::configure;
 pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceReport};
 pub use finish::{apply_finish_policy, end_class};
+pub use health::{health, health_with_version, Blocker, Health};
 pub use ingest::{ingest_read, Ingested, IngestError, IngestOutcome};
 pub use live::{
     checkin_view, course_view, last_event_age_ms, reader_views, snapshot, AthleteView,
@@ -50,3 +54,8 @@ pub use ports::{
 pub use readers::register_reader;
 pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
 pub use results::{results, ResultRow, SessionResults, SplitRow};
+pub use stages::{current_expectation, current_stage, stages, StageStatus, StageView};
+pub use templates::{
+    create_class, delete_template, duplicate_template, list_templates, save_template, NewClass,
+    TemplateError,
+};

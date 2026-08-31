@@ -4,13 +4,13 @@ mod support;
 
 use axum::http::StatusCode;
 use serde_json::json;
-use support::{armed, call, get, post};
+use support::{call, get, post, running};
 
 const DOOR: &str = "DOOR TABLET";
 
 #[tokio::test]
 async fn a_band_is_bound_to_an_athlete_and_the_binding_is_audited() {
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let (status, body) = call(
         &router,
@@ -42,7 +42,7 @@ async fn a_band_is_bound_to_an_athlete_and_the_binding_is_audited() {
 /// is the entire work queue of the surface.
 #[tokio::test]
 async fn the_roster_reflects_a_band_that_has_just_been_bound() {
-    let (router, _) = armed();
+    let (router, _) = running();
     call(
         &router,
         post(
@@ -63,7 +63,7 @@ async fn the_roster_reflects_a_band_that_has_just_been_bound() {
 /// One band, one wrist (D3). The second attempt is a conflict, not a silent reassignment.
 #[tokio::test]
 async fn a_band_already_on_somebody_cannot_be_bound_again() {
-    let (router, _) = armed();
+    let (router, _) = running();
     call(
         &router,
         post(
@@ -90,7 +90,7 @@ async fn a_band_already_on_somebody_cannot_be_bound_again() {
 
 #[tokio::test]
 async fn a_band_cannot_be_bound_to_somebody_off_the_roster() {
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let (status, body) = call(
         &router,
@@ -111,7 +111,7 @@ async fn a_band_cannot_be_bound_to_somebody_off_the_roster() {
 /// wants the reason on the record.
 #[tokio::test]
 async fn swapping_a_band_needs_a_reason() {
-    let (router, _) = armed();
+    let (router, _) = running();
     call(
         &router,
         post(
@@ -138,7 +138,7 @@ async fn swapping_a_band_needs_a_reason() {
 
 #[tokio::test]
 async fn a_swapped_band_closes_the_old_binding_and_keeps_it() {
-    let (router, store) = armed();
+    let (router, store) = running();
     call(
         &router,
         post(

@@ -7,7 +7,8 @@ const T0: i64 = 1_787_734_800_000;
 
 fn armed(mode: SessionMode) -> Session {
     let mut s = Session::new_draft("s1", "Test", mode);
-    s.arm().unwrap();
+    s.mark_ready().unwrap();
+    s.start().unwrap();
     s
 }
 
@@ -25,9 +26,10 @@ fn at(offset_ms: i64) -> Instant {
 fn draft_session_rejects_events_and_arming_opens_it() {
     let mut s = Session::new_draft("s1", "Test", SessionMode::Training);
     assert!(!s.accepts_events());
-    s.arm().unwrap();
+    s.mark_ready().unwrap();
+    s.start().unwrap();
     assert!(s.accepts_events());
-    assert_eq!(s.status, SessionStatus::Armed);
+    assert_eq!(s.status, SessionStatus::Running);
 }
 
 #[test]
@@ -39,23 +41,23 @@ fn armed_can_return_to_draft_only_while_nothing_has_been_interpreted() {
     let mut s = armed(SessionMode::Training);
     s.interpreted_event_count = 1;
     assert_eq!(s.back_to_draft(), Err(SessionError::HasInterpretedEvents));
-    assert_eq!(s.status, SessionStatus::Armed, "a rejected transition must not mutate");
+    assert_eq!(s.status, SessionStatus::Running, "a rejected transition must not mutate");
 }
 
 #[test]
-fn closed_session_can_be_reopened() {
+fn completed_session_can_be_reopened() {
     // Deliberate: a mis-tap on a busy floor must not force a new session (D2).
     let mut s = armed(SessionMode::Training);
-    s.close().unwrap();
-    assert_eq!(s.status, SessionStatus::Closed);
-    s.arm().unwrap();
-    assert_eq!(s.status, SessionStatus::Armed);
+    s.complete().unwrap();
+    assert_eq!(s.status, SessionStatus::Completed);
+    s.reopen().unwrap();
+    assert_eq!(s.status, SessionStatus::Running);
 }
 
 #[test]
-fn draft_cannot_be_closed_directly() {
+fn draft_cannot_be_completed_directly() {
     let mut s = Session::new_draft("s1", "Test", SessionMode::Training);
-    assert!(matches!(s.close(), Err(SessionError::IllegalTransition { .. })));
+    assert!(matches!(s.complete(), Err(SessionError::IllegalTransition { .. })));
 }
 
 // --- start rule (CLAUDE.md 11) -------------------------------------------------------

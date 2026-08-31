@@ -177,3 +177,49 @@ their own binding and member record, but timing and finishing at the team level.
 same problem, so a team model should cover both.
 
 **Blocks:** doubles and relay formats. Does NOT block singles competition.
+
+---
+
+## Workout templates (ADR 0008, 2026-08-29)
+
+* **AMRAP and ZONE_ROTATION have no execution model.** Both are storable as blocks and both
+  are refused at compile time by name. How many rounds an athlete gets in an AMRAP is the
+  *result*, not the plan, so there is no honest flat course to time it against. Deciding what
+  "finished" means for one is a product question.
+* **Nothing consumes `Expectation` yet.** EXPECTED / OUT_OF_ORDER / UNEXPECTED is derived and
+  published on `/api/stages`; no rule acts on it. It stays that way until the competition
+  exception rules are decided (CLAUDE.md 9.1, 28).
+* **One active class at a time.** Creating a class while one is RUNNING or PAUSED is refused.
+  Scheduling several classes in a day would need a session list and a way to choose which is
+  live; nothing has asked for it.
+* **Time and calorie targets are labels, not measurements.** The hub learns entry and exit
+  from RFID and nothing about what happened on the machine. Verifying them needs the sensor
+  adapters (PM5, OCR, manual judge) that Phase 1 deliberately does not implement.
+* **`/live` and `/workout` load Tailwind and Google Fonts from a CDN.** With no internet the
+  pages still load and the data is still correct, but they render unstyled — which is at odds
+  with CLAUDE.md 31's "useful when the Internet is unavailable". Pre-existing on `/live`;
+  `/workout` repeats it on the user's instruction to keep the two screens visually identical.
+  The fix is to vendor the generated CSS and the four font files and serve them locally.
+
+---
+
+## 多國語系（介面層已於 2026-08-29 完成）
+
+繁體中文、簡體中文、英文。實作與決策見 `docs/roadmap.md` M7。**已決定**：語系跟著裝置走
+（`localStorage`，與 `x-operator-device` 同機制），`?lang=` 可覆寫；大螢幕沒有切換鈕，用
+`/live?lang=…` 釘住。仍未決的產品問題只剩：
+
+* **四份 system preset 課表的名稱與說明是否中文化。** 它們是資料庫裡的資料列，不是介面文字，
+  而且教練可以複製與改名。seed 時寫中文會漏掉既有安裝；用 preset id 對照字典則複製出來的
+  副本對不上。需要產品決定。
+* **時間與數字格式是否在地化。** 目前全系統統一 `mm:ss` 與半形數字；改動會影響成績呈現，
+  屬於成績呈現規則而非介面翻譯。
+
+已確認**不在範圍內**：測試資料與開發 fixture 維持原本的中文（`誤觸`、`櫃檯平板`、
+`腳環故障` 等）。那些是使用者輸入的內容，不是介面文案，而且正是「非 ASCII 能存能取」的
+證據 —— 參數化會讓測試不再驗證那件事。
+
+已確認**不翻譯**的部分（屬契約，非顯示文字）：`station_key`、`Exercise.code`、所有 enum 的
+線路值（`SessionStatus`、`ReaderMode`、`TargetType`、`Unit`、`TemplateCategory`）、
+`ErrorBody.error` 機器碼。翻譯屬顯示層。
+

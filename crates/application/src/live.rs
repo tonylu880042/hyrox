@@ -318,10 +318,16 @@ fn slug(station: &str) -> String {
         .collect()
 }
 
+/// The plan a screen shows beside a station, e.g. "800 M".
+///
+/// The trailing token is a unit the screens translate at the point of display
+/// (`PLAN_UNIT` in `design/live/build_screens.py`, `targetUnit` in `workout.html`). Adding a
+/// new suffix here means adding it there, or a coach sees an English one.
 fn target_label(target: &StationTarget) -> String {
     match target {
         StationTarget::Distance { meters } => format!("{meters} M"),
         StationTarget::Repetitions { count } => format!("{count} REPS"),
+        StationTarget::Calories { count } => format!("{count} CAL"),
         StationTarget::Duration { duration } => {
             let total = duration.millis().max(0) / 1000;
             format!("{}:{:02} MIN", total / 60, total % 60)

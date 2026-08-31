@@ -21,14 +21,25 @@
 //! must hold it across the store's awaits, and one place holding it is one place to check.
 
 use application::{
-    checkin_view, config, exceptions, finish, live, readers, results, session, CheckInView,
-    DeviceHealth, HubStore, LiveSession, OperatorCommand, OperatorError, ReaderView,
-    SessionResults, Snapshot, StoredException,
+    checkin_view, config, exceptions, finish, health, live, readers, results, session, stages,
+    templates, CheckInView, DeviceHealth, Health, HubStore, LiveSession, NewClass,
+    OperatorCommand, OperatorError, ReaderView, SessionResults, Snapshot, StageView,
+    StoredException, TemplateError,
 };
 use domain::{
-    Course, FinishPolicy, Instant, Interpreted, ReaderRegistration, Session, SessionConfig,
-    TagId,
+    Course, ExerciseLibrary, Expectation, FinishPolicy, Instant, Interpreted,
+    ReaderRegistration, Session, SessionConfig, StationMap, TagId, WorkoutTemplate,
 };
+
+/// One athlete's progress through the class, as `/api/stages` reports it.
+pub struct AthleteProgress {
+    pub athlete_id: String,
+    pub name: String,
+    /// How the station they are standing in compares with the plan (workout brief §11).
+    /// `None` between stations. A label, never a judgement -- nothing acts on it.
+    pub expectation: Option<Expectation>,
+    pub stages: Vec<StageView>,
+}
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, MutexGuard};
 
@@ -55,6 +66,10 @@ pub struct Hub<S> {
     /// How often the hub pushes a snapshot. Published to every screen so a client can tell
     /// "quiet" from "the socket died" without guessing a timeout (ADR 0001 D5).
     push_interval_ms: i64,
+    /// The running binary's version, supplied by the composition root (ADR 0009). This
+    /// crate's own version would be a different number the moment the workspace stops
+    /// moving in lockstep, and the question being answered is "what is on that machine".
+    version: &'static str,
 }
 
 // Derived `Clone` would demand `S: Clone`, which no store is; every field is an `Arc` or a
@@ -67,6 +82,7 @@ impl<S> Clone for Hub<S> {
             clock: Arc::clone(&self.clock),
             snapshots: self.snapshots.clone(),
             push_interval_ms: self.push_interval_ms,
+            version: self.version,
         }
     }
 }
@@ -78,6 +94,7 @@ impl<S> Hub<S> {
         clock: Arc<dyn Clock>,
         push_interval_ms: i64,
         channel_capacity: usize,
+        version: &'static str,
     ) -> Self {
         let (snapshots, _) = broadcast::channel(channel_capacity);
         Self {
@@ -86,6 +103,7 @@ impl<S> Hub<S> {
             clock,
             snapshots,
             push_interval_ms,
+            version,
         }
     }
 
@@ -190,6 +208,14 @@ impl<S> ReadOnly<S> {
     pub async fn devices(&self) -> Vec<DeviceHealth> {
         self.0.lock().await.devices().to_vec()
     }
+
+    /// Whether the appliance may be stopped right now (ADR 0009 §6). Read by the nightly
+    /// maintenance window before it updates and powers the machine off.
+    pub async fn health(&self) -> Health {
+        let now = self.now();
+        let state = self.0.lock().await;
+        health::health_with_version(&state, now, self.0.version)
+    }
 }
 
 impl<S: HubStore> ReadOnly<S> {
@@ -199,6 +225,46 @@ impl<S: HubStore> ReadOnly<S> {
     /// from the interpreted log and writes nothing.
     pub async fn results(&self, session_id: &str) -> Result<Option<SessionResults>, S::Error> {
         results::results(&*self.0.store, session_id).await
+    }
+
+    /// The exercise library the builder screen offers (workout brief §3).
+    pub async fn exercises(&self) -> Result<ExerciseLibrary, S::Error> {
+        self.0.store.exercises().await
+    }
+
+    pub async fn stations(&self) -> Result<StationMap, S::Error> {
+        self.0.store.stations().await
+    }
+
+    /// Every template, system ones first (workout brief §13).
+    pub async fn templates(&self) -> Result<Vec<WorkoutTemplate>, S::Error> {
+        templates::list_templates(&*self.0.store).await
+    }
+
+    pub async fn template(&self, id: &str) -> Result<Option<WorkoutTemplate>, S::Error> {
+        self.0.store.template(id).await
+    }
+
+    /// Every athlete's stage list, derived from the session's snapshot course and their
+    /// replayed runs (workout brief §10). Deliberately not part of the pushed snapshot: a
+    /// full stage list per athlete would multiply the size of every WebSocket frame the big
+    /// screen receives, and only the coach screen reads it.
+    pub async fn stages(&self) -> Vec<AthleteProgress> {
+        let now = self.now();
+        let state = self.0.lock().await;
+        let Some(course) = state.config.course.as_ref() else {
+            return Vec::new();
+        };
+        state
+            .athletes
+            .iter()
+            .map(|a| AthleteProgress {
+                athlete_id: a.athlete_id.clone(),
+                name: a.display_name.clone(),
+                expectation: stages::current_expectation(course, a),
+                stages: stages::stages(course, a, now),
+            })
+            .collect()
     }
 }
 
@@ -279,14 +345,34 @@ impl<S> Operator<S> {
 }
 
 impl<S: HubStore> Operator<S> {
-    pub async fn arm(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
+    pub async fn mark_ready(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
         let mut state = self.hub.lock().await;
-        session::arm(&mut state, &*self.hub.store, cmd).await
+        session::mark_ready(&mut state, &*self.hub.store, cmd).await
     }
 
-    pub async fn close(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
+    pub async fn start(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
         let mut state = self.hub.lock().await;
-        session::close(&mut state, &*self.hub.store, cmd).await
+        session::start(&mut state, &*self.hub.store, cmd).await
+    }
+
+    pub async fn pause(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        session::pause(&mut state, &*self.hub.store, cmd).await
+    }
+
+    pub async fn resume(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        session::resume(&mut state, &*self.hub.store, cmd).await
+    }
+
+    pub async fn complete(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        session::complete(&mut state, &*self.hub.store, cmd).await
+    }
+
+    pub async fn cancel(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        session::cancel(&mut state, &*self.hub.store, cmd).await
     }
 
     pub async fn reopen(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>> {
@@ -320,6 +406,59 @@ impl<S: HubStore> Operator<S> {
     ) -> Result<(), OperatorError<S::Error>> {
         let mut state = self.hub.lock().await;
         config::configure(&mut state, &*self.hub.store, course, finish_policy, cmd).await
+    }
+
+    // --- the workout library (ADR 0008) --------------------------------------------------
+
+    pub async fn save_template(
+        &self,
+        template: WorkoutTemplate,
+        cmd: &OperatorCommand,
+    ) -> Result<WorkoutTemplate, TemplateError<S::Error>> {
+        templates::save_template(&*self.hub.store, template, cmd).await
+    }
+
+    pub async fn duplicate_template(
+        &self,
+        source_id: &str,
+        new_id: &str,
+        new_name: &str,
+        owner_id: Option<&str>,
+        cmd: &OperatorCommand,
+    ) -> Result<WorkoutTemplate, TemplateError<S::Error>> {
+        templates::duplicate_template(&*self.hub.store, source_id, new_id, new_name, owner_id, cmd)
+            .await
+    }
+
+    pub async fn delete_template(
+        &self,
+        template_id: &str,
+        cmd: &OperatorCommand,
+    ) -> Result<(), TemplateError<S::Error>> {
+        templates::delete_template(&*self.hub.store, template_id, cmd).await
+    }
+
+    /// Template -> compiled course -> snapshot -> DRAFT class (workout brief §15).
+    ///
+    /// The library is read from the store rather than taken from the caller: a class must be
+    /// compiled against the exercises this hub actually holds, not against whatever a
+    /// request happened to describe.
+    pub async fn create_class(
+        &self,
+        template_id: &str,
+        new: NewClass,
+        cmd: &OperatorCommand,
+    ) -> Result<(), TemplateError<S::Error>> {
+        let template = self
+            .hub
+            .store
+            .template(template_id)
+            .await
+            .map_err(TemplateError::Storage)?
+            .ok_or_else(|| TemplateError::UnknownTemplate(template_id.to_string()))?;
+        let library = self.hub.store.exercises().await.map_err(TemplateError::Storage)?;
+        let mut state = self.hub.lock().await;
+        templates::create_class(&mut state, &*self.hub.store, &template, &library, new, cmd).await
     }
 
     pub async fn register_reader(

@@ -8,8 +8,9 @@ use application::{
     AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead,
 };
 use domain::{
-    AthleteState, BindingLedger, Instant, Interpreted, MemberRef, ReaderRegistration,
-    ReaderRegistry, Session, SessionConfig, TagBinding,
+    AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, Interpreted, MemberRef,
+    PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig, StationMap,
+    TagBinding, WorkoutTemplate,
 };
 use contract::CommitOutcome;
 use std::sync::Mutex;
@@ -49,6 +50,9 @@ struct Inner {
     bindings: Vec<TagBinding>,
     athletes: Vec<AthleteState>,
     created_at: Option<Instant>,
+    templates: Vec<WorkoutTemplate>,
+    exercises: Vec<Exercise>,
+    stations: Vec<PhysicalStation>,
 }
 
 #[derive(Default)]
@@ -151,6 +155,16 @@ impl FakeStore {
 
     pub fn audits(&self) -> Vec<AuditEntry> {
         self.inner.lock().unwrap().audits.clone()
+    }
+
+    pub fn templates_held(&self) -> Vec<WorkoutTemplate> {
+        self.inner.lock().unwrap().templates.clone()
+    }
+
+    /// Puts a template in the store without going through a use case, so a test can start
+    /// from a library that already exists.
+    pub fn seed_template(&self, template: WorkoutTemplate) {
+        self.inner.lock().unwrap().templates.push(template);
     }
 
     pub fn saved_sessions(&self) -> Vec<Session> {
@@ -422,6 +436,64 @@ impl HubStore for FakeStore {
         out.sort_by_key(|r| (r.detected_at, r.raw_event_id));
         Ok(out)
     }
+    // --- the workout library (ADR 0008) --------------------------------------------------
+
+    async fn save_template(&self, template: &WorkoutTemplate) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.templates.iter_mut().find(|t| t.id == template.id) {
+            Some(existing) => *existing = template.clone(),
+            None => inner.templates.push(template.clone()),
+        }
+        Ok(())
+    }
+
+    async fn template(&self, template_id: &str) -> Result<Option<WorkoutTemplate>, FakeError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .templates
+            .iter()
+            .find(|t| t.id == template_id)
+            .cloned())
+    }
+
+    async fn templates(&self) -> Result<Vec<WorkoutTemplate>, FakeError> {
+        Ok(self.inner.lock().unwrap().templates.clone())
+    }
+
+    async fn delete_template(&self, template_id: &str) -> Result<bool, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let before = inner.templates.len();
+        inner.templates.retain(|t| t.id != template_id);
+        Ok(inner.templates.len() < before)
+    }
+
+    async fn save_exercise(&self, exercise: &Exercise) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.exercises.iter_mut().find(|e| e.code == exercise.code) {
+            Some(existing) => *existing = exercise.clone(),
+            None => inner.exercises.push(exercise.clone()),
+        }
+        Ok(())
+    }
+
+    async fn exercises(&self) -> Result<ExerciseLibrary, FakeError> {
+        Ok(ExerciseLibrary::new(self.inner.lock().unwrap().exercises.clone()))
+    }
+
+    async fn save_station(&self, station: &PhysicalStation) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.stations.iter_mut().find(|s| s.id == station.id) {
+            Some(existing) => *existing = station.clone(),
+            None => inner.stations.push(station.clone()),
+        }
+        Ok(())
+    }
+
+    async fn stations(&self) -> Result<StationMap, FakeError> {
+        Ok(StationMap::new(self.inner.lock().unwrap().stations.clone()))
+    }
 }
 
 fn kind_of(e: &Interpreted) -> String {
@@ -442,4 +514,26 @@ impl application::MemberDirectory for FakeDirectory {
     async fn lookup(&self, member_id: &str) -> Result<Option<MemberRef>, FakeError> {
         Ok(self.0.iter().find(|m| m.member_id == member_id).cloned())
     }
+}
+
+/// Puts a device's journal report into a live session, for the maintenance-window tests
+/// (ADR 0009). Goes through the real use case, so a report the hub could not actually
+/// receive is not something these tests can assert about.
+pub fn note_backlog(
+    state: &mut application::LiveSession,
+    device_id: &domain::DeviceId,
+    pending_events: u64,
+    at: Instant,
+) {
+    application::note_device_status(
+        state,
+        application::DeviceReport {
+            device_id: device_id.clone(),
+            boot_id: 1,
+            pending_events,
+            journal_capacity: 10_000,
+            warning: None,
+        },
+        at,
+    );
 }

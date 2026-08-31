@@ -9,8 +9,9 @@ use application::{
     AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead,
 };
 use domain::{
-    AthleteState, BindingLedger, Instant, ReaderRegistration, ReaderRegistry, Session,
-    SessionConfig, TagBinding,
+    AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, PhysicalStation,
+    ReaderRegistration, ReaderRegistry, Session, SessionConfig, StationMap, TagBinding,
+    WorkoutTemplate,
 };
 use contract::CommitOutcome;
 
@@ -128,5 +129,39 @@ impl HubStore for Store {
         since: Instant,
     ) -> Result<Vec<StoredRawRead>, StoreError> {
         Store::unclaimed_reads_for_tag(self, tag_id, since).await
+    }
+
+    // --- the workout library (ADR 0008) --------------------------------------------------
+
+    async fn save_template(&self, template: &WorkoutTemplate) -> Result<(), StoreError> {
+        Store::save_template(self, template).await
+    }
+
+    async fn template(&self, template_id: &str) -> Result<Option<WorkoutTemplate>, StoreError> {
+        Store::template(self, template_id).await
+    }
+
+    async fn templates(&self) -> Result<Vec<WorkoutTemplate>, StoreError> {
+        Store::templates(self).await
+    }
+
+    async fn delete_template(&self, template_id: &str) -> Result<bool, StoreError> {
+        Store::delete_template(self, template_id).await
+    }
+
+    async fn save_exercise(&self, exercise: &Exercise) -> Result<(), StoreError> {
+        Store::save_exercise(self, exercise).await
+    }
+
+    async fn exercises(&self) -> Result<ExerciseLibrary, StoreError> {
+        Store::exercises(self).await
+    }
+
+    async fn save_station(&self, station: &PhysicalStation) -> Result<(), StoreError> {
+        Store::save_station(self, station).await
+    }
+
+    async fn stations(&self) -> Result<StationMap, StoreError> {
+        Store::stations(self).await
     }
 }

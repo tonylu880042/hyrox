@@ -46,16 +46,18 @@ pub enum Recovery {
     Started,
 }
 
-/// Resumes an ARMED session if the store has one, otherwise arms and persists the plan.
+/// Resumes a live session if the store has one, otherwise starts and persists the plan.
 ///
-/// Only an ARMED session is resumed: a CLOSED one is finished business, and a DRAFT one was
-/// never accepting events (ADR 0001 D2).
+/// Live means READY, RUNNING or PAUSED (ADR 0008). A COMPLETED or CANCELLED session is
+/// finished business, and a DRAFT one is still being written. A class that was PAUSED when
+/// the hub died comes back paused, with its accumulated pause intact -- resuming it as
+/// RUNNING would hand back time the class never ran.
 pub async fn resume_or_start<S: HubStore>(
     store: &S,
     plan: SessionPlan,
 ) -> Result<(LiveSession, Recovery), S::Error> {
     if let Some(existing) = store.active_session().await? {
-        if existing.accepts_events() {
+        if existing.is_live() {
             // The stored creation time is the class clock's origin; falling back to the
             // plan's would restart the class clock at zero on every reboot.
             let class_start = store
@@ -80,8 +82,9 @@ pub async fn resume_or_start<S: HubStore>(
 
     let mut session = plan.session;
     session
-        .arm()
-        .expect("a fresh draft always arms; CLOSED is handled by the reopen use case");
+        .mark_ready()
+        .and_then(|()| session.start())
+        .expect("a fresh draft always starts; terminal states go through the reopen use case");
     store.save_session(&session, plan.class_start).await?;
     // After the session row, not before: the configuration belongs to a session that exists.
     store.save_session_config(&plan.config).await?;

@@ -4,10 +4,12 @@
 //! by replaying the non-voided interpreted events, so a restart cannot disagree with the log.
 
 mod hub_store;
+mod workout;
 
 use application::{AuditEntry, StoredException, StoredRawRead};
 use domain::{
-    AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
+    AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, ReaderKey,
+    ReaderMode,
     ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, SessionStatus,
     TagBinding, TagId,
 };
@@ -22,6 +24,10 @@ pub enum StoreError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("stored row is not valid: {0}")]
     Corrupt(String),
+    /// A stored JSON document -- a session snapshot, or a template's blocks -- did not
+    /// parse. Distinct from `Corrupt` so the message carries serde's own diagnosis.
+    #[error("stored document: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// A raw reader event exactly as it arrived from the edge (CLAUDE.md 16).
@@ -37,7 +43,7 @@ pub struct RawEvent {
 }
 
 pub struct Store {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl Store {
@@ -48,11 +54,23 @@ impl Store {
             .map_err(StoreError::Db)?
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            // FULL, not NORMAL: the hub ships as an appliance that is switched off at the
+            // wall (ADR 0009). In WAL mode NORMAL only fsyncs at a checkpoint, so a commit
+            // survives a process crash but not a pulled plug -- and the ACK we send on the
+            // strength of that commit tells the ESP32 to delete its only other copy of the
+            // event (ADR 0002; CLAUDE.md 15, 31). One fsync per commit, against roughly two
+            // rows per athlete per station.
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Full)
             .foreign_keys(true);
         let pool = SqlitePool::connect_with(opts).await?;
         sqlx::migrate!("../../migrations").run(&pool).await?;
         Ok(Self { pool })
+    }
+
+    /// The connection pool, for asserting the settings this store was opened with.
+    /// Read-only by convention: every write goes through a method on `Store`.
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     pub async fn open_in_memory() -> Result<Self, StoreError> {
@@ -61,12 +79,16 @@ impl Store {
 
     pub async fn save_session(&self, s: &Session, created_at: Instant) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO sessions (id, name, mode, status, interpreted_event_count, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO sessions
+                (id, name, mode, status, interpreted_event_count, created_at,
+                 paused_total_ms, paused_since)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 status = excluded.status,
-                interpreted_event_count = excluded.interpreted_event_count",
+                interpreted_event_count = excluded.interpreted_event_count,
+                paused_total_ms = excluded.paused_total_ms,
+                paused_since = excluded.paused_since",
         )
         .bind(&s.id)
         .bind(&s.name)
@@ -74,6 +96,8 @@ impl Store {
         .bind(status_str(s.status))
         .bind(s.interpreted_event_count as i64)
         .bind(created_at.0)
+        .bind(s.paused_total.millis())
+        .bind(s.paused_since.map(|i| i.0))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -176,46 +200,33 @@ impl Store {
         Ok(id)
     }
 
-    /// The session to resume after a restart: the ARMED one, else the most recent (CLAUDE.md 21).
+    /// The session to resume after a restart: a live one (READY, RUNNING or PAUSED) in
+    /// preference to the most recent (CLAUDE.md 21; ADR 0008).
     pub async fn active_session(&self) -> Result<Option<Session>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, name, mode, status, interpreted_event_count FROM sessions
-             ORDER BY (status = 'ARMED') DESC, created_at DESC LIMIT 1",
+            "SELECT id, name, mode, status, interpreted_event_count,
+                    paused_total_ms, paused_since
+             FROM sessions
+             ORDER BY (status IN ('RUNNING', 'PAUSED', 'READY')) DESC, created_at DESC
+             LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|r| {
-            Ok(Session {
-                id: r.get("id"),
-                name: r.get("name"),
-                mode: parse_mode(r.get::<String, _>("mode").as_str())?,
-                status: parse_status(r.get::<String, _>("status").as_str())?,
-                interpreted_event_count: r.get::<i64, _>("interpreted_event_count") as u64,
-            })
-        })
-        .transpose()
+        row.map(session_from_row).transpose()
     }
 
     /// One session by id, active or not. `/result/{id}` has to be able to name a session
     /// the hub stopped running hours ago (CLAUDE.md 22).
     pub async fn session(&self, id: &str) -> Result<Option<Session>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, name, mode, status, interpreted_event_count FROM sessions
-             WHERE id = ?1",
+            "SELECT id, name, mode, status, interpreted_event_count,
+                    paused_total_ms, paused_since
+             FROM sessions WHERE id = ?1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|r| {
-            Ok(Session {
-                id: r.get("id"),
-                name: r.get("name"),
-                mode: parse_mode(r.get::<String, _>("mode").as_str())?,
-                status: parse_status(r.get::<String, _>("status").as_str())?,
-                interpreted_event_count: r.get::<i64, _>("interpreted_event_count") as u64,
-            })
-        })
-        .transpose()
+        row.map(session_from_row).transpose()
     }
 
     /// The session's live exceptions, oldest first (ADR 0001 D4). Ordered by `detected_at`
@@ -399,18 +410,38 @@ fn parse_mode(s: &str) -> Result<SessionMode, StoreError> {
         other => Err(StoreError::Corrupt(format!("mode {other}"))),
     }
 }
+/// One place both session reads build a `Session`, so a column added to one is not
+/// forgotten by the other.
+fn session_from_row(r: sqlx::sqlite::SqliteRow) -> Result<Session, StoreError> {
+    Ok(Session {
+        id: r.get("id"),
+        name: r.get("name"),
+        mode: parse_mode(r.get::<String, _>("mode").as_str())?,
+        status: parse_status(r.get::<String, _>("status").as_str())?,
+        interpreted_event_count: r.get::<i64, _>("interpreted_event_count") as u64,
+        paused_total: Duration(r.get::<i64, _>("paused_total_ms")),
+        paused_since: r.get::<Option<i64>, _>("paused_since").map(Instant),
+    })
+}
+
 fn status_str(s: SessionStatus) -> &'static str {
     match s {
         SessionStatus::Draft => "DRAFT",
-        SessionStatus::Armed => "ARMED",
-        SessionStatus::Closed => "CLOSED",
+        SessionStatus::Ready => "READY",
+        SessionStatus::Running => "RUNNING",
+        SessionStatus::Paused => "PAUSED",
+        SessionStatus::Completed => "COMPLETED",
+        SessionStatus::Cancelled => "CANCELLED",
     }
 }
 fn parse_status(s: &str) -> Result<SessionStatus, StoreError> {
     match s {
         "DRAFT" => Ok(SessionStatus::Draft),
-        "ARMED" => Ok(SessionStatus::Armed),
-        "CLOSED" => Ok(SessionStatus::Closed),
+        "READY" => Ok(SessionStatus::Ready),
+        "RUNNING" => Ok(SessionStatus::Running),
+        "PAUSED" => Ok(SessionStatus::Paused),
+        "COMPLETED" => Ok(SessionStatus::Completed),
+        "CANCELLED" => Ok(SessionStatus::Cancelled),
         other => Err(StoreError::Corrupt(format!("status {other}"))),
     }
 }

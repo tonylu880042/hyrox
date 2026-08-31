@@ -14,7 +14,8 @@ const LIMIT: Duration = Duration(60 * 60 * 1000); // a one-hour class
 
 fn class(mode: SessionMode, policy: FinishPolicy) -> LiveSession {
     let mut session = Session::new_draft("s1", "THU 19:00", mode);
-    session.arm().expect("arm");
+    session.mark_ready().expect("arm");
+    session.start().expect("arm");
     let mut running = AthleteState::ready("a1", "RUNNING");
     running.status = AthleteStatus::Active;
     running.started_at = Some(START);
@@ -93,7 +94,7 @@ async fn the_coach_can_end_the_class_by_hand() {
     let finished = end_class(&mut state, &store, &cmd).await.expect("end class");
 
     assert_eq!(finished, vec!["a1".to_string()]);
-    assert_eq!(state.session.status, SessionStatus::Closed);
+    assert_eq!(state.session.status, SessionStatus::Completed);
     assert_eq!(store.audits()[0].action, "CLASS_END");
 }
 
@@ -107,7 +108,7 @@ async fn ending_a_class_by_hand_is_refused_when_no_finish_rule_exists() {
 
     assert!(matches!(err, OperatorError::NoFinishRule));
     assert_eq!(state.athlete("a1").unwrap().status, AthleteStatus::Active);
-    assert_eq!(state.session.status, SessionStatus::Armed);
+    assert_eq!(state.session.status, SessionStatus::Running);
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
-//! Session lifecycle over HTTP: DRAFT -> ARMED -> CLOSED, and back (ADR 0001 D2).
+//! Session lifecycle over HTTP: DRAFT -> READY -> RUNNING <-> PAUSED -> COMPLETED,
+//! plus CANCELLED and the two corrections (ADR 0001 D2; ADR 0008).
 //!
 //! Every refusal here is a domain invariant saying no. None of them may be a 500: an
 //! operator has to be able to tell a rule from an outage.
@@ -7,43 +8,109 @@ mod support;
 
 use axum::http::StatusCode;
 use serde_json::json;
-use support::{armed, call, draft, get, post, put};
+use support::{call, draft, get, post, put, running};
 
 const DESK: &str = "FRONT DESK TABLET";
 
 #[tokio::test]
-async fn a_draft_session_arms() {
+async fn a_draft_session_is_made_ready_and_then_started() {
     let (router, store) = draft();
 
-    let (status, body) = call(&router, post("/api/operator/session/arm", DESK, json!({}))).await;
+    let (status, body) = call(&router, post("/api/operator/session/ready", DESK, json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session"]["status"], "READY");
+    assert_eq!(body["config_editable"], true, "today's tweaks happen in READY");
+
+    let (status, body) = call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["session"]["status"], "ARMED");
+    assert_eq!(body["session"]["status"], "RUNNING");
+    assert_eq!(body["config_editable"], false, "a running class keeps the plan it started on");
     // Persisted before it was claimed, and audited under the device that did it.
-    assert_eq!(store.saved_sessions()[0].status, domain::SessionStatus::Armed);
+    assert_eq!(store.saved_sessions()[0].status, domain::SessionStatus::Running);
     let audit = store.audits().pop().expect("an audit record");
-    assert_eq!(audit.action, "SESSION_ARM");
+    assert_eq!(audit.action, "SESSION_START");
     assert_eq!(audit.operator, DESK);
 }
 
+/// DRAFT -> RUNNING in one step is refused: a class nobody marked ready has not been
+/// looked at, and starting it would time athletes against an unreviewed plan.
 #[tokio::test]
-async fn an_armed_session_closes() {
-    let (router, store) = armed();
+async fn a_draft_session_cannot_be_started_directly() {
+    let (router, store) = draft();
 
-    let (status, body) = call(&router, post("/api/operator/session/close", DESK, json!({}))).await;
+    let (status, body) = call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "ILLEGAL_TRANSITION");
+    assert!(store.audits().is_empty());
+}
+
+#[tokio::test]
+async fn a_running_class_pauses_and_resumes() {
+    let (router, store) = running();
+
+    let (status, body) = call(&router, post("/api/operator/session/pause", DESK, json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session"]["status"], "PAUSED");
+
+    let (status, body) = call(&router, post("/api/operator/session/resume", DESK, json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session"]["status"], "RUNNING");
+
+    let actions: Vec<String> = store.audits().into_iter().map(|a| a.action).collect();
+    assert!(actions.contains(&"SESSION_PAUSE".to_string()));
+    assert!(actions.contains(&"SESSION_RESUME".to_string()));
+}
+
+/// Cancelling writes off everything recorded under the class, so CLAUDE.md 20 wants the
+/// reason on the record.
+#[tokio::test]
+async fn cancelling_needs_a_reason() {
+    let (router, store) = running();
+
+    let (status, body) = call(&router, post("/api/operator/session/cancel", DESK, json!({}))).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "REASON_REQUIRED");
+    assert!(store.audits().is_empty());
+}
+
+#[tokio::test]
+async fn cancelling_with_a_reason_ends_the_class() {
+    let (router, store) = running();
+
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/cancel", DESK, json!({ "reason": "停電" })),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["session"]["status"], "CLOSED");
-    assert_eq!(store.audits().pop().expect("an audit").action, "SESSION_CLOSE");
+    assert_eq!(body["session"]["status"], "CANCELLED");
+    let audit = store.audits().pop().expect("an audit record");
+    assert_eq!(audit.action, "SESSION_CANCEL");
+    assert_eq!(audit.reason.as_deref(), Some("停電"));
+}
+
+#[tokio::test]
+async fn a_running_session_completes() {
+    let (router, store) = running();
+
+    let (status, body) = call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session"]["status"], "COMPLETED");
+    assert_eq!(store.audits().pop().expect("an audit").action, "SESSION_COMPLETE");
 }
 
 /// A DRAFT session was never accepting events, so there is nothing to close. 409, because
 /// the request is well formed and the world is simply not where the client thought.
 #[tokio::test]
-async fn a_draft_session_cannot_be_closed() {
+async fn a_draft_session_cannot_be_completed() {
     let (router, store) = draft();
 
-    let (status, body) = call(&router, post("/api/operator/session/close", DESK, json!({}))).await;
+    let (status, body) = call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "ILLEGAL_TRANSITION");
@@ -53,9 +120,9 @@ async fn a_draft_session_cannot_be_closed() {
 /// CLOSED -> ARMED is deliberately allowed (D2): a mis-tap on a busy floor must not force a
 /// new session. It is a correction, so CLAUDE.md 20 wants the reason on the record.
 #[tokio::test]
-async fn reopening_a_closed_session_needs_a_reason() {
-    let (router, store) = armed();
-    call(&router, post("/api/operator/session/close", DESK, json!({}))).await;
+async fn reopening_a_completed_session_needs_a_reason() {
+    let (router, store) = running();
+    call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
 
     let (status, body) = call(&router, post("/api/operator/session/reopen", DESK, json!({}))).await;
 
@@ -65,9 +132,9 @@ async fn reopening_a_closed_session_needs_a_reason() {
 }
 
 #[tokio::test]
-async fn a_closed_session_reopens_with_a_reason() {
-    let (router, store) = armed();
-    call(&router, post("/api/operator/session/close", DESK, json!({}))).await;
+async fn a_completed_session_reopens_with_a_reason() {
+    let (router, store) = running();
+    call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
 
     let (status, body) = call(
         &router,
@@ -76,7 +143,7 @@ async fn a_closed_session_reopens_with_a_reason() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["session"]["status"], "ARMED");
+    assert_eq!(body["session"]["status"], "RUNNING");
     let audit = store
         .audits()
         .into_iter()
@@ -86,22 +153,22 @@ async fn a_closed_session_reopens_with_a_reason() {
     assert_eq!(audit.operator, DESK);
 }
 
-/// `arm` refuses a CLOSED session outright: bringing one back is a correction and goes
-/// through reopen, which insists on a reason.
+/// `start` refuses a COMPLETED session outright: bringing one back is a correction and
+/// goes through reopen, which insists on a reason.
 #[tokio::test]
-async fn arm_does_not_double_as_reopen() {
-    let (router, _) = armed();
-    call(&router, post("/api/operator/session/close", DESK, json!({}))).await;
+async fn start_does_not_double_as_reopen() {
+    let (router, _) = running();
+    call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
 
-    let (status, body) = call(&router, post("/api/operator/session/arm", DESK, json!({}))).await;
+    let (status, body) = call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "REASON_REQUIRED");
 }
 
 #[tokio::test]
-async fn an_armed_session_with_nothing_interpreted_returns_to_draft() {
-    let (router, _) = armed();
+async fn a_running_session_with_nothing_interpreted_returns_to_draft() {
+    let (router, _) = running();
 
     let (status, body) = call(&router, post("/api/operator/session/draft", DESK, json!({}))).await;
 
@@ -113,10 +180,10 @@ async fn an_armed_session_with_nothing_interpreted_returns_to_draft() {
 /// ARMED -> DRAFT is only legal while nothing has been interpreted (D2). Once a read has
 /// been folded in, going back would orphan it.
 #[tokio::test]
-async fn an_armed_session_that_has_interpreted_events_cannot_return_to_draft() {
+async fn an_running_session_that_has_interpreted_events_cannot_return_to_draft() {
     let (store, mut state) = (
         std::sync::Arc::new(support::FakeStore::new()),
-        support::armed_session(),
+        support::running_session(),
     );
     state.session.interpreted_event_count = 1;
     let (router, _) = support::hub(state, store);
@@ -159,8 +226,8 @@ async fn a_draft_session_can_be_given_a_course_and_a_finish_rule() {
 }
 
 #[tokio::test]
-async fn an_armed_session_cannot_be_reconfigured() {
-    let (router, store) = armed();
+async fn an_running_session_cannot_be_reconfigured() {
+    let (router, store) = running();
 
     let (status, body) = call(
         &router,
@@ -201,7 +268,7 @@ async fn configuring_without_a_finish_policy_is_refused() {
 /// competitor's clock would be exactly the invented rule the project forbids.
 #[tokio::test]
 async fn a_class_with_no_finish_rule_cannot_be_ended_by_hand() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     let (status, body) = call(
         &router,
@@ -225,7 +292,8 @@ async fn a_class_with_a_finish_rule_can_be_ended_by_hand() {
         ),
     )
     .await;
-    call(&router, post("/api/operator/session/arm", DESK, json!({}))).await;
+    call(&router, post("/api/operator/session/ready", DESK, json!({}))).await;
+    call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
 
     let (status, body) = call(
         &router,
@@ -242,7 +310,7 @@ async fn a_class_with_a_finish_rule_can_be_ended_by_hand() {
 
 #[tokio::test]
 async fn a_reader_is_registered_and_then_reported_with_its_freshness() {
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let (status, body) = call(
         &router,
@@ -273,7 +341,7 @@ async fn a_reader_is_registered_and_then_reported_with_its_freshness() {
 
 #[tokio::test]
 async fn a_reader_key_the_hub_cannot_parse_is_a_client_error() {
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let (status, body) = call(
         &router,
@@ -296,7 +364,7 @@ async fn a_reader_key_the_hub_cannot_parse_is_a_client_error() {
 /// rule nobody has made.
 #[tokio::test]
 async fn there_is_no_route_that_deletes_a_reader() {
-    let (router, _) = armed();
+    let (router, _) = running();
 
     let (status, _) = call(
         &router,
@@ -311,7 +379,7 @@ async fn there_is_no_route_that_deletes_a_reader() {
 /// there is a 404, never a silent success.
 #[tokio::test]
 async fn voiding_an_exception_needs_a_reason_and_a_real_event() {
-    let (router, store) = armed();
+    let (router, store) = running();
     let id = store.seed_interpreted(
         "a1",
         domain::Interpreted::Exception {
@@ -356,10 +424,10 @@ async fn an_operator_device_may_be_named_in_chinese() {
     // ADR 0001 D1's own examples are 「櫃檯平板」 and 「教練手機」. HTTP header values are
     // nominally ASCII, so reading one with `to_str` silently turned a Chinese device name
     // into no operator at all -- the anonymous audit row D1 exists to prevent.
-    let (router, store) = armed();
+    let (router, store) = running();
 
     let (status, _) =
-        call(&router, post("/api/operator/session/close", "櫃檯平板", json!({}))).await;
+        call(&router, post("/api/operator/session/complete", "櫃檯平板", json!({}))).await;
 
     assert_eq!(status, StatusCode::OK, "a Chinese device name must be accepted");
     let audit = store.audits().pop().expect("an audit record");

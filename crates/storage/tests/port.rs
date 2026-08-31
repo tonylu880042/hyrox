@@ -23,7 +23,8 @@ fn raw(seq: i64) -> RawRead {
 async fn armed_store() -> (Store, Session) {
     let store = Store::open_in_memory().await.unwrap();
     let mut session = Session::new_draft("s1", "Thursday Class", SessionMode::Training);
-    session.arm().unwrap();
+    session.mark_ready().unwrap();
+    session.start().unwrap();
     HubStore::save_session(&store, &session, Instant(T0)).await.unwrap();
     HubStore::save_athlete(&store, "s1", "a1", "CHEN YU-TING", 1).await.unwrap();
     (store, session)
@@ -80,8 +81,8 @@ async fn an_audit_record_is_persisted() {
             action: "SESSION_REOPEN".into(),
             subject: "s1".into(),
             reason: Some("誤觸".into()),
-            before: Some("CLOSED".into()),
-            after: Some("ARMED".into()),
+            before: Some("COMPLETED".into()),
+            after: Some("RUNNING".into()),
         })
         .await
         .expect("audit write");

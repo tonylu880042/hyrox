@@ -9,11 +9,12 @@
 //! read model, and a second spelling of them would be a second thing to keep in step.
 
 use application::{
-    CheckInView, DeviceHealth, ReaderView, SessionResults, Snapshot, StoredException,
+    CheckInView, DeviceHealth, ReaderView, SessionResults, Snapshot, StageView, StoredException,
 };
 use domain::{
-    Course, DeviceWarning, ExceptionReason, FinishPolicy, Instant, Interpreted, ReaderMode,
-    Session, SessionConfig,
+    Course, DeviceWarning, ExceptionReason, Exercise, FinishPolicy, Instant, Interpreted,
+    Expectation, ReaderMode, Session, SessionConfig, SessionMode, TemplateCategory,
+    WorkoutBlock, WorkoutTemplate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -248,4 +249,131 @@ pub struct BindRequest {
     pub athlete_id: String,
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+// --- the workout library (ADR 0008) ---------------------------------------------------------
+
+/// `GET /api/exercises` (workout brief §17).
+#[derive(Debug, Serialize)]
+pub struct ExercisesResponse {
+    pub freshness: Freshness,
+    pub exercises: Vec<Exercise>,
+}
+
+/// `GET /api/workout-templates` and the answer to every template write.
+#[derive(Debug, Serialize)]
+pub struct TemplatesResponse {
+    pub freshness: Freshness,
+    pub templates: Vec<WorkoutTemplate>,
+}
+
+/// `GET /api/workout-templates/{id}`.
+#[derive(Debug, Serialize)]
+pub struct TemplateResponse {
+    pub freshness: Freshness,
+    pub template: WorkoutTemplate,
+}
+
+/// `GET /api/stages` -- every athlete's progress through the snapshot course
+/// (workout brief §10).
+///
+/// Not carried in the pushed snapshot: a full stage list per athlete would multiply the size
+/// of every WebSocket frame the big screen receives, and only the coach screen reads it.
+#[derive(Debug, Serialize)]
+pub struct StagesResponse {
+    pub freshness: Freshness,
+    pub athletes: Vec<AthleteStages>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AthleteStages {
+    pub athlete_id: String,
+    pub name: String,
+    /// Which stage they are on, from 1. `None` before they start and once they are finished.
+    pub current_stage: Option<usize>,
+    /// How the station they are standing in compares with the plan: EXPECTED, OUT_OF_ORDER,
+    /// UNEXPECTED, or UNKNOWN where there is no plan (workout brief §11). `None` between
+    /// stations. **Recorded, never enforced** -- nothing disqualifies anybody on this.
+    pub expectation: Option<Expectation>,
+    pub stages: Vec<StageView>,
+}
+
+/// `POST` and `PUT /api/operator/templates`.
+///
+/// The whole template travels as one document, because that is how it is edited: a builder
+/// screen holds the entire plan and saves it. `source` is deliberately absent -- the stored
+/// row decides whether a template may be written, never the payload, or the read-only rule
+/// on system templates would be bypassed by sending `"source": "COACH"`.
+#[derive(Debug, Deserialize)]
+pub struct SaveTemplateRequest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub category: TemplateCategory,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    #[serde(default)]
+    pub difficulty: Option<String>,
+    #[serde(default)]
+    pub estimated_duration_minutes: Option<u32>,
+    pub blocks: Vec<WorkoutBlock>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl From<SaveTemplateRequest> for WorkoutTemplate {
+    fn from(r: SaveTemplateRequest) -> Self {
+        let mut t = WorkoutTemplate::new(r.id, r.name, r.category);
+        t.description = r.description;
+        t.owner_id = r.owner_id;
+        t.difficulty = r.difficulty;
+        t.estimated_duration_minutes = r.estimated_duration_minutes;
+        t.blocks = r.blocks;
+        t
+    }
+}
+
+/// `POST /api/operator/templates/{id}/duplicate` (workout brief §13, scenario A).
+#[derive(Debug, Deserialize)]
+pub struct DuplicateTemplateRequest {
+    pub new_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /api/operator/class` (workout brief §15).
+///
+/// `finish_policy` is required for the same reason `PUT /config` requires it: letting an
+/// omitted field fall into `NotConfigured` would create a class with no rule for when it
+/// ends, silently.
+#[derive(Debug, Deserialize)]
+pub struct CreateClassRequest {
+    pub template_id: String,
+    pub session_id: String,
+    pub name: String,
+    #[serde(default = "training")]
+    pub mode: SessionMode,
+    #[serde(default)]
+    pub coach_id: Option<String>,
+    #[serde(default)]
+    pub scheduled_at: Option<i64>,
+    pub finish_policy: FinishPolicy,
+    #[serde(default)]
+    pub athletes: Vec<NewClassAthlete>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewClassAthlete {
+    pub athlete_id: String,
+    pub display_name: String,
+}
+
+fn training() -> SessionMode {
+    SessionMode::Training
 }

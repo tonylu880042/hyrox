@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-Hant"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX</title>
+<script src="/i18n.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@400..700&amp;family=Bebas+Neue&amp;family=JetBrains+Mono:wght@100..800&amp;display=swap" rel="stylesheet"/>
+<script>
+  // Same palette and type as /live, so a coach moving between the two screens is not
+  // moving between two products.
+  tailwind.config = {
+    darkMode: "class",
+    theme: { extend: {
+      colors: {
+        "surface": "#131314", "surface-container-lowest": "#0d0e0e",
+        "surface-container-low": "#1b1c1c", "surface-container": "#1f2020",
+        "surface-container-high": "#292a2a", "surface-container-highest": "#343535",
+        "outline": "#979177", "outline-variant": "#4b4731",
+        "on-surface": "#e4e2e2", "on-surface-variant": "#cec7aa",
+        "primary": "#fee400", "on-primary": "#373100", "primary-dim": "#dec800",
+        "tertiary": "#7df4ff", "on-tertiary": "#00363a",
+        "error": "#ffb4ab", "on-error": "#690005", "error-container": "#93000a"
+      },
+      fontFamily: {
+        display: ["Bebas Neue", "sans-serif"],
+        body: ["Archivo Narrow", "sans-serif"],
+        mono: ["JetBrains Mono", "monospace"]
+      }
+    } }
+  };
+</script>
+<style>
+  body { font-family: "Archivo Narrow", system-ui, sans-serif; }
+  h1, h2, .display { font-family: "Bebas Neue", "Archivo Narrow", sans-serif; letter-spacing: .04em; }
+  /* Touch targets: a coach taps this with a thumb on a gym floor, not with a mouse. */
+  button, select, input { min-height: 44px; }
+  .drag-over { outline: 2px dashed #fee400; outline-offset: -2px; }
+  .dragging { opacity: .4; }
+  [draggable="true"] { cursor: grab; }
+</style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen">
+
+<header class="border-b border-outline-variant bg-surface-container-lowest sticky top-0 z-20">
+  <div class="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+    <h1 class="text-2xl sm:text-3xl text-primary">HYROX</h1>
+    <nav class="flex gap-1 text-sm order-3 w-full sm:order-none sm:w-auto">
+      <button data-view="list" class="nav px-3 py-2 rounded" data-i18n="nav.workouts">Workouts</button>
+      <button data-view="builder" class="nav px-3 py-2 rounded" data-i18n="nav.builder">Builder</button>
+      <button data-view="class" class="nav px-3 py-2 rounded" data-i18n="nav.class">Class</button>
+    </nav>
+    <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant whitespace-nowrap">
+      <span id="freshness" class="font-mono"></span>
+      <span id="lang" class="flex gap-1"></span>
+      <a href="/live" class="underline" data-i18n="nav.live">Live</a>
+    </div>
+  </div>
+  <div id="toast" class="hidden px-4 py-2 text-sm"></div>
+</header>
+
+<!-- One dialog for every question this screen asks. A native <dialog>, not window.prompt:
+     prompt() is blocked outright in some browsers, cannot be styled, and on a tablet it is
+     a system sheet over a full-screen app. -->
+<dialog id="ask" class="bg-surface-container text-on-surface border border-outline-variant rounded-lg p-0 backdrop:bg-black/60">
+  <form method="dialog" class="p-5 w-[22rem] max-w-[90vw]">
+    <h2 id="ask-title" class="text-2xl mb-3"></h2>
+    <input id="ask-input" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2 mb-4"/>
+    <div class="flex gap-2 justify-end">
+      <button value="" class="border border-outline rounded px-4 py-2" data-i18n="action.cancel">Cancel</button>
+      <button id="ask-ok" value="ok" class="bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-i18n="action.ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<main class="max-w-6xl mx-auto p-4">
+
+  <!-- ── Workout list ─────────────────────────────────────────────────────── -->
+  <section id="view-list">
+    <div class="flex flex-wrap gap-3 items-center mb-4">
+      <input id="search" data-i18n-placeholder="list.search"
+             class="bg-surface-container border border-outline-variant rounded px-3 py-2 flex-1 min-w-[12rem]"/>
+      <button id="new-template"
+              class="bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-i18n="list.create">+ Create Workout</button>
+    </div>
+    <div id="template-list" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
+  </section>
+
+  <!-- ── Builder ──────────────────────────────────────────────────────────── -->
+  <section id="view-builder" class="hidden">
+    <div class="flex flex-wrap gap-3 items-end mb-4">
+      <label class="flex-1 min-w-[14rem]">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="builder.name">Workout name</span>
+        <input id="t-name" class="w-full bg-surface-container border border-outline-variant rounded px-3 py-2 text-lg"/>
+      </label>
+      <label>
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="builder.category">Category</span>
+        <select id="t-category" class="bg-surface-container border border-outline-variant rounded px-3 py-2">
+          <option value="FOUNDATIONAL" data-i18n="cat.FOUNDATIONAL"></option>
+          <option value="ENGINE" data-i18n="cat.ENGINE"></option>
+          <option value="POWER" data-i18n="cat.POWER"></option>
+          <option value="COMPLETE" data-i18n="cat.COMPLETE"></option>
+          <option value="RACE_SIMULATION" data-i18n="cat.RACE_SIMULATION"></option>
+          <option value="CUSTOM" data-i18n="cat.CUSTOM"></option>
+        </select>
+      </label>
+      <label>
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="builder.minutes">Minutes</span>
+        <input id="t-minutes" type="number" min="0" class="w-24 bg-surface-container border border-outline-variant rounded px-3 py-2"/>
+      </label>
+    </div>
+    <p id="t-readonly" data-i18n="builder.readonly"
+       class="hidden mb-4 text-sm bg-surface-container-high border border-outline-variant rounded p-3"></p>
+
+    <div id="blocks" class="space-y-4"></div>
+
+    <div class="flex flex-wrap gap-2 mt-4">
+      <button id="add-block" class="border border-outline rounded px-4 py-2" data-i18n="builder.addBlock">+ Add Block</button>
+      <span class="flex-1"></span>
+      <button id="save" class="bg-primary text-on-primary font-semibold px-5 py-2 rounded" data-i18n="builder.save">Save</button>
+      <button id="save-as" class="border border-outline rounded px-4 py-2" data-i18n="builder.saveAs">Save As…</button>
+      <button id="use-template" class="bg-tertiary text-on-tertiary font-semibold px-4 py-2 rounded" data-i18n="builder.use">Use Template</button>
+    </div>
+  </section>
+
+  <!-- ── Create class ─────────────────────────────────────────────────────── -->
+  <section id="view-class" class="hidden">
+    <div class="bg-surface-container rounded-lg border border-outline-variant p-4 max-w-2xl">
+      <h2 class="text-2xl mb-4" data-i18n="class.title">Create Class</h2>
+      <dl class="mb-4 text-sm">
+        <dt class="text-on-surface-variant" data-i18n="class.workout">Workout</dt>
+        <dd id="c-template" class="text-lg mb-3">—</dd>
+      </dl>
+      <label class="block mb-3">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.name">Class name</span>
+        <input id="c-name" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+      </label>
+      <div class="flex gap-3 mb-3">
+        <label class="flex-1">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.coach">Coach</span>
+          <input id="c-coach" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+        </label>
+        <label class="flex-1">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.ends">Ends</span>
+          <select id="c-finish" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2">
+            <option value="COACH_DECIDES" data-i18n="finish.COACH_DECIDES"></option>
+            <option value="CLASS_DURATION" data-i18n="finish.CLASS_DURATION"></option>
+            <option value="COURSE_COMPLETE" data-i18n="finish.COURSE_COMPLETE"></option>
+          </select>
+        </label>
+        <label id="c-limit-wrap" class="hidden w-28">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.minutes">Minutes</span>
+          <input id="c-limit" type="number" min="1" value="60"
+                 class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+        </label>
+      </div>
+      <button id="create-class" class="bg-primary text-on-primary font-semibold px-5 py-2 rounded" data-i18n="class.save">Save Draft</button>
+    </div>
+
+    <div id="class-live" class="hidden mt-4 bg-surface-container rounded-lg border border-outline-variant p-4 max-w-2xl">
+      <h2 class="text-2xl mb-1" data-i18n="class.today">Today's class</h2>
+      <p class="text-sm text-on-surface-variant mb-3" data-i18n-html="class.todayNote"></p>
+      <div class="mb-3 flex items-baseline gap-3">
+        <span id="c-status" class="font-mono text-primary text-lg"></span>
+        <span id="c-elapsed" class="font-mono text-on-surface-variant"></span>
+      </div>
+      <ol id="c-steps" class="space-y-1 mb-4 font-mono text-sm"></ol>
+      <div class="flex flex-wrap gap-2">
+        <button data-cmd="ready"    class="cmd border border-outline rounded px-4 py-2" data-i18n="cmd.ready"></button>
+        <button data-cmd="start"    class="cmd bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-i18n="cmd.start"></button>
+        <button data-cmd="pause"    class="cmd border border-outline rounded px-4 py-2" data-i18n="cmd.pause"></button>
+        <button data-cmd="resume"   class="cmd border border-outline rounded px-4 py-2" data-i18n="cmd.resume"></button>
+        <button data-cmd="complete" class="cmd border border-outline rounded px-4 py-2" data-i18n="cmd.complete"></button>
+        <button data-cmd="cancel"   class="cmd border border-error text-error rounded px-4 py-2" data-i18n="cmd.cancel"></button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ── Asking one question ────────────────────────────────────────────────────────
+// Resolves to the trimmed answer, or "" if the coach backed out. Every caller treats an
+// empty answer as "do nothing", so cancelling is never a half-finished write.
+function ask(title, value = "") {
+  const dialog = document.getElementById("ask");
+  const input = document.getElementById("ask-input");
+  document.getElementById("ask-title").textContent = title;
+  input.value = value;
+  dialog.showModal();
+  input.focus();
+  input.select();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok" ? input.value.trim() : ""), { once: true });
+  });
+}
+
+// ── Operator identity (ADR 0001 D1) ────────────────────────────────────────────
+// There is no login. Each tablet takes a name once and sends it on every write; that
+// name is the whole audit identity, so a write without one is refused by the server.
+let DEVICE = localStorage.getItem("hyrox.device") || "";
+async function device() {
+  if (!DEVICE) {
+    DEVICE = await ask(I18N.t("ask.device"), I18N.t("ask.deviceDefault"));
+    if (!DEVICE) throw new Error(I18N.t("toast.deviceNeeded"));
+    localStorage.setItem("hyrox.device", DEVICE);
+  }
+  return DEVICE;
+}
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let EXERCISES = [];
+let TEMPLATES = [];
+let EDITING = null;      // the template open in the builder
+let CLASS_FOR = null;    // the template Create Class will use
+let SESSION = null;
+
+const UNITS_FOR = {
+  DISTANCE: ["METER", "KILOMETER"],
+  REPS: ["REPS"],
+  TIME: ["SECOND", "MINUTE"],
+  CALORIES: ["CALORIE"],
+};
+
+// ── Transport ──────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const headers = {};
+  if (method !== "GET") {
+    headers["content-type"] = "application/json";
+    headers["x-operator-device"] = await device();
+  }
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  // Carry the machine code, not the server's prose. `docs/api.md` §6: branch on `error`;
+  // `message` is for whoever reads a log, and is deliberately never translated.
+  if (!res.ok) throw Object.assign(new Error(json.error || "unknown"), { code: json.error, detail: json.message });
+  return json;
+}
+
+/// What to show a coach when something is refused. A stable code maps to a sentence in
+/// their language; an unrecognised one falls back rather than leaking English at them.
+function explain(error) {
+  if (error && error.code) {
+    const key = "err." + error.code;
+    const text = I18N.t(key);
+    if (text !== key) return text;
+  }
+  return I18N.t("err.unknown");
+}
+
+function toast(message, bad) {
+  const el = document.getElementById("toast");
+  el.textContent = message;
+  el.className = "px-4 py-2 text-sm " + (bad ? "bg-error-container text-on-surface" : "bg-surface-container-high");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (el.className = "hidden"), 4000);
+}
+
+async function guard(fn) {
+  try {
+    await fn();
+  } catch (e) {
+    // The detail goes to the console for whoever is debugging; the coach gets a sentence.
+    if (e && e.detail) console.warn(e.code, e.detail);
+    toast(e && e.code ? explain(e) : (e && e.message) || String(e), true);
+  }
+}
+
+// ── Views ──────────────────────────────────────────────────────────────────────
+function show(view) {
+  for (const name of ["list", "builder", "class"]) {
+    document.getElementById("view-" + name).classList.toggle("hidden", name !== view);
+  }
+  document.querySelectorAll(".nav").forEach((b) => {
+    const on = b.dataset.view === view;
+    b.className = "nav px-3 py-2 rounded " + (on ? "bg-surface-container-high text-primary" : "text-on-surface-variant");
+  });
+}
+document.querySelectorAll(".nav").forEach((b) => b.onclick = () => show(b.dataset.view));
+
+// ── Workout list ───────────────────────────────────────────────────────────────
+function renderList() {
+  const needle = document.getElementById("search").value.trim().toLowerCase();
+  const list = document.getElementById("template-list");
+  list.innerHTML = "";
+  const shown = TEMPLATES.filter((t) => !needle || t.name.toLowerCase().includes(needle));
+  if (!shown.length) {
+    list.innerHTML = '<p class="text-on-surface-variant">' + escape(I18N.t("list.empty")) + "</p>";
+    return;
+  }
+  for (const t of shown) {
+    const system = t.source === "SYSTEM";
+    const card = document.createElement("div");
+    card.className = "bg-surface-container rounded-lg border border-outline-variant p-4 flex flex-col gap-2";
+    card.innerHTML = `
+      <div class="flex items-start gap-2">
+        <h3 class="text-xl flex-1">${escape(t.name)}</h3>
+        <span class="text-[10px] px-2 py-1 rounded ${system ? "bg-surface-container-highest text-on-surface-variant" : "bg-primary text-on-primary"}">
+          ${escape(I18N.t(system ? "list.system" : "list.mine"))}</span>
+      </div>
+      <p class="text-sm text-on-surface-variant flex-1">${escape(t.description || "")}</p>
+      <p class="text-xs font-mono text-on-surface-variant">
+        ${escape(I18N.t("list.meta",
+            I18N.t("cat." + t.category),
+            stepCount(t),
+            t.estimated_duration_minutes ? I18N.t("list.minutes", t.estimated_duration_minutes) : "",
+            t.version))}
+      </p>
+      <div class="flex flex-wrap gap-2 pt-1">
+        <button class="edit border border-outline rounded px-3 py-2 text-sm">${escape(I18N.t(system ? "list.view" : "list.edit"))}</button>
+        <button class="dup border border-outline rounded px-3 py-2 text-sm">${escape(I18N.t("list.duplicate"))}</button>
+        <button class="use bg-tertiary text-on-tertiary rounded px-3 py-2 text-sm font-semibold">${escape(I18N.t("list.use"))}</button>
+        ${system ? "" : '<button class="del border border-error text-error rounded px-3 py-2 text-sm">' + escape(I18N.t("list.delete")) + "</button>"}
+      </div>`;
+    card.querySelector(".edit").onclick = () => openBuilder(t);
+    card.querySelector(".dup").onclick = () => guard(() => duplicate(t));
+    card.querySelector(".use").onclick = () => openClass(t);
+    const del = card.querySelector(".del");
+    if (del) del.onclick = () => guard(() => remove(t));
+    list.appendChild(card);
+  }
+}
+
+function stepCount(t) {
+  return (t.blocks || []).reduce((n, b) => {
+    const rounds = b.block_type === "ROUNDS" || b.block_type === "INTERVAL" ? (b.rounds || 0) : 1;
+    return n + rounds * b.exercises.length;
+  }, 0);
+}
+
+async function duplicate(t) {
+  const name = await ask(I18N.t("ask.copyName"), I18N.t("ask.copySuffix", t.name));
+  if (!name) return;
+  const res = await api("POST", `/api/operator/templates/${encodeURIComponent(t.id)}/duplicate`, {
+    new_id: "t-" + Date.now(), name, owner_id: await device(),
+  });
+  TEMPLATES = res.templates;
+  renderList();
+  toast(I18N.t("toast.duplicated"));
+}
+
+async function remove(t) {
+  const reason = await ask(I18N.t("ask.deleteReason"));
+  if (!reason) return;
+  const res = await api("DELETE", `/api/operator/templates/${encodeURIComponent(t.id)}`, { reason });
+  TEMPLATES = res.templates;
+  renderList();
+  toast(I18N.t("toast.deleted"));
+}
+
+document.getElementById("search").oninput = renderList;
+document.getElementById("new-template").onclick = () => openBuilder({
+  id: "t-" + Date.now(), name: I18N.t("builder.newName"), category: "CUSTOM", source: "COACH",
+  version: 1, blocks: [emptyBlock()], description: "",
+});
+
+// ── Builder ────────────────────────────────────────────────────────────────────
+function emptyBlock() {
+  return { name: I18N.t("builder.blockName"), block_type: "SEQUENTIAL", rounds: null, duration: null, rest: null, exercises: [] };
+}
+
+function openBuilder(t) {
+  EDITING = JSON.parse(JSON.stringify(t));
+  if (!EDITING.blocks.length) EDITING.blocks.push(emptyBlock());
+  document.getElementById("t-name").value = EDITING.name;
+  document.getElementById("t-category").value = EDITING.category;
+  document.getElementById("t-minutes").value = EDITING.estimated_duration_minutes ?? "";
+  const readOnly = EDITING.source === "SYSTEM";
+  document.getElementById("t-readonly").classList.toggle("hidden", !readOnly);
+  document.getElementById("save").disabled = readOnly;
+  document.getElementById("save").className = readOnly
+    ? "bg-surface-container-high text-on-surface-variant px-5 py-2 rounded"
+    : "bg-primary text-on-primary font-semibold px-5 py-2 rounded";
+  renderBuilder();
+  show("builder");
+}
+
+function renderBuilder() {
+  const host = document.getElementById("blocks");
+  host.innerHTML = "";
+  const readOnly = EDITING.source === "SYSTEM";
+  EDITING.blocks.forEach((block, bi) => host.appendChild(blockCard(block, bi, readOnly)));
+}
+
+function blockCard(block, bi, readOnly) {
+  const repeats = block.block_type === "ROUNDS" || block.block_type === "INTERVAL";
+  const el = document.createElement("section");
+  el.className = "bg-surface-container rounded-lg border border-outline-variant p-4";
+  el.innerHTML = `
+    <div class="flex flex-wrap gap-2 items-end mb-3">
+      <input class="b-name bg-surface-container-high border border-outline-variant rounded px-3 py-2 text-lg flex-1 min-w-[10rem]" value="${escape(block.name)}"/>
+      <select class="b-type bg-surface-container-high border border-outline-variant rounded px-3 py-2">
+        ${["SEQUENTIAL","ROUNDS","AMRAP","INTERVAL","ZONE_ROTATION"].map((k) =>
+          `<option value="${k}" ${k === block.block_type ? "selected" : ""}>${escape(I18N.t("blk." + k))}</option>`).join("")}
+      </select>
+      <label class="b-rounds-wrap ${repeats ? "" : "hidden"}">
+        <span class="block text-xs text-on-surface-variant mb-1">${escape(I18N.t("builder.rounds"))}</span>
+        <input class="b-rounds w-20 bg-surface-container-high border border-outline-variant rounded px-3 py-2"
+               type="number" min="1" value="${block.rounds ?? 1}"/>
+      </label>
+      <button class="b-del border border-error text-error rounded px-3 py-2">${escape(I18N.t("builder.removeBlock"))}</button>
+    </div>
+    <ol class="b-list space-y-2"></ol>
+    <button class="b-add mt-3 border border-outline rounded px-4 py-2">${escape(I18N.t("builder.addExercise"))}</button>`;
+
+  const list = el.querySelector(".b-list");
+  block.exercises.forEach((ex, ei) => list.appendChild(exerciseRow(block, bi, ex, ei, readOnly)));
+
+  el.querySelector(".b-name").oninput = (e) => (block.name = e.target.value);
+  el.querySelector(".b-type").onchange = (e) => {
+    block.block_type = e.target.value;
+    if ((block.block_type === "ROUNDS" || block.block_type === "INTERVAL") && !block.rounds) block.rounds = 3;
+    renderBuilder();
+  };
+  const rounds = el.querySelector(".b-rounds");
+  if (rounds) rounds.oninput = (e) => (block.rounds = Math.max(1, +e.target.value || 1));
+  el.querySelector(".b-del").onclick = () => { EDITING.blocks.splice(bi, 1); renderBuilder(); };
+  el.querySelector(".b-add").onclick = () => { block.exercises.push(defaultExercise()); renderBuilder(); };
+
+  if (readOnly) el.querySelectorAll("input, select, button").forEach((c) => (c.disabled = true));
+  return el;
+}
+
+/// The nine exercises are a fixed vocabulary, so their names live in the dictionary keyed by
+/// `Exercise.code`. `display_name` from the server is the fallback, and `station_key` is
+/// never shown or translated -- it is an identifier (ADR 0008).
+/// A course step carries the venue's station key -- "WALL BALLS" -- because that string is
+/// simultaneously a reader's registration and the live screen's pictogram slug (ADR 0008).
+/// It is an identifier, so it is translated here at the point of display and nowhere else.
+function stationName(key) {
+  const exercise = EXERCISES.find((e) => e.station_key === key);
+  return exercise ? exerciseName(exercise) : key;
+}
+
+function exerciseName(e) {
+  const key = "ex." + e.code;
+  const text = I18N.t(key);
+  return text === key ? e.display_name : text;
+}
+
+function defaultExercise() {
+  const e = EXERCISES[0];
+  return {
+    exercise_code: e.code,
+    target: { target_type: e.default_target_type, value: 100, unit: UNITS_FOR[e.default_target_type][0] },
+    weight: null, time_limit: null, notes: null,
+  };
+}
+
+// Reorder is HTML5 drag and drop — no library, and it is what a tablet's long-press
+// already does.
+function exerciseRow(block, bi, ex, ei, readOnly) {
+  const exercise = EXERCISES.find((e) => e.code === ex.exercise_code);
+  const types = exercise ? exercise.supported_target_types : [ex.target.target_type];
+  const li = document.createElement("li");
+  li.className = "bg-surface-container-high rounded border border-outline-variant p-2 grid grid-cols-[auto_1fr_auto] sm:flex sm:flex-wrap gap-2 items-center";
+  li.draggable = !readOnly;
+  li.dataset.block = bi;
+  li.dataset.index = ei;
+  li.innerHTML = `
+    <span class="text-on-surface-variant px-1 select-none">≡</span>
+    <select class="x-code bg-surface-container border border-outline-variant rounded px-2 py-2 sm:flex-1 sm:min-w-[9rem]">
+      ${EXERCISES.map((e) => `<option value="${e.code}" ${e.code === ex.exercise_code ? "selected" : ""}>${escape(exerciseName(e))}</option>`).join("")}
+    </select>
+    <input class="x-value col-start-2 w-full sm:w-24 bg-surface-container border border-outline-variant rounded px-2 py-2 font-mono" type="number" min="1" value="${ex.target.value}"/>
+    <select class="x-unit col-start-3 bg-surface-container border border-outline-variant rounded px-2 py-2 font-mono">
+      ${types.flatMap((t) => UNITS_FOR[t]).map((u) => `<option value="${u}" ${u === ex.target.unit ? "selected" : ""}>${escape(I18N.t("unit." + u))}</option>`).join("")}
+    </select>
+    <input class="x-weight col-start-2 w-full sm:w-24 bg-surface-container border border-outline-variant rounded px-2 py-2 font-mono"
+           type="number" min="0" step="0.5" placeholder="kg" value="${ex.weight ? ex.weight.grams / 1000 : ""}"/>
+    <button class="x-del col-start-3 text-error px-3 py-2">✕</button>`;
+
+  li.querySelector(".x-code").onchange = (e) => {
+    ex.exercise_code = e.target.value;
+    const picked = EXERCISES.find((x) => x.code === ex.exercise_code);
+    if (!picked.supported_target_types.includes(ex.target.target_type)) {
+      ex.target.target_type = picked.default_target_type;
+      ex.target.unit = UNITS_FOR[ex.target.target_type][0];
+    }
+    renderBuilder();
+  };
+  li.querySelector(".x-value").oninput = (e) => (ex.target.value = Math.max(1, +e.target.value || 1));
+  li.querySelector(".x-unit").onchange = (e) => {
+    ex.target.unit = e.target.value;
+    // The unit decides the target type, which is what keeps RUN + REPS unrepresentable.
+    ex.target.target_type = Object.keys(UNITS_FOR).find((t) => UNITS_FOR[t].includes(e.target.value));
+  };
+  li.querySelector(".x-weight").oninput = (e) => {
+    const kg = parseFloat(e.target.value);
+    ex.weight = isNaN(kg) ? null : { grams: Math.round(kg * 1000), unit: "KILOGRAM" };
+  };
+  li.querySelector(".x-del").onclick = () => { block.exercises.splice(ei, 1); renderBuilder(); };
+
+  if (readOnly) li.querySelectorAll("input, select, button").forEach((c) => (c.disabled = true));
+
+  li.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ bi, ei }));
+    li.classList.add("dragging");
+  });
+  li.addEventListener("dragend", () => li.classList.remove("dragging"));
+  li.addEventListener("dragover", (e) => { e.preventDefault(); li.classList.add("drag-over"); });
+  li.addEventListener("dragleave", () => li.classList.remove("drag-over"));
+  li.addEventListener("drop", (e) => {
+    e.preventDefault();
+    li.classList.remove("drag-over");
+    const from = JSON.parse(e.dataTransfer.getData("text/plain"));
+    const moved = EDITING.blocks[from.bi].exercises.splice(from.ei, 1)[0];
+    EDITING.blocks[bi].exercises.splice(ei, 0, moved);
+    renderBuilder();
+  });
+  return li;
+}
+
+document.getElementById("add-block").onclick = () => { EDITING.blocks.push(emptyBlock()); renderBuilder(); };
+
+async function collect() {
+  const minutes = document.getElementById("t-minutes").value;
+  return {
+    id: EDITING.id,
+    name: document.getElementById("t-name").value.trim() || "Untitled",
+    description: EDITING.description || null,
+    category: document.getElementById("t-category").value,
+    owner_id: EDITING.owner_id || (await device()),
+    difficulty: EDITING.difficulty || null,
+    estimated_duration_minutes: minutes === "" ? null : +minutes,
+    blocks: EDITING.blocks,
+  };
+}
+
+document.getElementById("save").onclick = () => guard(async () => {
+  const res = await api("PUT", `/api/operator/templates/${encodeURIComponent(EDITING.id)}`, await collect());
+  TEMPLATES = res.templates;
+  EDITING = TEMPLATES.find((t) => t.id === EDITING.id) || EDITING;
+  renderList();
+  toast(I18N.t("toast.saved", EDITING.version));
+});
+
+document.getElementById("save-as").onclick = () => guard(async () => {
+  const current = await collect();
+  const name = await ask(I18N.t("ask.saveAs"), I18N.t("ask.copySuffix", current.name));
+  if (!name) return;
+  const body = { ...current, id: "t-" + Date.now(), name };
+  const res = await api("POST", "/api/operator/templates", body);
+  TEMPLATES = res.templates;
+  openBuilder(TEMPLATES.find((t) => t.id === body.id));
+  renderList();
+  toast(I18N.t("toast.savedNew"));
+});
+
+document.getElementById("use-template").onclick = () => openClass(EDITING);
+
+// ── Create class ───────────────────────────────────────────────────────────────
+function openClass(t) {
+  CLASS_FOR = t;
+  document.getElementById("c-template").textContent = t.name;
+  // The chosen language, not the browser's: a Simplified screen should not suggest 週六.
+  document.getElementById("c-name").value =
+    new Date().toLocaleDateString(I18N.lang, { weekday: "short" }).toUpperCase() + " " + t.name;
+  show("class");
+  refreshSession();
+}
+
+document.getElementById("c-finish").onchange = (e) =>
+  document.getElementById("c-limit-wrap").classList.toggle("hidden", e.target.value !== "CLASS_DURATION");
+
+function finishPolicy() {
+  const kind = document.getElementById("c-finish").value;
+  if (kind !== "CLASS_DURATION") return { kind };
+  return { kind, limit: Math.max(1, +document.getElementById("c-limit").value || 60) * 60000 };
+}
+
+document.getElementById("create-class").onclick = () => guard(async () => {
+  if (!CLASS_FOR) return toast(I18N.t("toast.pickWorkout"), true);
+  await api("POST", "/api/operator/class", {
+    template_id: CLASS_FOR.id,
+    session_id: "class-" + Date.now(),
+    name: document.getElementById("c-name").value.trim() || CLASS_FOR.name,
+    coach_id: document.getElementById("c-coach").value.trim() || null,
+    finish_policy: finishPolicy(),
+  });
+  await refreshSession();
+  toast(I18N.t("toast.classCreated"));
+});
+
+document.querySelectorAll(".cmd").forEach((b) => b.onclick = () => guard(async () => {
+  const body = {};
+  if (b.dataset.cmd === "cancel") {
+    const reason = await ask(I18N.t("ask.cancelReason"));
+    if (!reason) return;
+    body.reason = reason;
+  }
+  await api("POST", "/api/operator/session/" + b.dataset.cmd, body);
+  await refreshSession();
+}));
+
+async function refreshSession() {
+  SESSION = await api("GET", "/api/session");
+  const live = document.getElementById("class-live");
+  live.classList.remove("hidden");
+  document.getElementById("c-status").textContent = I18N.t("st." + SESSION.session.status);
+  document.getElementById("c-elapsed").textContent = clock(SESSION.class_elapsed_ms);
+
+  const steps = document.getElementById("c-steps");
+  steps.innerHTML = "";
+  const course = SESSION.config.course;
+  (course ? course.steps : []).forEach((step, i) => {
+    const li = document.createElement("li");
+    li.className = "flex items-center gap-2";
+    li.innerHTML = `<span class="text-on-surface-variant w-6 text-right">${i + 1}</span>
+      <span class="flex-1">${escape(stationName(step.station))}</span>
+      <input class="w-24 bg-surface-container-high border border-outline-variant rounded px-2 py-1 font-mono text-right"
+             type="number" min="1" value="${targetValue(step.target)}" ${SESSION.config_editable ? "" : "disabled"}/>
+      <span class="w-16 text-on-surface-variant">${escape(targetUnit(step.target))}</span>`;
+    li.querySelector("input").onchange = (e) => guard(() => retarget(i, +e.target.value));
+    steps.appendChild(li);
+  });
+}
+
+// A session-only change: it rewrites this class's snapshot and never the workout it came
+// from. The server refuses it once the class is running.
+async function retarget(index, value) {
+  const course = JSON.parse(JSON.stringify(SESSION.config.course));
+  const target = course.steps[index].target;
+  if (!target) return;
+  if (target.kind === "DISTANCE") target.meters = value;
+  else if (target.kind === "REPETITIONS") target.count = value;
+  else if (target.kind === "CALORIES") target.count = value;
+  else if (target.kind === "DURATION") target.duration = value * 1000;
+  await api("PUT", "/api/operator/config", { course, finish_policy: SESSION.config.finish_policy });
+  await refreshSession();
+  toast(I18N.t("toast.retargeted"));
+}
+
+function targetValue(t) {
+  if (!t) return "";
+  if (t.kind === "DISTANCE") return t.meters;
+  if (t.kind === "DURATION") return Math.round(t.duration / 1000);
+  return t.count;
+}
+function targetUnit(t) {
+  if (!t) return "";
+  const unit = { DISTANCE: "METER", REPETITIONS: "REPS", CALORIES: "CALORIE", DURATION: "SECOND" }[t.kind];
+  return unit ? I18N.t("unit." + unit) : "";
+}
+function clock(ms) {
+  if (ms == null) return "";
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return String((s / 60) | 0).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+function escape(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+// ── Freshness (ADR 0001 D5) ────────────────────────────────────────────────────
+// A screen that has stopped updating and a gym with nothing happening look identical
+// without this, so the header always says how old the newest event is.
+function showFreshness(f) {
+  const el = document.getElementById("freshness");
+  if (!f) return;
+  el.textContent = f.last_event_age_ms == null
+    ? I18N.t("freshness.none")
+    : I18N.t("freshness.ago", clock(f.last_event_age_ms));
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+I18N.apply();
+I18N.switcher(document.getElementById("lang"));
+
+guard(async () => {
+  const [ex, tpl] = await Promise.all([
+    api("GET", "/api/exercises"),
+    api("GET", "/api/workout-templates"),
+  ]);
+  EXERCISES = ex.exercises.filter((e) => e.enabled);
+  TEMPLATES = tpl.templates;
+  showFreshness(tpl.freshness);
+  renderList();
+  show("list");
+  setInterval(() => guard(async () => {
+    const s = await api("GET", "/api/session");
+    showFreshness(s.freshness);
+    if (!document.getElementById("view-class").classList.contains("hidden")) await refreshSession();
+  }), 2000);
+});
+</script>
+</body></html>

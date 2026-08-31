@@ -1,0 +1,41 @@
+# The projector: a Wayland kiosk compositor with one browser in it, and nothing else
+# (ADR 0009). No desktop environment, no display manager, no login screen.
+
+[Unit]
+Description=HYROX live screen
+After=hyrox-hub.service systemd-user-sessions.service
+Wants=hyrox-hub.service
+# One screen per machine; do not race a second instance onto the same DRM device.
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=kiosk
+Group=kiosk
+SupplementaryGroups=video input render seat
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+# Wait for the hub to actually answer, rather than sleeping a guessed number of seconds.
+# Chromium on a dead port shows its own error page, and on a projector that is what the
+# venue sees until somebody notices.
+ExecStartPre=/bin/sh -c 'until curl -sf -o /dev/null "$HYROX_SCREEN_URL"; do sleep 0.2; done'
+EnvironmentFile=/etc/hyrox/hub.env
+ExecStart=/usr/bin/cage -- /usr/bin/google-chrome-stable \
+    --kiosk \
+    --incognito \
+    --noerrdialogs \
+    --disable-infobars \
+    --disable-session-crashed-bubble \
+    --disable-features=Translate \
+    --autoplay-policy=no-user-gesture-required \
+    --check-for-update-interval=31536000 \
+    "$HYROX_SCREEN_URL"
+
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

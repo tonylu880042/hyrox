@@ -7,8 +7,8 @@
 
 use crate::devices::DeviceHealth;
 use domain::{
-    AthleteState, BindingLedger, DeviceId, Instant, ReaderRegistry, Session, SessionConfig,
-    TagId,
+    AthleteState, BindingLedger, ClassClock, DeviceId, Instant, ReaderRegistry, Session,
+    SessionConfig, TagId,
 };
 
 pub struct LiveSession {
@@ -72,9 +72,15 @@ impl LiveSession {
     }
 
     /// How long the class has been running, which is what a duration-based finish rule
-    /// compares against (CLAUDE.md 12).
+    /// compares against (CLAUDE.md 12). Frozen while the session is paused (ADR 0008).
     pub fn class_elapsed(&self, now: Instant) -> domain::Duration {
-        now.since(self.class_start)
+        self.class_clock().elapsed(now)
+    }
+
+    /// The class clock: the stored origin plus the session's own pause accounting. Derived
+    /// rather than stored, so there is one place a pause can be recorded -- the session.
+    pub fn class_clock(&self) -> ClassClock {
+        self.session.clock(self.class_start)
     }
 
     /// Tags waiting to be claimed on `/checkin`, oldest first.

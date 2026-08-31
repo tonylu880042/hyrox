@@ -1,0 +1,45 @@
+# The Central Hub service (ADR 0009).
+#
+# It owns the database, the MQTT ingestion path and the HTTP surface. Nothing else may
+# touch the database (CLAUDE.md 6): screens and consoles are clients over HTTP.
+
+[Unit]
+Description=HYROX Central Hub
+Documentation=https://github.com/your-org/hyrox
+# Soft ordering only. The hub retries the broker forever and serves /live meanwhile, so a
+# slow Mosquitto delays events, never the screen.
+After=network.target mosquitto.service
+Wants=mosquitto.service
+
+[Service]
+Type=exec
+User=hyrox
+Group=hyrox
+# Creates and owns /var/lib/hyrox on first start; no postinst chown to get wrong.
+StateDirectory=hyrox
+EnvironmentFile=/etc/hyrox/hub.env
+ExecStart=/usr/bin/hyrox-hub
+
+# Always come back. A venue has nobody to restart this, and the design already assumes a
+# restart is cheap: the session is rebuilt by replaying the interpreted log (CLAUDE.md 21),
+# and events published while the hub was down are delivered afterwards by the broker's
+# queue for this client id (CLAUDE.md 15).
+Restart=always
+RestartSec=1
+
+# systemd sends SIGTERM; the hub stops serving and exits. Nothing needs flushing -- every
+# event is durable before it is acknowledged (ADR 0002), and synchronous=FULL makes that
+# survive a pulled plug too (ADR 0009 §7).
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

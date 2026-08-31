@@ -52,7 +52,8 @@ fn readers() -> ReaderRegistry {
 /// already on the wrist when the reads arrive.
 fn session(bound: bool) -> LiveSession {
     let mut s = Session::new_draft("s1", "THU 19:00", SessionMode::Training);
-    s.arm().expect("draft arms");
+    s.mark_ready().expect("draft arms");
+    s.start().expect("draft arms");
 
     let mut bindings = BindingLedger::new();
     if bound {

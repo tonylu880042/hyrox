@@ -90,7 +90,8 @@ async fn per_station_targets_survive_the_round_trip() {
 async fn an_armed_session_cannot_be_reconfigured() {
     let store = FakeStore::new();
     let mut state = draft();
-    state.session.arm().expect("arm");
+    state.session.mark_ready().expect("arm");
+    state.session.start().expect("arm");
 
     let err = configure(&mut state, &store, Some(intervals()), FinishPolicy::CoachDecides, &tablet())
         .await
@@ -98,7 +99,7 @@ async fn an_armed_session_cannot_be_reconfigured() {
 
     assert!(matches!(
         err,
-        OperatorError::NotEditable { status: SessionStatus::Armed }
+        OperatorError::NotEditable { status: SessionStatus::Running }
     ));
     // The class keeps the rule it was armed under (ADR 0004): nothing was written.
     assert!(store.saved_configs().is_empty());
@@ -109,8 +110,9 @@ async fn an_armed_session_cannot_be_reconfigured() {
 async fn a_closed_session_cannot_be_reconfigured() {
     let store = FakeStore::new();
     let mut state = draft();
-    state.session.arm().expect("arm");
-    state.session.close().expect("close");
+    state.session.mark_ready().expect("arm");
+    state.session.start().expect("arm");
+    state.session.complete().expect("complete");
 
     let err = configure(&mut state, &store, None, FinishPolicy::CoachDecides, &tablet())
         .await
@@ -118,7 +120,7 @@ async fn a_closed_session_cannot_be_reconfigured() {
 
     assert!(matches!(
         err,
-        OperatorError::NotEditable { status: SessionStatus::Closed }
+        OperatorError::NotEditable { status: SessionStatus::Completed }
     ));
 }
 

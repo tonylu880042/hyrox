@@ -1,0 +1,28 @@
+# When the nightly window runs.
+#
+# The schedule is deliberately a placeholder: it belongs to the venue's opening hours and is
+# agreed per customer. Override it without touching this file:
+#
+#     systemctl edit hyrox-maintenance.timer
+#     # [Timer]
+#     # OnCalendar=
+#     # OnCalendar=*-*-* 23:30:00
+#
+# An empty `OnCalendar=` first is required -- systemd *adds* schedules otherwise, and you
+# would get both.
+
+[Unit]
+Description=HYROX nightly update and shutdown
+
+[Timer]
+OnCalendar=*-*-* 23:30:00
+# Spreads a fleet's requests over ten minutes so twenty venues do not hit S3 at once.
+RandomizedDelaySec=600
+
+# MUST stay false. `Persistent=true` runs a missed timer at the next boot -- which for a
+# job that ends in `poweroff` means the machine shuts itself down moments after somebody
+# switches it on in the morning.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

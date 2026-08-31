@@ -9,7 +9,7 @@
 //! refused belongs to `domain` and `application`; deciding *how to say so over HTTP* is a
 //! delivery concern and belongs here (CLAUDE.md 3, 29).
 
-use application::OperatorError;
+use application::{OperatorError, TemplateError};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -128,6 +128,61 @@ impl<E: Display> From<OperatorError<E>> for ApiError {
             ),
             OperatorError::Storage(e) => storage(e),
         }
+    }
+}
+
+/// The workout library's refusals (ADR 0008). Same principle as above: a rule saying no is
+/// an answer, and only a failed store write is a 500.
+impl<E: Display> From<TemplateError<E>> for ApiError {
+    fn from(error: TemplateError<E>) -> Self {
+        match error {
+            // 409, not 403: there is no authorisation model here (ADR 0001 D1). A system
+            // template is read-only by its nature, not by who is asking.
+            TemplateError::NotEditable => ApiError::new(
+                StatusCode::CONFLICT,
+                "TEMPLATE_NOT_EDITABLE",
+                "a system template cannot be edited or deleted; duplicate it first \
+                 (workout brief §4)",
+            ),
+            TemplateError::UnknownTemplate(id) => {
+                ApiError::not_found("UNKNOWN_TEMPLATE", format!("no template with id {id:?}"))
+            }
+            // 422: the request is well formed and the template is real, it just does not
+            // describe a class anyone can walk.
+            TemplateError::Compile(e) => ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "TEMPLATE_NOT_RUNNABLE",
+                compile_message(&e),
+            ),
+            TemplateError::ClassInProgress => ApiError::new(
+                StatusCode::CONFLICT,
+                "CLASS_IN_PROGRESS",
+                "a class is already running; complete or cancel it before creating another",
+            ),
+            TemplateError::ReasonRequired => ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "REASON_REQUIRED",
+                "this action changes recorded data, so it needs a reason (CLAUDE.md 20)",
+            ),
+            TemplateError::Storage(e) => storage(e),
+        }
+    }
+}
+
+fn compile_message(error: &domain::CompileError) -> String {
+    use domain::CompileError::*;
+    match error {
+        Empty => "this template prescribes no work, so there is nothing to run".to_string(),
+        UnknownExercise { code } => {
+            format!("{code:?} is not an exercise this hub knows about")
+        }
+        RoundsMissing { block } => {
+            format!("block {block:?} repeats, but says nothing about how many rounds")
+        }
+        BlockTypeNotRunnable { block, block_type } => format!(
+            "block {block:?} is a {block_type:?}, which has no fixed list of steps and \
+             cannot be timed as a course yet"
+        ),
     }
 }
 

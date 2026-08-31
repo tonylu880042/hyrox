@@ -1,0 +1,82 @@
+#cloud-config
+# Ubuntu Server 24.04 LTS autoinstall for a HYROX appliance (ADR 0009 §3).
+#
+# The production line's equipment, not a document: put this and an empty `meta-data` file in
+# a directory named `nocloud` on a USB stick alongside the Ubuntu Server ISO, boot, and walk
+# away. Every machine comes out identical, which is the actual problem an appliance has --
+# not "is the installer friendly".
+#
+#   HYROX_APT_BUCKET below must match packaging/publish-s3.sh.
+#
+# NOT YET VALIDATED ON HARDWARE. Written from the documented behaviour of subiquity, cage
+# and Chrome; the kiosk half in particular (DRM, seat access) needs a real machine and a
+# real projector before any of it ships.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard: { layout: us }
+
+  identity:
+    hostname: hyrox-hub
+    username: service
+    # `openssl passwd -6` -- replace before the first build.
+    password: "$6$REPLACE$THIS$WITH$A$REAL$HASH"
+
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - "ssh-ed25519 AAAA...REPLACE... ops@example.com"
+
+  storage:
+    layout: { name: direct }
+
+  # Ubuntu Server, deliberately not Desktop: no display manager, no desktop environment,
+  # no snap-delivered browser. `cage` is the entire graphical stack.
+  packages:
+    - mosquitto
+    - mosquitto-clients
+    - cage
+    - curl
+    - jq
+
+  late-commands:
+    # --- Google Chrome from Google's own repo, not snap ---------------------------------
+    #
+    # Ubuntu's `chromium` is snap-only, and snap refreshes itself in the background. A
+    # browser version changing under a machine whose behaviour must stay identical is not
+    # acceptable on an appliance (ADR 0009 §3).
+    - curtin in-target -- bash -c 'curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg'
+    - curtin in-target -- bash -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list'
+
+    # --- our own repository on S3 -------------------------------------------------------
+    #
+    # Public-read bucket. The trust comes from the signature on InRelease, not from the
+    # transport (see packaging/publish-s3.sh).
+    - curtin in-target -- bash -c 'curl -fsSL https://hyrox-apt.s3.amazonaws.com/hyrox.gpg -o /usr/share/keyrings/hyrox.gpg'
+    - curtin in-target -- bash -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/hyrox.gpg] https://hyrox-apt.s3.amazonaws.com stable main" > /etc/apt/sources.list.d/hyrox.list'
+
+    - curtin in-target -- apt-get update
+    - curtin in-target -- apt-get install -y hyrox-hub
+
+    # --- unattended-upgrades: our origin only, and never reboot -------------------------
+    #
+    # Two separate dangers. An upstream package moving under a venue is one; a machine
+    # rebooting itself mid-class is the worse one. Our own updates go through the nightly
+    # window instead (hyrox-maintenance.timer), which asks the hub first.
+    - |
+      curtin in-target -- bash -c 'cat > /etc/apt/apt.conf.d/51hyrox <<EOF
+      Unattended-Upgrade::Origins-Pattern { "origin=HYROX"; };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      APT::Periodic::Unattended-Upgrade "0";
+      EOF'
+
+    # --- boot time ----------------------------------------------------------------------
+    #
+    # systemd-networkd-wait-online routinely blocks boot for 30-120 seconds waiting for an
+    # interface that is already good enough. The hub retries the broker forever and serves
+    # the screen meanwhile, so nothing here needs the network to be "ready" first.
+    - curtin in-target -- systemctl disable systemd-networkd-wait-online.service
+    - curtin in-target -- systemctl set-default graphical.target
+
+  shutdown: poweroff

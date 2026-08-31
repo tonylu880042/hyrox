@@ -19,8 +19,9 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use contract::CommitOutcome;
 use domain::{
-    AthleteState, BindingLedger, Instant, Interpreted, ReaderRegistration, ReaderRegistry,
-    Session, SessionConfig, SessionMode, TagBinding,
+    AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, Interpreted,
+    PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
+    StationMap, TagBinding, WorkoutTemplate,
 };
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
@@ -59,6 +60,9 @@ struct Inner {
     readers: Vec<ReaderRegistration>,
     bindings: Vec<TagBinding>,
     athletes: Vec<AthleteState>,
+    templates: Vec<WorkoutTemplate>,
+    exercises: Vec<Exercise>,
+    stations: Vec<PhysicalStation>,
 }
 
 #[derive(Default)]
@@ -67,8 +71,27 @@ pub struct FakeStore {
 }
 
 impl FakeStore {
+    /// Puts a system template in the store without going through a use case, so a test can
+    /// start from a library that already exists.
+    pub fn seed_system_template(&self, id: &str, name: &str) {
+        use domain::{Target, TargetType, Unit, WorkoutBlock, WorkoutExercise};
+        let template = WorkoutTemplate::system(id, name, domain::TemplateCategory::Engine)
+            .with_block(WorkoutBlock::sequential("Main").with_exercises(vec![
+                WorkoutExercise::new(
+                    "RUN",
+                    Target { target_type: TargetType::Distance, value: 800, unit: Unit::Meter },
+                ),
+            ]));
+        self.inner.lock().unwrap().templates.push(template);
+    }
+
+    /// A store as a hub has it after first-run seeding: the exercise library is present,
+    /// because nothing can compile a template without it.
     pub fn new() -> Self {
-        Self::default()
+        let store = Self::default();
+        store.inner.lock().unwrap().exercises =
+            ExerciseLibrary::preset().iter().cloned().collect();
+        store
     }
 
     pub fn with_athletes(self, athletes: Vec<AthleteState>) -> Self {
@@ -337,6 +360,64 @@ impl HubStore for FakeStore {
         self.inner.lock().unwrap().audits.push(entry.clone());
         Ok(())
     }
+    // --- the workout library (ADR 0008) --------------------------------------------------
+
+    async fn save_template(&self, template: &WorkoutTemplate) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.templates.iter_mut().find(|t| t.id == template.id) {
+            Some(existing) => *existing = template.clone(),
+            None => inner.templates.push(template.clone()),
+        }
+        Ok(())
+    }
+
+    async fn template(&self, template_id: &str) -> Result<Option<WorkoutTemplate>, FakeError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .templates
+            .iter()
+            .find(|t| t.id == template_id)
+            .cloned())
+    }
+
+    async fn templates(&self) -> Result<Vec<WorkoutTemplate>, FakeError> {
+        Ok(self.inner.lock().unwrap().templates.clone())
+    }
+
+    async fn delete_template(&self, template_id: &str) -> Result<bool, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let before = inner.templates.len();
+        inner.templates.retain(|t| t.id != template_id);
+        Ok(inner.templates.len() < before)
+    }
+
+    async fn save_exercise(&self, exercise: &Exercise) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.exercises.iter_mut().find(|e| e.code == exercise.code) {
+            Some(existing) => *existing = exercise.clone(),
+            None => inner.exercises.push(exercise.clone()),
+        }
+        Ok(())
+    }
+
+    async fn exercises(&self) -> Result<ExerciseLibrary, FakeError> {
+        Ok(ExerciseLibrary::new(self.inner.lock().unwrap().exercises.clone()))
+    }
+
+    async fn save_station(&self, station: &PhysicalStation) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.stations.iter_mut().find(|s| s.id == station.id) {
+            Some(existing) => *existing = station.clone(),
+            None => inner.stations.push(station.clone()),
+        }
+        Ok(())
+    }
+
+    async fn stations(&self) -> Result<StationMap, FakeError> {
+        Ok(StationMap::new(self.inner.lock().unwrap().stations.clone()))
+    }
 }
 
 /// A DRAFT training session with two athletes on the roster.
@@ -352,22 +433,24 @@ pub fn draft_session() -> LiveSession {
     ])
 }
 
-pub fn armed_session() -> LiveSession {
+/// A class that is running: DRAFT -> READY -> RUNNING (ADR 0008).
+pub fn running_session() -> LiveSession {
     let mut state = draft_session();
-    state.session.arm().expect("arm");
+    state.session.mark_ready().expect("ready");
+    state.session.start().expect("start");
     state
 }
 
 /// A router over the given session and store, on a clock the test controls.
 pub fn hub(state: LiveSession, store: Arc<FakeStore>) -> (Router, Arc<FakeStore>) {
-    let hub = Hub::new(state, Arc::clone(&store), Arc::new(FixedClock(NOW)), 250, 16);
+    let hub = Hub::new(state, Arc::clone(&store), Arc::new(FixedClock(NOW)), 250, 16, "test");
     (api::router(hub), store)
 }
 
-/// The common case: an armed session and an empty store.
-pub fn armed() -> (Router, Arc<FakeStore>) {
+/// The common case: a running class and a freshly seeded store.
+pub fn running() -> (Router, Arc<FakeStore>) {
     let store = Arc::new(FakeStore::new());
-    hub(armed_session(), store)
+    hub(running_session(), store)
 }
 
 pub fn draft() -> (Router, Arc<FakeStore>) {
@@ -405,6 +488,10 @@ pub fn post(path: &str, device: &str, body: serde_json::Value) -> Request<Body> 
 
 pub fn put(path: &str, device: &str, body: serde_json::Value) -> Request<Body> {
     write("PUT", path, Some(device), body)
+}
+
+pub fn del(path: &str, device: &str, body: serde_json::Value) -> Request<Body> {
+    write("DELETE", path, Some(device), body)
 }
 
 /// A write with no identity at all. Must be refused, never defaulted (ADR 0001 D1).
