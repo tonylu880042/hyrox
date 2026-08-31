@@ -28,7 +28,7 @@ async fn ingest(store: &Store) -> (Session, AthleteState) {
     session.mark_ready().unwrap();
     session.start().unwrap();
     store.save_session(&session, at(0)).await.unwrap();
-    store.save_athlete("s1", "a1", "CHEN YU-TING", 1).await.unwrap();
+    store.save_athlete("s1", "a1", "CHEN YU-TING", 1, None).await.unwrap();
 
     let mut athlete = AthleteState::ready("a1", "CHEN YU-TING");
     let script = [
@@ -126,7 +126,7 @@ async fn an_unknown_reader_exception_survives_a_restart() {
     session.mark_ready().unwrap();
     session.start().unwrap();
     store.save_session(&session, at(0)).await.unwrap();
-    store.save_athlete("s1", "a1", "CHEN YU-TING", 1).await.unwrap();
+    store.save_athlete("s1", "a1", "CHEN YU-TING", 1, None).await.unwrap();
 
     let event = Interpreted::Exception { reason: ExceptionReason::UnknownReader, at: at(1_000) };
     store.save_interpreted("s1", "a1", None, &event).await.unwrap();

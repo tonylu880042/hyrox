@@ -90,15 +90,20 @@ pub async fn resume_or_start<S: HubStore>(
     store.save_session_config(&plan.config).await?;
 
     let mut athletes = Vec::with_capacity(plan.roster.len());
+    let mut bibs = Vec::with_capacity(plan.roster.len());
     for (i, entry) in plan.roster.iter().enumerate() {
         store
-            .save_athlete(&session.id, &entry.athlete_id, &entry.display_name, i as i64 + 1)
+            .save_athlete(&session.id, &entry.athlete_id, &entry.display_name, i as i64 + 1, None)
             .await?;
         athletes.push(AthleteState::ready(&entry.athlete_id, &entry.display_name));
+        bibs.push((entry.athlete_id.clone(), i as i64 + 1));
     }
 
     let mut state =
         LiveSession::new(session, plan.config, plan.class_start).with_athletes(athletes);
+    for (athlete_id, bib) in bibs {
+        state.note_bib(&athlete_id, bib);
+    }
     // A new class in a venue that already has readers and bands should see them.
     load_venue(store, &mut state).await?;
     Ok((state, Recovery::Started))

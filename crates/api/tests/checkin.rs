@@ -174,3 +174,79 @@ async fn a_swapped_band_closes_the_old_binding_and_keeps_it() {
     assert_eq!(audit.before.as_deref(), Some("E280117000001234"));
     assert_eq!(audit.after.as_deref(), Some("E28011700000FFFF"));
 }
+
+// --- entrants (ADR 0010) --------------------------------------------------------------------
+
+/// The change the competition case turns on: somebody the gym has never seen gets onto the
+/// roster with a name and nothing else.
+#[tokio::test]
+async fn a_walk_in_is_entered_with_only_a_name() {
+    let (router, store) = running();
+
+    let (status, body) = call(
+        &router,
+        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "陳小明" })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["athlete_id"].as_str().expect("an id").starts_with("w-"));
+    let saved = store.saved_athletes().pop().expect("a roster row");
+    assert_eq!(saved.display_name, "陳小明");
+    assert_eq!(saved.member_id, None, "no member reference is the record, not a gap");
+}
+
+#[tokio::test]
+async fn an_entrant_may_be_given_a_printed_bib() {
+    let (router, store) = running();
+
+    let (status, _) = call(
+        &router,
+        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "A", "bib": 42 })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(store.saved_athletes().pop().expect("a row").bib, 42);
+}
+
+#[tokio::test]
+async fn a_bib_already_in_use_is_refused() {
+    let (router, _) = running();
+    call(&router, post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "A", "bib": 7 }))).await;
+
+    let (status, body) = call(
+        &router,
+        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "B", "bib": 7 })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "BIB_TAKEN");
+}
+
+#[tokio::test]
+async fn an_entrant_with_a_blank_name_is_refused() {
+    let (router, _) = running();
+
+    let (status, body) = call(
+        &router,
+        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "   " })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "NAME_REQUIRED");
+}
+
+/// The door tablet is still nowhere near the clock. ADR 0010 widened this surface by one
+/// verb and no more.
+#[tokio::test]
+async fn the_door_tablet_still_cannot_touch_the_session() {
+    let (router, _) = running();
+
+    for path in ["/api/checkin/session/start", "/api/checkin/session/complete"] {
+        let (status, _) = call(&router, post(path, "DOOR TABLET", json!({}))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path} must not exist");
+    }
+}

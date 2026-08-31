@@ -60,9 +60,20 @@ struct Inner {
     readers: Vec<ReaderRegistration>,
     bindings: Vec<TagBinding>,
     athletes: Vec<AthleteState>,
+    roster: Vec<SavedAthlete>,
     templates: Vec<WorkoutTemplate>,
     exercises: Vec<Exercise>,
     stations: Vec<PhysicalStation>,
+}
+
+/// One roster row exactly as the store was asked to write it, so a test can assert on the
+/// bib and the member reference (ADR 0010), not only on who is on the roster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedAthlete {
+    pub athlete_id: String,
+    pub display_name: String,
+    pub bib: i64,
+    pub member_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -130,6 +141,12 @@ impl FakeStore {
     }
 }
 
+impl FakeStore {
+    pub fn saved_athletes(&self) -> Vec<SavedAthlete> {
+        self.inner.lock().unwrap().roster.clone()
+    }
+}
+
 impl HubStore for FakeStore {
     type Error = FakeError;
 
@@ -164,13 +181,17 @@ impl HubStore for FakeStore {
         _session_id: &str,
         athlete_id: &str,
         display_name: &str,
-        _bib: i64,
+        bib: i64,
+        member_id: Option<&str>,
     ) -> Result<(), FakeError> {
-        self.inner
-            .lock()
-            .unwrap()
-            .athletes
-            .push(AthleteState::ready(athlete_id, display_name));
+        let mut inner = self.inner.lock().unwrap();
+        inner.athletes.push(AthleteState::ready(athlete_id, display_name));
+        inner.roster.push(SavedAthlete {
+            athlete_id: athlete_id.to_string(),
+            display_name: display_name.to_string(),
+            bib,
+            member_id: member_id.map(str::to_string),
+        });
         Ok(())
     }
 
@@ -283,6 +304,21 @@ impl HubStore for FakeStore {
             .collect();
         out.sort_by_key(|r| (r.detected_at, r.raw_event_id));
         Ok(out)
+    }
+
+    async fn athlete_bibs(&self, _session_id: &str) -> Result<Vec<(String, i64)>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        if inner.roster.is_empty() {
+            // A fixture that never went through `enter`: roster order is the bib, exactly
+            // as it was before the door could assign one.
+            return Ok(inner
+                .athletes
+                .iter()
+                .enumerate()
+                .map(|(i, a)| (a.athlete_id.clone(), i as i64 + 1))
+                .collect());
+        }
+        Ok(inner.roster.iter().map(|a| (a.athlete_id.clone(), a.bib)).collect())
     }
 
     async fn rebuild_athletes(&self, _session_id: &str) -> Result<Vec<AthleteState>, FakeError> {

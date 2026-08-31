@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-Hant"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX</title>
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/app.css">
+<script src="/i18n.js"></script>
+<style>
+  body { font-family: "Archivo Narrow", "PingFang TC", "Noto Sans TC", system-ui, sans-serif; }
+  h1, h2, .display { font-family: "Bebas Neue", "PingFang TC", "Noto Sans TC", sans-serif; letter-spacing: .04em; }
+  .num { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen">
+
+<header class="border-b border-outline-variant bg-surface-container-lowest">
+  <div class="max-w-5xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+    <h1 class="text-2xl sm:text-3xl text-primary">HYROX</h1>
+    <span class="text-lg" data-i18n="result.title"></span>
+    <span id="session" class="text-lg text-on-surface-variant"></span>
+    <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant">
+      <span id="lang" class="flex gap-1"></span>
+      <a href="/leaderboard" class="underline" data-i18n="board.title"></a>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto p-4">
+  <p id="unranked" class="hidden mb-4 text-sm bg-surface-container border border-outline-variant rounded p-3">
+    <b data-i18n="board.unranked"></b> <span data-i18n="board.unrankedWhy"></span>
+  </p>
+  <p id="empty" class="hidden text-on-surface-variant" data-i18n="result.noResults"></p>
+  <div id="rows" class="flex flex-col gap-3"></div>
+</main>
+
+<script>
+"use strict";
+
+function clock(ms, tenths) {
+  if (ms == null) return "--:--";
+  const t = Math.floor(ms / 100) % 10;
+  const s = Math.floor(ms / 1000) % 60;
+  const m = Math.floor(ms / 60000) % 60;
+  const h = Math.floor(ms / 3600000);
+  const p = (n) => String(n).padStart(2, "0");
+  const base = h > 0 ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
+  return tenths ? `${base}.${t}` : base;
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+function card(row) {
+  const el = document.createElement("details");
+  el.className = "bg-surface-container rounded-lg border border-outline-variant";
+  const splits = row.splits.map((s, i) => `
+    <tr class="border-b border-outline-variant">
+      <td class="px-3 py-2 text-on-surface-variant num">${i + 1}</td>
+      <td class="px-3 py-2">${esc(s.station)}</td>
+      <td class="px-3 py-2 text-right num">${clock(s.work_ms, true)}</td>
+      <td class="px-3 py-2 text-right num text-on-surface-variant">${s.transition_ms == null ? "—" : clock(s.transition_ms, true)}</td>
+    </tr>`).join("");
+
+  el.innerHTML = `
+    <summary class="flex flex-wrap items-baseline gap-3 px-4 py-3 cursor-pointer">
+      <span class="display text-3xl text-primary w-10">${row.place ?? ""}</span>
+      <span class="num text-on-surface-variant w-10 text-right">${row.bib}</span>
+      <span class="text-2xl flex-1 min-w-[8rem]">${esc(row.name)}</span>
+      <span class="text-sm text-on-surface-variant">${row.stations_completed} ${esc(I18N.t("board.stations"))}</span>
+      <span class="num text-2xl">${row.finished_at == null ? esc(I18N.t("result.dnf")) : clock(row.elapsed_ms, true)}</span>
+    </summary>
+    <div class="px-4 pb-4 overflow-x-auto">
+      <table class="w-full text-sm min-w-[24rem]">
+        <thead class="text-on-surface-variant uppercase text-xs">
+          <tr>
+            <th class="px-3 py-2 text-left">#</th>
+            <th class="px-3 py-2 text-left" data-t="result.station"></th>
+            <th class="px-3 py-2 text-right" data-t="result.work"></th>
+            <th class="px-3 py-2 text-right" data-t="result.transition"></th>
+          </tr>
+        </thead>
+        <tbody>${splits}</tbody>
+      </table>
+    </div>`;
+  // The header cells are built here rather than in the page, so they are translated with
+  // the same dictionary rather than a second copy of the words.
+  el.querySelectorAll("[data-t]").forEach((n) => (n.textContent = I18N.t(n.dataset.t)));
+  return el;
+}
+
+async function load() {
+  // `?session=` shows a class that finished hours ago; with no id, whatever is on now.
+  const id = new URLSearchParams(location.search).get("session");
+  const path = id ? `/api/result/${encodeURIComponent(id)}` : "/api/leaderboard";
+  const res = await fetch(path);
+  if (!res.ok) { document.getElementById("empty").classList.remove("hidden"); return; }
+  const r = (await res.json()).results;
+
+  document.getElementById("session").textContent = r.session_name;
+  document.getElementById("unranked").classList.toggle("hidden", r.ordering === "FINISH_TIME");
+  document.getElementById("empty").classList.toggle("hidden", r.rows.length > 0);
+
+  const host = document.getElementById("rows");
+  host.innerHTML = "";
+  for (const row of r.rows) host.appendChild(card(row));
+}
+
+I18N.apply();
+I18N.switcher(document.getElementById("lang"));
+load();
+</script>
+</body></html>

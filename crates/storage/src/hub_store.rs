@@ -53,8 +53,9 @@ impl HubStore for Store {
         athlete_id: &str,
         display_name: &str,
         bib: i64,
+        member_id: Option<&str>,
     ) -> Result<(), StoreError> {
-        Store::save_athlete(self, session_id, athlete_id, display_name, bib).await
+        Store::save_athlete(self, session_id, athlete_id, display_name, bib, member_id).await
     }
 
     async fn active_session(&self) -> Result<Option<Session>, StoreError> {
@@ -63,6 +64,10 @@ impl HubStore for Store {
 
     async fn session(&self, session_id: &str) -> Result<Option<Session>, StoreError> {
         Store::session(self, session_id).await
+    }
+
+    async fn athlete_bibs(&self, session_id: &str) -> Result<Vec<(String, i64)>, StoreError> {
+        Store::athlete_bibs(self, session_id).await
     }
 
     async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, StoreError> {

@@ -4,7 +4,8 @@
 The page is a shell: CSS (including the station glyph masks sliced from icons/*.png)
 plus a renderer that draws whatever the hub pushes over /ws. No business logic lives
 here -- every value on screen arrives already derived (CLAUDE.md 6, 29)."""
-import io, os, base64
+import io
+import re, os, base64
 from PIL import Image
 import numpy as np
 
@@ -38,6 +39,13 @@ head = io.open("leaderboard.html", encoding="utf-8").read().split("</head>")[0]
 # The shared interface dictionary (roadmap M7), served locally by the hub. Both screens read
 # their labels from the same file, so a label cannot say one thing on the projector and
 # another on the coach's tablet.
+# Stylesheet and fonts from the hub, not a CDN (CLAUDE.md 31). `app.css` is the CDN's own
+# output captured once; see design/README.md.
+head = re.sub(r'<script src="https://cdn\.tailwindcss\.com[^>]*></script>', '', head)
+head = re.sub(r'<link[^>]+fonts\.google[^>]+>', '', head)
+head = re.sub(r'<link[^>]+fonts\.gstatic[^>]+>', '', head)
+head = re.sub(r'<script id="tailwind-config">.*?</script>', '', head, flags=re.S)
+head += '<link rel="stylesheet" href="/fonts.css"><link rel="stylesheet" href="/app.css">'
 head += '<script src="/i18n.js"></script>'
 
 head = head.replace("<title>HYROX Live Leaderboard</title>", "<title>HYROX Training Class</title>")

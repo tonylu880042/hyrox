@@ -8,7 +8,7 @@ use serde_json::json;
 use support::{anonymous, call, get, post, running, NOW};
 
 /// The read-only surfaces of ADR 0001. A write must not be reachable at any of them.
-const READ_ONLY_PATHS: [&str; 9] = [
+const READ_ONLY_PATHS: [&str; 10] = [
     "/api/live",
     "/api/coach",
     "/api/session",
@@ -20,6 +20,7 @@ const READ_ONLY_PATHS: [&str; 9] = [
     "/api/workout-templates/t1",
     "/api/stages",
     "/api/health",
+    "/api/leaderboard",
 ];
 
 #[tokio::test]
@@ -34,6 +35,7 @@ async fn every_read_only_surface_answers_a_read() {
         "/api/workout-templates",
         "/api/stages",
         "/api/health",
+        "/api/leaderboard",
     ] {
         let (status, _) = call(&router, get(path)).await;
         assert_eq!(status, StatusCode::OK, "GET {path}");
@@ -92,6 +94,7 @@ async fn a_write_without_an_operator_identity_is_refused() {
         ("DELETE", "/api/operator/templates/t1"),
         ("POST", "/api/operator/templates/t1/duplicate"),
         ("POST", "/api/operator/class"),
+        ("POST", "/api/checkin/entrants"),
         ("POST", "/api/checkin/bind"),
         ("POST", "/api/checkin/rebind"),
     ];

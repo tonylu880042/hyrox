@@ -9,7 +9,8 @@
 //! read model, and a second spelling of them would be a second thing to keep in step.
 
 use application::{
-    CheckInView, DeviceHealth, ReaderView, SessionResults, Snapshot, StageView, StoredException,
+    CheckInAthlete, CheckInView, DeviceHealth, ReaderView, SessionResults, Snapshot, StageView,
+    StoredException,
 };
 use domain::{
     Course, DeviceWarning, ExceptionReason, Exercise, FinishPolicy, Instant, Interpreted,
@@ -376,4 +377,40 @@ pub struct NewClassAthlete {
 
 fn training() -> SessionMode {
     SessionMode::Training
+}
+
+/// `POST /api/checkin/entrants` (ADR 0010).
+///
+/// A competition takes entries from people the gym has never seen, so `member_id` is
+/// optional -- its absence *is* the record that this was a walk-in, not a missing field.
+#[derive(Debug, Deserialize)]
+pub struct EnterRequest {
+    pub display_name: String,
+    /// `None` for a walk-in. When present it also becomes the athlete id, so a member keeps
+    /// one identity across every class they enter.
+    #[serde(default)]
+    pub member_id: Option<String>,
+    /// `None` takes the next free number. Competition bibs are printed in advance, so the
+    /// door has to be able to name one.
+    #[serde(default)]
+    pub bib: Option<i64>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /api/checkin/entrants` -- the new roster line, plus the queue the door is working.
+#[derive(Debug, Serialize)]
+pub struct EnteredResponse {
+    pub freshness: Freshness,
+    pub athlete_id: String,
+    pub pending: Vec<String>,
+    pub athletes: Vec<CheckInAthlete>,
+}
+
+/// `GET /api/leaderboard` -- the running session's results, ranked where the finish rule
+/// allows it (ADR 0010).
+#[derive(Debug, Serialize)]
+pub struct LeaderboardResponse {
+    pub freshness: Freshness,
+    pub results: SessionResults,
 }

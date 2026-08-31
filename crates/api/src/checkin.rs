@@ -6,15 +6,20 @@
 //! one, edit a course or void an event, because the state it is given has no such method.
 //!
 //! That is the point of the surface: a check-in tablet gets handed to whoever is on the
-//! door, and the worst thing they can do with it is bind the wrong band -- which is
-//! recoverable, audited, and exactly what rebind is for.
+//! door, and the worst thing they can do with it is bind the wrong band or add a name --
+//! both recoverable, both audited.
+//!
+//! ADR 0010 widened it by one verb. A competition takes entries from people the gym has
+//! never seen, and putting them on the roster is literally what checking in *is*; refusing
+//! it here would have meant handing the door an operator tablet that can also stop the
+//! clock. The surface still has no method that touches timing.
 
 use crate::error::ApiError;
 use crate::identity::{Body, OperatorDevice};
 use crate::read::freshness;
 use crate::state::CheckIn;
-use crate::wire::{BindRequest, BindResponse, CheckInResponse};
-use application::{HubStore, OperatorCommand};
+use crate::wire::{BindRequest, BindResponse, CheckInResponse, EnteredResponse, EnterRequest};
+use application::{Entrant, HubStore, OperatorCommand};
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -28,6 +33,7 @@ where
 {
     Router::new()
         .route("/", get(pending))
+        .route("/entrants", post(enter))
         .route("/bind", post(bind))
         .route("/rebind", post(rebind))
         .with_state(state)
@@ -98,4 +104,36 @@ pub(crate) fn command(
         Some(reason) => cmd.with_reason(reason),
         None => cmd,
     }
+}
+
+/// Puts somebody on the roster: a member by their 健身管 id, or a walk-in with nothing but a
+/// name (ADR 0010).
+///
+/// Idempotent for a member -- a door tablet's double tap is one roster line, and the same
+/// athlete id comes back so the helper is not told a different number the second time.
+async fn enter<S>(
+    State(checkin): State<CheckIn<S>>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<EnterRequest>,
+) -> Result<Json<EnteredResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let read = checkin.read();
+    let cmd = command(device, read.now(), request.reason);
+    let entrant = Entrant {
+        member_id: request.member_id,
+        display_name: request.display_name,
+        bib: request.bib,
+    };
+    let athlete_id = checkin.enter(entrant, &cmd).await?;
+
+    let view = read.checkin().await;
+    Ok(Json(EnteredResponse {
+        freshness: freshness(read).await,
+        athlete_id,
+        pending: view.pending,
+        athletes: view.athletes,
+    }))
 }

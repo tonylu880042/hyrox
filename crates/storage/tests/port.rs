@@ -26,7 +26,7 @@ async fn armed_store() -> (Store, Session) {
     session.mark_ready().unwrap();
     session.start().unwrap();
     HubStore::save_session(&store, &session, Instant(T0)).await.unwrap();
-    HubStore::save_athlete(&store, "s1", "a1", "CHEN YU-TING", 1).await.unwrap();
+    HubStore::save_athlete(&store, "s1", "a1", "CHEN YU-TING", 1, None).await.unwrap();
     (store, session)
 }
 

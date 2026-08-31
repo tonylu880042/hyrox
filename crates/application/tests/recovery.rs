@@ -3,7 +3,8 @@
 mod support;
 
 use application::{
-    checkin::{admit, bind_tag, rebind_tag},
+    checkin::{bind_tag, enter, rebind_tag},
+    Entrant,
     register_reader, resume_or_start, HubStore, LiveSession, OperatorCommand, OperatorError,
     Recovery, RosterEntry, SessionPlan,
 };
@@ -107,7 +108,7 @@ async fn a_member_with_a_lapsed_membership_is_still_admitted() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     let member = MemberRef::new("m-9", "WANG SHU-FEN", MembershipStatus::Expired);
 
-    admit(&mut state, &store, &member).await.expect("admit");
+    enter(&mut state, &store, Entrant::member(&member), &OperatorCommand::new("CHECKIN TABLET", START)).await.expect("enter");
 
     assert!(state.athlete("m-9").is_some());
 }
@@ -118,8 +119,8 @@ async fn admitting_the_same_member_twice_adds_one_roster_line() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     let member = MemberRef::new("m-9", "WANG SHU-FEN", MembershipStatus::Active);
 
-    admit(&mut state, &store, &member).await.expect("admit");
-    admit(&mut state, &store, &member).await.expect("admit again");
+    enter(&mut state, &store, Entrant::member(&member), &OperatorCommand::new("CHECKIN TABLET", START)).await.expect("enter");
+    enter(&mut state, &store, Entrant::member(&member), &OperatorCommand::new("CHECKIN TABLET", START)).await.expect("enter again");
 
     assert_eq!(state.athletes.len(), 2);
 }

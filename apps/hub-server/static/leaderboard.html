@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-Hant"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX</title>
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/app.css">
+<script src="/i18n.js"></script>
+<style>
+  /* Sized for the same 2560x1440 projector as /live, and readable from the far wall. */
+  html { background: #0A0A0A; }
+  body { font-family: "Archivo Narrow", "PingFang TC", "Noto Sans TC", system-ui, sans-serif; margin: 0; }
+  h1, .display { font-family: "Bebas Neue", "PingFang TC", "Noto Sans TC", sans-serif; letter-spacing: .03em; }
+  .num { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+  .row { transition: background-color .4s ease; }
+  .row.just-finished { background-color: rgba(254, 228, 0, .16); }
+  @media (prefers-reduced-motion: reduce) { .row { transition: none; } }
+</style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen">
+
+<header class="flex items-center gap-6 px-8 py-4 border-b border-outline-variant bg-surface-container-lowest">
+  <h1 class="text-5xl text-primary">HYROX</h1>
+  <span class="display text-3xl text-on-surface-variant" data-i18n="board.title"></span>
+  <span id="session" class="display text-3xl"></span>
+  <div class="ml-auto flex items-center gap-6 text-on-surface-variant">
+    <span id="clock" class="num text-3xl text-primary"></span>
+    <span id="freshness" class="num text-sm"></span>
+    <span id="lang" class="flex gap-1"></span>
+  </div>
+</header>
+
+<p id="unranked" class="hidden px-8 py-3 bg-surface-container text-on-surface-variant border-b border-outline-variant">
+  <b data-i18n="board.unranked"></b> <span data-i18n="board.unrankedWhy"></span>
+</p>
+
+<table class="w-full">
+  <thead>
+    <tr class="text-on-surface-variant uppercase text-lg border-b border-outline-variant">
+      <th class="text-right px-6 py-3 w-28" data-i18n="board.place"></th>
+      <th class="text-right px-4 py-3 w-24 num">#</th>
+      <th class="text-left  px-4 py-3" data-i18n="board.athlete"></th>
+      <th class="text-left  px-4 py-3 w-[38%]" data-i18n="board.progress"></th>
+      <th class="text-right px-6 py-3 w-56" data-i18n="board.time"></th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<p id="empty" class="hidden px-8 py-10 text-2xl text-on-surface-variant" data-i18n="board.empty"></p>
+
+<script>
+"use strict";
+
+let COURSE = 0;
+let FINISHED = new Set();
+
+function clock(ms, tenths) {
+  if (ms == null) return "--:--";
+  const t = Math.floor(ms / 100) % 10;
+  const s = Math.floor(ms / 1000) % 60;
+  const m = Math.floor(ms / 60000) % 60;
+  const h = Math.floor(ms / 3600000);
+  const p = (n) => String(n).padStart(2, "0");
+  const base = h > 0 ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
+  return tenths ? `${base}.${t}` : base;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+/// One bar per station, filled as far as the athlete has actually got.
+function progress(done, total) {
+  let html = '<div style="display:flex;gap:3px;">';
+  for (let i = 0; i < total; i++) {
+    const on = i < done;
+    html += `<div style="flex:1;height:14px;background:${on ? "#FEE400" : "#2A2A2A"};"></div>`;
+  }
+  return html + "</div>";
+}
+
+function render(payload) {
+  const r = payload.results;
+  document.getElementById("session").textContent = r.session_name;
+  COURSE = r.course.length;
+
+  // Say plainly when there is no ranking, rather than showing bib order as if it were one.
+  document.getElementById("unranked").classList.toggle("hidden", r.ordering === "FINISH_TIME");
+
+  const body = document.getElementById("rows");
+  document.getElementById("empty").classList.toggle("hidden", r.rows.length > 0);
+  body.innerHTML = "";
+
+  for (const row of r.rows) {
+    const finished = row.finished_at != null;
+    const tr = document.createElement("tr");
+    tr.className = "row border-b border-outline-variant" + (finished ? " text-primary" : "");
+    // A name appearing at the top of a leaderboard is the moment the room reacts to, so it
+    // gets a highlight the first time we see it -- once, not on every poll.
+    if (finished && !FINISHED.has(row.athlete_id)) {
+      FINISHED.add(row.athlete_id);
+      tr.classList.add("just-finished");
+      setTimeout(() => tr.classList.remove("just-finished"), 2500);
+    }
+    const state = finished ? "board.finished" : row.started_at == null ? "board.notStarted" : "board.racing";
+    tr.innerHTML = `
+      <td class="text-right px-6 py-4 display text-5xl">${row.place ?? ""}</td>
+      <td class="text-right px-4 py-4 num text-2xl text-on-surface-variant">${row.bib}</td>
+      <td class="px-4 py-4">
+        <div class="text-4xl uppercase leading-none">${esc(row.name)}</div>
+        <div class="text-lg text-on-surface-variant mt-1">${esc(I18N.t(state))} ·
+          ${row.stations_completed}/${COURSE} ${esc(I18N.t("board.stations"))}</div>
+      </td>
+      <td class="px-4 py-4">${progress(row.stations_completed, COURSE)}</td>
+      <td class="text-right px-6 py-4 num text-4xl">${clock(row.elapsed_ms, finished)}</td>`;
+    body.appendChild(tr);
+  }
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/api/leaderboard");
+    if (!res.ok) return;
+    const payload = await res.json();
+    render(payload);
+    const f = payload.freshness;
+    document.getElementById("freshness").textContent =
+      f.last_event_age_ms == null ? I18N.t("freshness.none")
+                                  : I18N.t("freshness.ago", Math.round(f.last_event_age_ms / 1000) + "s");
+  } catch (e) {
+    // A projector shows the last good picture rather than an error; the freshness readout
+    // is what tells the room the screen has stopped moving (ADR 0001 D5).
+    console.warn(e);
+  }
+}
+
+async function tick() {
+  try {
+    const s = await (await fetch("/api/session")).json();
+    document.getElementById("clock").textContent = clock(s.class_elapsed_ms);
+  } catch (e) { /* same reason as above */ }
+}
+
+I18N.apply();
+I18N.switcher(document.getElementById("lang"));
+poll(); tick();
+setInterval(poll, 1000);
+setInterval(tick, 250);
+</script>
+</body></html>

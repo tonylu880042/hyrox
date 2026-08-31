@@ -142,12 +142,18 @@ pub trait HubStore {
         created_at: Instant,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
+    /// Put one person on a session's roster.
+    ///
+    /// `member_id` is `None` for a walk-in (ADR 0010): an athlete is identified by
+    /// `athlete_id`, and the 健身管 reference is provenance rather than a precondition.
+    /// Keyed on `(session_id, athlete_id)`, so a door tablet's double tap is one row.
     fn save_athlete(
         &self,
         session_id: &str,
         athlete_id: &str,
         display_name: &str,
         bib: i64,
+        member_id: Option<&str>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// The session to resume after a restart (CLAUDE.md 21).
@@ -225,6 +231,17 @@ pub trait HubStore {
         tag_id: &str,
         since: Instant,
     ) -> impl Future<Output = Result<Vec<StoredRawRead>, Self::Error>> + Send;
+
+    /// `(athlete_id, bib)` for one session's roster.
+    ///
+    /// Separate from `rebuild_athletes` because a bib is not replayed: `AthleteState` is
+    /// derived from the interpreted log, and the number on somebody's vest is a roster fact
+    /// the door assigned (ADR 0010). Results for a session the hub is no longer running
+    /// have to read it back from here rather than counting rows.
+    fn athlete_bibs(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Vec<(String, i64)>, Self::Error>> + Send;
 
     /// Rebuild every athlete by replaying the non-voided interpreted events (CLAUDE.md 21).
     fn rebuild_athletes(

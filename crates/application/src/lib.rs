@@ -36,6 +36,7 @@ pub mod session;
 pub mod stages;
 pub mod templates;
 
+pub use checkin::{enter, Entrant};
 pub use config::configure;
 pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceReport};
 pub use finish::{apply_finish_policy, end_class};
@@ -53,7 +54,7 @@ pub use ports::{
 };
 pub use readers::register_reader;
 pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
-pub use results::{results, ResultRow, SessionResults, SplitRow};
+pub use results::{live_results, results, Ordering, ResultRow, SessionResults, SplitRow};
 pub use stages::{current_expectation, current_stage, stages, StageStatus, StageView};
 pub use templates::{
     create_class, delete_template, duplicate_template, list_templates, save_template, NewClass,

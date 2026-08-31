@@ -21,6 +21,7 @@
 //! configure it; see `README.md`.
 
 mod feeder;
+mod fonts;
 mod mqtt;
 
 /// The emulated collector that keeps `/live` moving on a developer's machine, publishing
@@ -78,9 +79,19 @@ const SNAPSHOT_CHANNEL_CAPACITY: usize = 16;
 
 const TRAINING_HTML: &str = include_str!("../static/training.html");
 const WORKOUT_HTML: &str = include_str!("../static/workout.html");
+const CHECKIN_HTML: &str = include_str!("../static/checkin.html");
+const LEADERBOARD_HTML: &str = include_str!("../static/leaderboard.html");
+const RESULT_HTML: &str = include_str!("../static/result.html");
 /// The interface dictionary both screens read their labels from (roadmap M7). Served from
 /// the hub, never a CDN: a venue with no internet must still get its own language.
 const I18N_JS: &str = include_str!("../static/i18n.js");
+/// The stylesheet and the web fonts, served from the hub rather than a CDN. A venue with
+/// no internet must still be able to read its own screens (CLAUDE.md 31) -- the data would
+/// be correct and the picture unreadable, which is the worst of both.
+use fonts::FONTS;
+
+const APP_CSS: &str = include_str!("../static/app.css");
+const FONTS_CSS: &str = include_str!("../static/fonts.css");
 
 /// The development clock: the class script's time, run fast.
 ///
@@ -266,12 +277,13 @@ async fn main() {
         .route("/", get(|| async { Redirect::temporary("/live") }))
         .route("/live", get(|| async { Html(TRAINING_HTML) }))
         .route("/workout", get(|| async { Html(WORKOUT_HTML) }))
-        .route(
-            "/i18n.js",
-            get(|| async {
-                ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")], I18N_JS)
-            }),
-        )
+        .route("/checkin", get(|| async { Html(CHECKIN_HTML) }))
+        .route("/leaderboard", get(|| async { Html(LEADERBOARD_HTML) }))
+        .route("/result", get(|| async { Html(RESULT_HTML) }))
+        .route("/i18n.js", get(|| async { asset("text/javascript; charset=utf-8", I18N_JS) }))
+        .route("/app.css", get(|| async { asset("text/css; charset=utf-8", APP_CSS) }))
+        .route("/fonts.css", get(|| async { asset("text/css; charset=utf-8", FONTS_CSS) }))
+        .route("/fonts/{file}", get(font))
         .merge(api::router(hub));
 
     let addr = bind_address();
@@ -280,6 +292,8 @@ async fn main() {
         .unwrap_or_else(|e| panic!("cannot bind {addr}: {e}"));
     println!("HYROX Central Hub listening on http://{addr}/live");
     println!("  workout builder: http://{addr}/workout");
+    println!("  check-in:        http://{addr}/checkin");
+    println!("  leaderboard:     http://{addr}/leaderboard");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
@@ -331,6 +345,34 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => println!("interrupted, stopping"),
         () = terminate => println!("SIGTERM, stopping"),
+    }
+}
+
+/// A static asset compiled into the binary. There is no asset directory on the appliance:
+/// one file to install, and nothing that can be half-deployed.
+fn asset(content_type: &'static str, body: &'static str) -> impl axum::response::IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, content_type)], body)
+}
+
+/// The web font files. Embedded like everything else, and looked up by name against a list
+/// generated at compile time -- so a request cannot reach outside the font directory,
+/// whatever it asks for.
+async fn font(
+    axum::extract::Path(file): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match FONTS.iter().find(|(name, _)| *name == file) {
+        Some((_, bytes)) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "font/woff2"),
+                // The files are content-addressed by the generator; a venue browser should
+                // not re-fetch them every time the projector restarts.
+                (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            *bytes,
+        )
+            .into_response(),
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
     }
 }
 

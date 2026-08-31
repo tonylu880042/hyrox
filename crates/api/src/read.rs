@@ -19,7 +19,7 @@ use crate::error::{storage, ApiError};
 use crate::state::ReadOnly;
 use crate::wire::{
     AthleteStages, CoachResponse, ExercisesResponse, Freshness, LiveResponse, ResultResponse,
-    SessionResponse, StagesResponse, TemplateResponse, TemplatesResponse,
+    LeaderboardResponse, SessionResponse, StagesResponse, TemplateResponse, TemplatesResponse,
 };
 use application::Health;
 use application::HubStore;
@@ -57,6 +57,7 @@ where
         // Read by the appliance's maintenance window, and by the operator screen's update
         // badge (ADR 0009). Read-only, like everything else on this surface.
         .route("/api/health", get(health))
+        .route("/api/leaderboard", get(leaderboard))
         .with_state(state)
 }
 
@@ -238,4 +239,19 @@ where
     S: HubStore,
 {
     Json(read.health().await)
+}
+
+/// The running session's results, ranked where the finish rule allows it (ADR 0010).
+///
+/// A separate route from `/api/result/{id}` so the leaderboard screen does not have to ask
+/// which session is on before it can show anything -- on a competition floor that is one
+/// more round trip between a finish and the name appearing.
+async fn leaderboard<S>(State(read): State<ReadOnly<S>>) -> Json<LeaderboardResponse>
+where
+    S: HubStore,
+{
+    Json(LeaderboardResponse {
+        results: read.leaderboard().await,
+        freshness: freshness(&read).await,
+    })
 }

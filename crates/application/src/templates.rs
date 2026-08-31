@@ -173,12 +173,14 @@ pub async fn create_class<S: HubStore>(
     store.save_session_config(&config).await.map_err(TemplateError::Storage)?;
 
     let mut athletes = Vec::with_capacity(new.roster.len());
+    let mut bibs = Vec::with_capacity(new.roster.len());
     for (i, entry) in new.roster.iter().enumerate() {
         store
-            .save_athlete(&session.id, &entry.athlete_id, &entry.display_name, i as i64 + 1)
+            .save_athlete(&session.id, &entry.athlete_id, &entry.display_name, i as i64 + 1, None)
             .await
             .map_err(TemplateError::Storage)?;
         athletes.push(AthleteState::ready(&entry.athlete_id, &entry.display_name));
+        bibs.push((entry.athlete_id.clone(), i as i64 + 1));
     }
 
     audit(
@@ -202,6 +204,9 @@ pub async fn create_class<S: HubStore>(
         .with_athletes(athletes)
         .with_readers(readers)
         .with_bindings(bindings);
+    for (athlete_id, bib) in bibs {
+        state.note_bib(&athlete_id, bib);
+    }
     Ok(())
 }
 

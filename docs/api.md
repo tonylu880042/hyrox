@@ -45,6 +45,7 @@ without one.
 | `GET` | `/api/workout-templates` | — | — | `{ freshness, templates }`; system ones first |
 | `GET` | `/api/workout-templates/{id}` | — | — | `{ freshness, template }`; `404 UNKNOWN_TEMPLATE` |
 | `GET` | `/api/stages` | — | — | `{ freshness, athletes }` — per-athlete stage list, `current_stage` and `expectation` (ADR 0008) |
+| `GET` | `/api/leaderboard` | — | — | `{ freshness, results }` — the running session, ranked where the finish rule allows it (ADR 0010) |
 | `GET` | `/api/health` | — | — | `{ version, session_status, class_live, devices_with_backlog, safe_to_stop, blocked_by }` (ADR 0009) |
 
 `/api/health` is the one read with **no `freshness` envelope**. It is consumed by the
@@ -64,6 +65,7 @@ test asserts is verb-free.
 | Method | Path | Writes | Requires | Answers |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/checkin` | — | — | `{ freshness, pending, athletes }` |
+| `POST` | `/api/checkin/entrants` | ✎ | `display_name`; optional `bib`, `member_id` | `{ freshness, athlete_id, pending, athletes }` |
 | `POST` | `/api/checkin/bind` | ✎ | `tag_id`, `athlete_id` | `{ freshness, claimed }` |
 | `POST` | `/api/checkin/rebind` | ✎! | `tag_id`, `athlete_id`, `reason` | `{ freshness, claimed }` |
 
@@ -220,6 +222,8 @@ A domain invariant saying no is an answer, not a fault. Only a failed store writ
 | 404 | `UNKNOWN_TEMPLATE` | a template id the store does not hold |
 | 422 | `TEMPLATE_NOT_RUNNABLE` | the template prescribes no walkable course (empty, unknown exercise, missing rounds, AMRAP) |
 | 409 | `NO_FINISH_RULE` | ending a class by hand where no finish rule is configured |
+| 409 | `BIB_TAKEN` | that number is already on somebody's vest in this session |
+| 400 | `NAME_REQUIRED` | an entrant with a blank name |
 | 409 | `TAG_ALREADY_BOUND` | that band is on someone's wrist (D3) |
 | 409 | `ATHLETE_ALREADY_BOUND` | that athlete already has a band; rebind to swap |
 | 409 | `NOT_BOUND` | there is no binding to change |
@@ -240,18 +244,14 @@ Branch on `error`. `message` is for whoever reads a log.
 
 These are not oversights. Each of them would require inventing a product rule (CLAUDE.md 28).
 
-* **No ranking on `/api/result/{id}`.** Rows come back in bib order and the payload says so
-  (`ordering: "BIB"`). Ranking needs an ordering, every ordering asks who finished first,
-  and the competition finish rule is undecided (CLAUDE.md 12). The training rule that *is*
-  decided expects most athletes not to complete the course, so ordering by elapsed time
-  would rank people who did different amounts of work. `finish_policy` is published so a
-  reader can see what "finished" meant here — including that it meant nothing.
+* **Ranking only where the finish rule allows it** (ADR 0010, superseding the note that
+  used to sit here). Under `CourseComplete` competitors are placed by finish time and
+  `ordering` is `FINISH_TIME`; under every other rule rows come back in bib order with
+  `place: null` and `ordering` is `BIB`. A class that ends on the clock stops everyone
+  having done different amounts of work, so ordering it by time would not be honest.
 * **No reader deletion.** No use case removes a reader, and removal would mean deciding
   what becomes of the events already attributed through it. Re-registering the same
   `(device_id, reader_id)` replaces its mapping, which is what repointing a reader is.
 * **No "accept as-is" or "reinterpret" on an exception.** D4 names three actions and only
   `void` has a use case. See `docs/open-issues.md`.
-* **No roster editing.** Admitting an athlete needs a `MemberRef` from 健身管, whose contract
-  is unknown; `application::UnconfiguredDirectory` is the only implementation that can
-  honestly ship. The dev roster comes from the startup plan.
 * **No `operator_identity`.** D1 chose device-level traceability on purpose.

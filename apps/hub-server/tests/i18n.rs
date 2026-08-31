@@ -8,6 +8,9 @@
 const I18N: &str = include_str!("../static/i18n.js");
 const WORKOUT: &str = include_str!("../static/workout.html");
 const TRAINING: &str = include_str!("../static/training.html");
+const CHECKIN: &str = include_str!("../static/checkin.html");
+const LEADERBOARD: &str = include_str!("../static/leaderboard.html");
+const RESULT: &str = include_str!("../static/result.html");
 
 /// Every `"key":` at the top level of one language's object.
 fn keys_of(language: &str) -> Vec<String> {
@@ -84,7 +87,13 @@ fn no_language_repeats_a_key() {
 #[test]
 fn every_key_the_screens_use_is_defined() {
     let defined = keys_of("en");
-    for (page, source) in [("workout.html", WORKOUT), ("training.html", TRAINING)] {
+    for (page, source) in [
+        ("workout.html", WORKOUT),
+        ("training.html", TRAINING),
+        ("checkin.html", CHECKIN),
+        ("leaderboard.html", LEADERBOARD),
+        ("result.html", RESULT),
+    ] {
         for used in used_keys(source) {
             assert!(
                 defined.contains(&used),

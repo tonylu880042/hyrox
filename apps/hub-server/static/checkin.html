@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-Hant"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX</title>
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/app.css">
+<script src="/i18n.js"></script>
+<style>
+  body { font-family: "Archivo Narrow", "PingFang TC", "Noto Sans TC", system-ui, sans-serif; }
+  h1, h2 { font-family: "Bebas Neue", "PingFang TC", "Noto Sans TC", sans-serif; letter-spacing: .04em; }
+  /* A helper on the door taps this with a thumb, often in a hurry. */
+  button, select, input { min-height: 48px; font-size: 16px; }
+  .tag-chip { font-family: "JetBrains Mono", monospace; }
+</style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen">
+
+<header class="border-b border-outline-variant bg-surface-container-lowest sticky top-0 z-20">
+  <div class="max-w-5xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+    <h1 class="text-2xl sm:text-3xl text-primary">HYROX</h1>
+    <span class="text-lg" data-i18n="checkin.title">Check-in</span>
+    <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant whitespace-nowrap">
+      <span id="freshness" class="font-mono"></span>
+      <span id="lang" class="flex gap-1"></span>
+    </div>
+  </div>
+  <div id="toast" class="hidden px-4 py-2 text-sm"></div>
+</header>
+
+<dialog id="ask" class="bg-surface-container text-on-surface border border-outline-variant rounded-lg p-0 backdrop:bg-black/60">
+  <form method="dialog" class="p-5 w-[22rem] max-w-[90vw]">
+    <h2 id="ask-title" class="text-2xl mb-3"></h2>
+    <input id="ask-input" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2 mb-4"/>
+    <div class="flex gap-2 justify-end">
+      <button value="" class="border border-outline rounded px-4 py-2" data-i18n="action.cancel"></button>
+      <button value="ok" class="bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-i18n="action.ok"></button>
+    </div>
+  </form>
+</dialog>
+
+<main class="max-w-5xl mx-auto p-4 grid gap-4 lg:grid-cols-2">
+
+  <!-- Adding somebody. A walk-in needs a name and nothing else (ADR 0010). -->
+  <section class="bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-3" data-i18n="checkin.entrants">Entrants</h2>
+    <form id="entrant-form" class="flex flex-wrap gap-2 items-end mb-4">
+      <label class="flex-1 min-w-[10rem]">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="checkin.name"></span>
+        <input id="e-name" required class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+      </label>
+      <label class="w-24">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="checkin.bib"></span>
+        <input id="e-bib" type="number" min="1" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2 font-mono"/>
+      </label>
+      <label class="w-full sm:w-40">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="checkin.memberId"></span>
+        <input id="e-member" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2 font-mono"/>
+      </label>
+      <button class="bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-i18n="checkin.add"></button>
+    </form>
+    <ul id="entrants" class="flex flex-col gap-2"></ul>
+  </section>
+
+  <!-- Bands a reader has seen that belong to nobody yet. -->
+  <section class="bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-3" data-i18n="checkin.pending">Bands waiting</h2>
+    <ul id="pending" class="flex flex-col gap-2"></ul>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+let DEVICE = localStorage.getItem("hyrox.device") || "";
+let VIEW = { pending: [], athletes: [] };
+
+function ask(title, value = "") {
+  const dialog = document.getElementById("ask");
+  const input = document.getElementById("ask-input");
+  document.getElementById("ask-title").textContent = title;
+  input.value = value;
+  dialog.showModal(); input.focus(); input.select();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok" ? input.value.trim() : ""), { once: true });
+  });
+}
+
+async function device() {
+  if (!DEVICE) {
+    DEVICE = await ask(I18N.t("ask.device"), I18N.t("ask.deviceDefault"));
+    if (!DEVICE) throw new Error(I18N.t("toast.deviceNeeded"));
+    localStorage.setItem("hyrox.device", DEVICE);
+  }
+  return DEVICE;
+}
+
+async function api(method, path, body) {
+  const headers = {};
+  if (method !== "GET") {
+    headers["content-type"] = "application/json";
+    headers["x-operator-device"] = await device();
+  }
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) throw Object.assign(new Error(json.error || "unknown"), { code: json.error, detail: json.message });
+  return json;
+}
+
+function explain(e) {
+  if (e && e.code) { const k = "err." + e.code, t = I18N.t(k); if (t !== k) return t; }
+  return I18N.t("err.unknown");
+}
+
+function toast(msg, bad) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "px-4 py-2 text-sm " + (bad ? "bg-error-container text-on-surface" : "bg-surface-container-high");
+  clearTimeout(toast.t); toast.t = setTimeout(() => (el.className = "hidden"), 4000);
+}
+
+async function guard(fn) {
+  try { await fn(); } catch (e) {
+    if (e && e.detail) console.warn(e.code, e.detail);
+    toast(e && e.code ? explain(e) : (e && e.message) || String(e), true);
+  }
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+// ── The roster ────────────────────────────────────────────────────────────────
+function renderEntrants() {
+  const host = document.getElementById("entrants");
+  host.innerHTML = "";
+  if (!VIEW.athletes.length) {
+    host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("checkin.noEntrants")) + "</li>";
+    return;
+  }
+  for (const a of VIEW.athletes) {
+    const li = document.createElement("li");
+    li.className = "flex items-center gap-3 bg-surface-container-high rounded border border-outline-variant px-3 py-2";
+    li.innerHTML = `
+      <span class="font-mono text-on-surface-variant w-8 text-right">${a.bib ?? ""}</span>
+      <span class="flex-1">${esc(a.name)}</span>
+      <span class="text-xs px-2 py-1 rounded ${a.tag_id ? "bg-primary text-on-primary" : "border border-outline text-on-surface-variant"}">
+        ${esc(I18N.t(a.tag_id ? "checkin.bound" : "checkin.unbound"))}</span>`;
+    host.appendChild(li);
+  }
+}
+
+// ── Bands nobody owns yet ─────────────────────────────────────────────────────
+function renderPending() {
+  const host = document.getElementById("pending");
+  host.innerHTML = "";
+  if (!VIEW.pending.length) {
+    host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("checkin.noPending")) + "</li>";
+    return;
+  }
+  for (const tag of VIEW.pending) {
+    const li = document.createElement("li");
+    li.className = "flex flex-wrap items-center gap-2 bg-surface-container-high rounded border border-outline-variant px-3 py-2";
+    const options = VIEW.athletes
+      .filter((a) => !a.tag_id)
+      .map((a) => `<option value="${esc(a.athlete_id)}">${a.bib ?? ""} · ${esc(a.name)}</option>`)
+      .join("");
+    li.innerHTML = `
+      <span class="tag-chip flex-1 min-w-[9rem] text-primary">${esc(tag)}</span>
+      <select class="who bg-surface-container border border-outline-variant rounded px-2 py-2 flex-1 min-w-[9rem]">
+        <option value="">${esc(I18N.t("checkin.pick"))}</option>${options}
+      </select>
+      <button class="bind bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-tag="${esc(tag)}">
+        ${esc(I18N.t("checkin.bindTo"))}</button>`;
+    li.querySelector(".bind").onclick = () => guard(async () => {
+      const athlete_id = li.querySelector(".who").value;
+      if (!athlete_id) return toast(I18N.t("checkin.pick"), true);
+      const res = await api("POST", "/api/checkin/bind", { tag_id: tag, athlete_id });
+      const who = VIEW.athletes.find((a) => a.athlete_id === athlete_id);
+      // Reads that happened before anyone owned the band are claimed retroactively; saying
+      // so matters, because those splits appear on the screen a moment later.
+      const claimed = (res.claimed || []).length;
+      toast(I18N.t("checkin.boundOk", who ? who.name : athlete_id) +
+            (claimed ? " " + I18N.t("checkin.claimed", claimed) : ""));
+      await refresh();
+    });
+    host.appendChild(li);
+  }
+}
+
+document.getElementById("entrant-form").onsubmit = (ev) => {
+  ev.preventDefault();
+  guard(async () => {
+    const name = document.getElementById("e-name").value.trim();
+    const bib = document.getElementById("e-bib").value;
+    const member = document.getElementById("e-member").value.trim();
+    await api("POST", "/api/checkin/entrants", {
+      display_name: name,
+      bib: bib === "" ? null : +bib,
+      member_id: member === "" ? null : member,
+    });
+    toast(I18N.t("checkin.added", name));
+    document.getElementById("entrant-form").reset();
+    document.getElementById("e-name").focus();
+    await refresh();
+  });
+};
+
+async function refresh() {
+  const res = await api("GET", "/api/checkin");
+  VIEW = { pending: res.pending, athletes: res.athletes };
+  const f = res.freshness;
+  document.getElementById("freshness").textContent =
+    f.last_event_age_ms == null ? I18N.t("freshness.none")
+                                : I18N.t("freshness.ago", Math.round(f.last_event_age_ms / 1000) + "s");
+  renderEntrants();
+  renderPending();
+}
+
+I18N.apply();
+I18N.switcher(document.getElementById("lang"));
+guard(refresh);
+// The pending list is polled: the WebSocket carries a count, not the tags themselves, and
+// changing that frame shape would break the live screen (roadmap, known gaps).
+setInterval(() => guard(refresh), 2000);
+</script>
+</body></html>

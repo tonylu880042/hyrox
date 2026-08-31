@@ -22,7 +22,7 @@
 
 use application::{
     checkin_view, config, exceptions, finish, health, live, readers, results, session, stages,
-    templates, CheckInView, DeviceHealth, Health, HubStore, LiveSession, NewClass,
+    templates, CheckInView, DeviceHealth, Entrant, Health, HubStore, LiveSession, NewClass,
     OperatorCommand, OperatorError, ReaderView, SessionResults, Snapshot, StageView,
     StoredException, TemplateError,
 };
@@ -219,6 +219,14 @@ impl<S> ReadOnly<S> {
 }
 
 impl<S: HubStore> ReadOnly<S> {
+    /// The current session's results, ranked where the finish rule allows it (ADR 0010).
+    ///
+    /// The leaderboard screen reads this rather than `/api/result/{id}`, so it does not have
+    /// to ask which session is on before it can show anything.
+    pub async fn leaderboard(&self) -> SessionResults {
+        results::live_results(&*self.0.lock().await)
+    }
+
     /// Results for any stored session, running or long finished (CLAUDE.md 22).
     ///
     /// The one read that touches the store. It is a read: `application::results` rebuilds
@@ -296,6 +304,18 @@ impl<S> CheckIn<S> {
 }
 
 impl<S: HubStore> CheckIn<S> {
+    /// Puts somebody on the roster -- a member, or a walk-in with nothing but a name
+    /// (ADR 0010). This is what a door tablet does at a competition, and it is still
+    /// nowhere near the session's clock.
+    pub async fn enter(
+        &self,
+        entrant: Entrant,
+        cmd: &OperatorCommand,
+    ) -> Result<String, OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        application::enter(&mut state, &*self.hub.store, entrant, cmd).await
+    }
+
     pub async fn bind(
         &self,
         tag: &TagId,

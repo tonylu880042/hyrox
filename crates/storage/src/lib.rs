@@ -109,20 +109,35 @@ impl Store {
         athlete_id: &str,
         display_name: &str,
         bib: i64,
+        member_id: Option<&str>,
     ) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO session_athletes (session_id, athlete_id, display_name, bib)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_athletes (session_id, athlete_id, display_name, bib, member_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id, athlete_id) DO UPDATE SET
-                display_name = excluded.display_name, bib = excluded.bib",
+                display_name = excluded.display_name,
+                bib = excluded.bib,
+                member_id = excluded.member_id",
         )
         .bind(session_id)
         .bind(athlete_id)
         .bind(display_name)
         .bind(bib)
+        .bind(member_id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// `(athlete_id, bib)` for a session's roster, in bib order.
+    pub async fn athlete_bibs(&self, session_id: &str) -> Result<Vec<(String, i64)>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT athlete_id, bib FROM session_athletes WHERE session_id = ?1 ORDER BY bib",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| (r.get("athlete_id"), r.get("bib"))).collect())
     }
 
     /// Stores a raw event, returning its id. A redelivery of the same

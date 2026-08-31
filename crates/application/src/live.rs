@@ -217,7 +217,10 @@ pub fn checkin_view(state: &LiveSession) -> CheckInView {
             .iter()
             .enumerate()
             .map(|(i, a)| CheckInAthlete {
-                bib: i + 1,
+                // The number actually on the vest, which the door may have assigned
+                // (ADR 0010). Roster position only as a fallback, for a session seeded
+                // before bibs were assignable.
+                bib: state.bib_of(&a.athlete_id).unwrap_or(i as i64 + 1) as usize,
                 athlete_id: a.athlete_id.clone(),
                 name: a.display_name.clone(),
                 // Scoped to this session on purpose: a band bound in another class is on
@@ -288,7 +291,7 @@ pub fn snapshot(state: &LiveSession, now: Instant) -> Snapshot {
             .athletes
             .iter()
             .enumerate()
-            .map(|(i, a)| view(i + 1, a, &course, now))
+            .map(|(i, a)| view(state.bib_of(&a.athlete_id).unwrap_or(i as i64 + 1) as usize, a, &course, now))
             .collect(),
         in_class: state.athletes.len(),
         finished: state

@@ -28,6 +28,10 @@ pub struct LiveSession {
     pending_tags: Vec<TagId>,
     /// How many interpreted events were exceptions, for the operator's inbox badge (D4).
     pub exception_count: usize,
+    /// Bib per athlete id (ADR 0010). Held beside the roster rather than on `AthleteState`,
+    /// because a bib is a label on a vest that the door assigns and a correction may
+    /// reassign -- it is not part of what the timing engine replays.
+    bibs: Vec<(String, i64)>,
     /// When each edge device was last heard from (ADR 0001 D5). In memory only, and
     /// deliberately so -- see [`crate::devices`].
     devices: Vec<DeviceHealth>,
@@ -44,6 +48,7 @@ impl LiveSession {
             class_start,
             pending_tags: Vec::new(),
             exception_count: 0,
+            bibs: Vec::new(),
             devices: Vec::new(),
         }
     }
@@ -61,6 +66,24 @@ impl LiveSession {
     pub fn with_bindings(mut self, bindings: BindingLedger) -> Self {
         self.bindings = bindings;
         self
+    }
+
+    /// Every bib handed out in this session, in no particular order.
+    pub fn bibs(&self) -> impl Iterator<Item = i64> + '_ {
+        self.bibs.iter().map(|(_, b)| *b)
+    }
+
+    pub fn bib_of(&self, athlete_id: &str) -> Option<i64> {
+        self.bibs.iter().find(|(id, _)| id == athlete_id).map(|(_, b)| *b)
+    }
+
+    /// Records the number on somebody's vest. Replaces an existing one, so reassigning a
+    /// bib is a correction rather than a second entry.
+    pub fn note_bib(&mut self, athlete_id: &str, bib: i64) {
+        match self.bibs.iter_mut().find(|(id, _)| id == athlete_id) {
+            Some(entry) => entry.1 = bib,
+            None => self.bibs.push((athlete_id.to_string(), bib)),
+        }
     }
 
     pub fn athlete(&self, athlete_id: &str) -> Option<&AthleteState> {

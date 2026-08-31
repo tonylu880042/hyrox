@@ -9,28 +9,106 @@ use crate::operator::{OperatorCommand, OperatorError};
 use crate::ports::{AuditEntry, HubStore};
 use domain::{AthleteState, Instant, Interpreted, MemberRef, TagId};
 
-/// Adds a member to this session's roster.
+/// Somebody to put on the roster (ADR 0010).
 ///
-/// Membership status is carried for display and is deliberately not checked: confirmed with
-/// the user on 2026-08-27, if 健身管 returns the member they may be timed. A gate here would
-/// stop someone's clock over a billing detail (CLAUDE.md 31).
-pub async fn admit<S: HubStore>(
+/// A competition takes entries from people the gym has never seen, so a member reference is
+/// **provenance, not a precondition**. An athlete is identified by `athlete_id`; whether
+/// 健身管 knows them is recorded and never checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entrant {
+    /// `None` for a walk-in. When present it is also the athlete id, so a member keeps one
+    /// identity across every class they ever enter.
+    pub member_id: Option<String>,
+    pub display_name: String,
+    /// `None` takes the next free number. Competition bibs are printed in advance, so the
+    /// door has to be able to name one.
+    pub bib: Option<i64>,
+}
+
+impl Entrant {
+    pub fn walk_in(display_name: impl Into<String>) -> Self {
+        Self { member_id: None, display_name: display_name.into(), bib: None }
+    }
+
+    /// Membership status is deliberately not read. Confirmed with the user 2026-08-27: if
+    /// 健身管 returns the member they may be timed, and a gate here would stop somebody's
+    /// clock over a billing detail (CLAUDE.md 31).
+    pub fn member(member: &MemberRef) -> Self {
+        Self {
+            member_id: Some(member.member_id.clone()),
+            display_name: member.display_name.clone(),
+            bib: None,
+        }
+    }
+
+    pub fn with_bib(mut self, bib: i64) -> Self {
+        self.bib = Some(bib);
+        self
+    }
+}
+
+/// Puts one person on this session's roster and returns their athlete id.
+///
+/// Idempotent for a member: a door tablet's double tap is one roster line, and the same id
+/// comes back so the helper is not told a different number the second time.
+pub async fn enter<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
-    member: &MemberRef,
-) -> Result<(), OperatorError<S::Error>> {
-    if state.athlete(&member.member_id).is_some() {
-        return Ok(()); // the tablet double-tapped; one person, one roster line
+    entrant: Entrant,
+    cmd: &OperatorCommand,
+) -> Result<String, OperatorError<S::Error>> {
+    let name = entrant.display_name.trim();
+    if name.is_empty() {
+        return Err(OperatorError::NameRequired);
     }
-    let bib = state.athletes.len() as i64 + 1;
+
+    if let Some(member_id) = &entrant.member_id {
+        if state.athlete(member_id).is_some() {
+            return Ok(member_id.clone());
+        }
+    }
+
+    let bib = match entrant.bib {
+        Some(asked) => {
+            if state.bibs().any(|b| b == asked) {
+                return Err(OperatorError::BibTaken(asked));
+            }
+            asked
+        }
+        // The next free one, stepping over anything already handed out at the door.
+        None => (1..).find(|n| !state.bibs().any(|b| b == *n)).expect("a free bib exists"),
+    };
+
+    // A member keeps one identity across every class; a walk-in gets one scoped to this
+    // session, which is the only place they exist.
+    let athlete_id = entrant
+        .member_id
+        .clone()
+        .unwrap_or_else(|| format!("w-{}-{}", state.session.id, bib));
+
     store
-        .save_athlete(&state.session.id, &member.member_id, &member.display_name, bib)
+        .save_athlete(&state.session.id, &athlete_id, name, bib, entrant.member_id.as_deref())
         .await
         .map_err(OperatorError::Storage)?;
-    state
-        .athletes
-        .push(AthleteState::ready(&member.member_id, &member.display_name));
-    Ok(())
+    state.athletes.push(AthleteState::ready(&athlete_id, name));
+    state.note_bib(&athlete_id, bib);
+
+    store
+        .record_audit(&AuditEntry {
+            at: cmd.at,
+            operator: cmd.operator.clone(),
+            action: "ATHLETE_ENTER".to_string(),
+            subject: athlete_id.clone(),
+            reason: cmd.stated_reason().map(str::to_string),
+            before: None,
+            after: Some(match &entrant.member_id {
+                Some(m) => format!("{name:?} bib {bib}, member {m}"),
+                None => format!("{name:?} bib {bib}, walk-in"),
+            }),
+        })
+        .await
+        .map_err(OperatorError::Storage)?;
+    Ok(athlete_id)
 }
 
 /// Binds a tag to an athlete, clears it from the pending list, and claims the reads that

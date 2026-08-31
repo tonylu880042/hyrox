@@ -50,6 +50,13 @@ pub enum OperatorError<E> {
     NoFinishRule,
     #[error("athlete {0:?} is not in this session")]
     UnknownAthlete(String),
+    /// Two vests with the same number in one session is a timing error waiting to happen
+    /// (ADR 0010).
+    #[error("bib {0} is already on somebody in this session")]
+    BibTaken(i64),
+    /// A roster line with a blank name puts nobody on the live screen.
+    #[error("an entrant needs a name")]
+    NameRequired,
     /// Configuration may only be edited while the session is DRAFT (ADR 0001 D2). Not a
     /// `SessionError`: nothing was asked of the state machine, so it has nothing to say.
     #[error("configuration cannot be edited while the session is {status:?}")]

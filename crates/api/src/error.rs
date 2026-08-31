@@ -110,6 +110,18 @@ impl<E: Display> From<OperatorError<E>> for ApiError {
                 "no finish rule is configured for this session, so it cannot be ended by \
                  hand (CLAUDE.md 12)",
             ),
+            // 409: the request is well formed and the world simply already has that number
+            // on somebody's vest (ADR 0010).
+            OperatorError::BibTaken(bib) => ApiError::new(
+                StatusCode::CONFLICT,
+                "BIB_TAKEN",
+                format!("bib {bib} is already on somebody in this session"),
+            ),
+            OperatorError::NameRequired => ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "NAME_REQUIRED",
+                "an entrant needs a name; a blank one puts nobody on the live screen",
+            ),
             OperatorError::UnknownAthlete(id) => ApiError::not_found(
                 "UNKNOWN_ATHLETE",
                 format!("{id:?} is not on this session's roster"),

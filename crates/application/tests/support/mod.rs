@@ -27,6 +27,16 @@ pub enum Call {
     Audit { action: String },
 }
 
+/// One roster row exactly as the store was asked to write it, so a test can assert on the
+/// bib and the member reference (ADR 0010), not only on who is on the roster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedAthlete {
+    pub athlete_id: String,
+    pub display_name: String,
+    pub bib: i64,
+    pub member_id: Option<String>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct FakeError(pub &'static str);
 
@@ -49,6 +59,7 @@ struct Inner {
     readers: Vec<ReaderRegistration>,
     bindings: Vec<TagBinding>,
     athletes: Vec<AthleteState>,
+    roster: Vec<SavedAthlete>,
     created_at: Option<Instant>,
     templates: Vec<WorkoutTemplate>,
     exercises: Vec<Exercise>,
@@ -172,6 +183,42 @@ impl FakeStore {
     }
 }
 
+impl FakeStore {
+    /// A stored, finished session, for the ranking tests. Athletes are given a finish time
+    /// directly rather than driven through the engine: what is under test is how results
+    /// *order* finishers, not how somebody comes to be finished.
+    pub fn seed_finished_session(
+        &self,
+        session_id: &str,
+        policy: domain::FinishPolicy,
+        finishes: &[(&str, Option<i64>)],
+    ) {
+        let mut inner = self.inner.lock().unwrap();
+        let mut session =
+            Session::new_draft(session_id, "OPEN 2026", domain::SessionMode::Competition);
+        session.mark_ready().unwrap();
+        session.start().unwrap();
+        inner.sessions.push(session);
+        inner.configs.push(SessionConfig::new(session_id).with_finish_policy(policy));
+        inner.athletes = finishes
+            .iter()
+            .map(|(name, at)| {
+                let mut a = AthleteState::ready(*name, *name);
+                if let Some(at) = at {
+                    a.status = domain::AthleteStatus::Active;
+                    a.started_at = Some(Instant(0));
+                    domain::finish(&mut a, Instant(*at));
+                }
+                a
+            })
+            .collect();
+    }
+
+    pub fn saved_athletes(&self) -> Vec<SavedAthlete> {
+        self.inner.lock().unwrap().roster.clone()
+    }
+}
+
 impl HubStore for FakeStore {
     type Error = FakeError;
 
@@ -233,11 +280,18 @@ impl HubStore for FakeStore {
         _session_id: &str,
         athlete_id: &str,
         display_name: &str,
-        _bib: i64,
+        bib: i64,
+        member_id: Option<&str>,
     ) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
         inner.calls.push(Call::Athlete { athlete_id: athlete_id.to_string() });
         inner.athletes.push(AthleteState::ready(athlete_id, display_name));
+        inner.roster.push(SavedAthlete {
+            athlete_id: athlete_id.to_string(),
+            display_name: display_name.to_string(),
+            bib,
+            member_id: member_id.map(str::to_string),
+        });
         Ok(())
     }
 
@@ -259,6 +313,21 @@ impl HubStore for FakeStore {
     /// Replays the non-voided interpretations over the seeded roster, like the real store.
     /// Seeded athletes with no interpretations come back untouched, which is what the
     /// recovery tests rely on.
+    async fn athlete_bibs(&self, _session_id: &str) -> Result<Vec<(String, i64)>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        if inner.roster.is_empty() {
+            // A fixture that never went through `enter`: roster order is the bib, exactly
+            // as it was before the door could assign one.
+            return Ok(inner
+                .athletes
+                .iter()
+                .enumerate()
+                .map(|(i, a)| (a.athlete_id.clone(), i as i64 + 1))
+                .collect());
+        }
+        Ok(inner.roster.iter().map(|a| (a.athlete_id.clone(), a.bib)).collect())
+    }
+
     async fn rebuild_athletes(&self, _session_id: &str) -> Result<Vec<AthleteState>, FakeError> {
         let inner = self.inner.lock().unwrap();
         if inner.interpreted.is_empty() {
