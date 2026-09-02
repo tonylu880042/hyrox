@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="HYROX">
+  <!--
+    A tab icon is read at 16 pixels, so it is one letter and one colour: the venue's yellow,
+    and the H the wordmark already starts with. Anything with detail (a pictogram, a runner,
+    the whole word) turns to mush at that size.
+    Served by the hub like every other asset, because a venue with no internet still has
+    tabs open (CLAUDE.md 31).
+    Note for whoever edits this: XML comments may not contain a double hyphen. One did, and
+    the whole file was rejected as malformed while the browser quietly showed nothing.
+  -->
+  <rect width="64" height="64" rx="12" fill="#FEE400"/>
+  <path d="M14 13h9.5v14.5h17V13H50v38h-9.5V36.5h-17V51H14z" fill="#0A0A0A"/>
+</svg>

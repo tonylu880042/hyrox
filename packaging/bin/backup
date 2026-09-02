@@ -1,0 +1,89 @@
+#!/bin/bash
+# Take one backup and retire the old ones (ADR 0012).
+#
+# Run twice a day by hyrox-backup.timer, and once more by the nightly window before it
+# updates. Both callers are this one script, so there is one implementation of "what a
+# backup is" and one of "what we keep".
+#
+# The hub does the copying: it is the only process allowed to touch the database
+# (ADR 0009), and `cp` of a live SQLite file is the classic way to produce a corrupt copy.
+# Exit codes, because the nightly window has to tell these two apart:
+#   0  a backup was taken (and mirrored, if a mirror is configured)
+#   1  no backup at all -- the hub did not answer
+#   2  the backup was taken but there is no off-machine copy
+# A missing USB stick must not stop security updates for weeks; a missing backup must.
+set -uo pipefail
+
+BACKUP_URL="${HYROX_BACKUP_URL:-http://127.0.0.1:8730/api/operator/backup}"
+BACKUP_DIR="${HYROX_BACKUP_DIR:-/var/lib/hyrox/backups}"
+# Retention is in **days**, not in number of files: the schedule may change (it already has,
+# from nightly to twice daily), and a count would silently shorten the history when it does.
+KEEP_DAYS="${HYROX_BACKUP_KEEP_DAYS:-14}"
+# What this run is for, so the audit trail can tell the midday copy from the pre-update one.
+REASON="${1:-scheduled}"
+# Optional second home for the backups, on a USB stick (ADR 0012). Empty means the venue
+# has not been given one -- the machine still backs itself up, it just has no copy that
+# survives the disk dying. Set it and a missing stick becomes a loud failure.
+MIRROR="${HYROX_BACKUP_MIRROR:-}"
+
+log() { logger -t hyrox-backup -s -- "$*"; }
+
+# Age, not count. `-mtime +N` is whole days since modification, which is what "keep two
+# weeks" means to the person who set it.
+retire() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    while IFS= read -r old; do
+        log "retiring $old (older than $KEEP_DAYS days)"
+        rm -f -- "$old"
+    done < <(find "$dir" -maxdepth 1 -name 'hyrox-*.db' -type f -mtime "+$KEEP_DAYS")
+}
+
+# Is this really a mounted volume, or just an empty directory where one should be? The
+# difference decides whether the off-machine copy exists at all, so it is checked rather
+# than assumed. `mountpoint` is util-linux and is on the appliance; on a developer's machine
+# it is missing, and there the writable directory is what the tests use.
+mounted() {
+    if command -v mountpoint > /dev/null 2>&1; then
+        mountpoint -q "$1"
+    else
+        [ -d "$1" ] && [ -w "$1" ]
+    fi
+}
+
+body=$(curl -sf --max-time 300 -X POST \
+    -H 'content-type: application/json' \
+    -H 'x-operator-device: SCHEDULED BACKUP' \
+    -d "{\"reason\":\"$REASON\"}" "$BACKUP_URL") || {
+    # No answer means the hub is down or wedged. Not having a backup is worth a red unit:
+    # it is the one job whose silent failure is only discovered when it is needed.
+    log "backup failed ($REASON) -- the hub did not answer $BACKUP_URL"
+    exit 1
+}
+
+path=$(jq -r '.path' <<<"$body")
+log "backup written to $path ($REASON)"
+
+# A copy that survives the machine's own disk. Copying the *backup file* is safe -- it is a
+# finished snapshot, not the live database, so plain `cp` is correct here where it would be
+# wrong against hyrox.db.
+mirror_status=0
+if [ -n "$MIRROR" ]; then
+    if ! mounted "$MIRROR"; then
+        # The stick was configured and is not there. Failing loudly is the whole point:
+        # writing into the empty mount point would fill the system disk and look like
+        # safety right up until somebody needed it.
+        log "MIRROR MISSING: $MIRROR is not mounted -- no off-machine copy of $path"
+        mirror_status=2
+    elif cp -- "$path" "$MIRROR/"; then
+        sync -f "$MIRROR/$(basename "$path")" 2>/dev/null || sync
+        log "mirrored to $MIRROR"
+        retire "$MIRROR"
+    else
+        log "MIRROR FAILED: could not copy $path to $MIRROR"
+        mirror_status=2
+    fi
+fi
+
+retire "$BACKUP_DIR"
+exit "$mirror_status"

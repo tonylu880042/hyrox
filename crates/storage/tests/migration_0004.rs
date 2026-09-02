@@ -33,7 +33,7 @@ async fn legacy_db() -> SqlitePool {
          INSERT INTO session_configs VALUES ('s1', '{\"session_id\":\"s1\"}');
          INSERT INTO raw_events
             (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at)
-            VALUES ('esp32-a4cf128b3d91', 'rfid-01', 1, 1, 'TAG1', 1100, 1101);
+            VALUES ('a4cf128b3d91', 'rfid-01', 1, 1, 'TAG1', 1100, 1101);
          INSERT INTO interpreted_events
             (id, session_id, athlete_id, raw_event_id, kind, station, detected_at, started_timing)
             VALUES (41, 's1', 'a1', 1, 'ENTERED', 'SKIERG', 1100, 1),

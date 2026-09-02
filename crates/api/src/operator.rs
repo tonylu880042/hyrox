@@ -19,7 +19,7 @@ use crate::wire::{
 };
 use application::HubStore;
 use axum::extract::{Path, State};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use domain::{Instant, ReaderKey, ReaderRegistration, WorkoutTemplate};
 use std::fmt::Display;
@@ -35,6 +35,22 @@ where
         .route("/config", put(configure))
         .route("/exceptions", get(exceptions))
         .route("/exceptions/{interpreted_event_id}/void", post(void))
+        // The nightly window asks for this rather than copying the file itself: the hub is
+        // the only process allowed to touch the database (ADR 0009, 0012).
+        .route("/backup", post(backup))
+        // The settings screen's two additions (M6): what the machine can be asked to do,
+        // and which readers are still waiting to be told what they are.
+        .route("/power", post(power))
+        .route("/settings", put(settings))
+        .route("/logo", post(upload_logo).delete(remove_logo))
+        // Demo data (M6 follow-up). Present on every build; whether it does anything is
+        // the machine's answer, not this router's.
+        .route("/demo", post(load_demo).delete(clear_demo))
+        .route("/readers/unregistered", get(unregistered))
+        // Taking one off the wall (ADR 0007 §7, amended). In the path rather than the body
+        // because it names a thing that exists, and DELETE has no body worth parsing --
+        // except the reason, which every destructive action carries.
+        .route("/readers/{device_id}/{reader_id}", delete(remove_reader))
         .route("/session/ready", post(mark_ready))
         .route("/session/start", post(start))
         .route("/session/pause", post(pause))
@@ -398,4 +414,229 @@ where
     let read = operator.read();
     let templates = read.templates().await.map_err(crate::error::storage)?;
     Ok(Json(TemplatesResponse { freshness: freshness(read).await, templates }))
+}
+
+/// Takes a backup of the whole database and says where it went (ADR 0012).
+///
+/// A write, so it carries the operator's device name and is audited like any other -- the
+/// caller is usually the nightly maintenance unit, and "who asked for this file" is worth
+/// having when somebody restores it months later.
+///
+/// The hub does the copying because it is the only process that may touch the database
+/// (ADR 0009). A shell script running `cp` on a live SQLite file is the classic way to
+/// produce a backup that is missing the transactions in the `-wal`, or is simply corrupt.
+async fn backup<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<crate::wire::BackupRequest>,
+) -> Result<Json<crate::wire::BackupResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let now = operator.read().now();
+    let reason = request.reason.clone();
+    let cmd = command(device, now, request.reason);
+    let path = operator.backup(&cmd, reason).await?;
+    Ok(Json(crate::wire::BackupResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        path: path.display().to_string(),
+        at: cmd.at.0,
+    }))
+}
+
+/// Switch the machine off, restart it, or restart the hub's own service (M6).
+///
+/// Guarded by the same question the nightly window asks: a class on the floor wins. The
+/// guard lives in [`Operator::power`] rather than here, so it holds for any caller.
+async fn power<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<crate::wire::PowerRequest>,
+) -> Result<Json<crate::wire::PowerResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let now = operator.read().now();
+    let reason = request.reason.clone();
+    let cmd = command(device, now, request.reason);
+    // Checked here rather than in the port: the reason is for the audit row, and the audit
+    // row is written before the machine is asked to do anything.
+    if reason.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err(ApiError::new(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "REASON_REQUIRED",
+            "switching the machine off stops a venue's evening, so it needs a reason",
+        ));
+    }
+    operator.power(request.action, &cmd, reason).await?;
+    Ok(Json(crate::wire::PowerResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        action: request.action,
+        at: now.0,
+    }))
+}
+
+/// Readers the hub has heard from and cannot resolve, most recently tapped first (M6).
+///
+/// This is how a venue is installed: tap an antenna with any band, and it appears here.
+/// Nobody copies a MAC address off a sticker.
+async fn unregistered<S>(
+    State(operator): State<Operator<S>>,
+) -> Result<Json<crate::wire::UnregisteredReadersResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let readers = operator.unregistered_readers().await?;
+    Ok(Json(crate::wire::UnregisteredReadersResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        readers: readers
+            .into_iter()
+            .map(|r| crate::wire::UnregisteredReader {
+                device_id: r.device_id,
+                reader_id: r.reader_id,
+                last_seen: r.last_seen.0,
+                reads: r.reads,
+            })
+            .collect(),
+    }))
+}
+
+/// Change one of the venue's own numbers (M6 follow-up).
+///
+/// A write like any other: it carries the operator's device name and lands in the audit
+/// trail. Only the settings this build defines are accepted -- an unknown key is a typo,
+/// and a stored typo is a setting somebody will swear they changed.
+async fn settings<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<crate::wire::SettingsRequest>,
+) -> Result<Json<crate::wire::SettingsResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let cmd = command(device, operator.read().now(), None);
+    if let Some(ms) = request.live_page_ms {
+        operator.save_setting(application::LIVE_PAGE_MS, &ms.to_string(), &cmd).await?;
+    }
+    if let Some(size) = request.live_page_size {
+        operator.save_setting(application::LIVE_PAGE_SIZE, &size.to_string(), &cmd).await?;
+    }
+    let settings = operator.read().venue_settings().await.map_err(crate::error::storage)?;
+    Ok(Json(crate::wire::SettingsResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        live_page_ms: settings.live_page_ms,
+        live_page_size: settings.live_page_size,
+        demo_available: operator.read().demo_available(),
+        page_layouts: crate::wire::layouts(),
+    }))
+}
+
+/// Upload the venue's logo (M6 follow-up).
+///
+/// Raw bytes rather than a JSON envelope or a multipart form: one file, one request, and
+/// nothing to parse before the only check that matters -- what the bytes actually are.
+async fn upload_logo<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+    bytes: axum::body::Bytes,
+) -> Result<Json<crate::wire::LogoResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let cmd = command(device, operator.read().now(), None);
+    let asset = operator.save_logo(bytes.to_vec(), &cmd).await?;
+    Ok(Json(crate::wire::LogoResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        media_type: asset.media_type,
+        bytes: asset.bytes.len(),
+    }))
+}
+
+/// Remove it. The screens go back to leading with the class, which is what they did before.
+async fn remove_logo<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+) -> Result<Json<crate::wire::LogoResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let cmd = command(device, operator.read().now(), None);
+    operator.remove_logo(&cmd).await?;
+    Ok(Json(crate::wire::LogoResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        media_type: String::new(),
+        bytes: 0,
+    }))
+}
+
+/// Forget one reader's mapping (ADR 0007 §7, amended 2026-09-02).
+///
+/// Nothing already recorded moves: `raw_events` keeps the device and reader behind every
+/// read, and an interpretation names the station rather than the reader. What changes is
+/// what happens next -- reads from this antenna become `UNKNOWN_READER` exceptions, which
+/// land in the inbox rather than disappearing.
+async fn remove_reader<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+    Path((device_id, reader_id)): Path<(String, String)>,
+    Body(request): Body<crate::wire::ReaderRemovalRequest>,
+) -> Result<Json<crate::wire::ReadersResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let key = domain::ReaderKey::parse(&device_id, &reader_id)
+        .map_err(|e| ApiError::invalid_body(format!("{device_id} {reader_id}: {e:?}")))?;
+    let cmd = command(device, operator.read().now(), request.reason);
+    operator.unregister_reader(&key, &cmd).await?;
+    Ok(Json(crate::wire::ReadersResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        readers: operator.read().readers().await,
+    }))
+}
+
+/// Fill the hub with a venue's worth of demo data and start producing reads (M6 follow-up).
+///
+/// Guarded like the power buttons: **a class on the floor wins**. Loading twelve invented
+/// athletes into somebody's evening would be indistinguishable from a bug.
+async fn load_demo<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+) -> Result<Json<crate::wire::DemoResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let cmd = command(device, operator.read().now(), None);
+    operator.load_demo(&cmd).await?;
+    Ok(Json(crate::wire::DemoResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        loaded: true,
+    }))
+}
+
+/// Stop the invented reads and stand the demo class down.
+///
+/// Allowed at any time, unlike loading: a demo that has gone wrong is exactly when somebody
+/// needs the off switch, and stopping invented reads cannot damage a real class.
+async fn clear_demo<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+) -> Result<Json<crate::wire::DemoResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let cmd = command(device, operator.read().now(), None);
+    operator.clear_demo(&cmd).await?;
+    Ok(Json(crate::wire::DemoResponse {
+        freshness: crate::read::freshness(operator.read()).await,
+        loaded: false,
+    }))
 }

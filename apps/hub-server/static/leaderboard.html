@@ -3,6 +3,7 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>HYROX</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/app.css">
 <script src="/i18n.js"></script>
@@ -15,6 +16,15 @@
   .row { transition: background-color .4s ease; }
   .row.just-finished { background-color: rgba(254, 228, 0, .16); }
   @media (prefers-reduced-motion: reduce) { .row { transition: none; } }
+</style>
+<style>
+  /* Same fixed canvas as the live screen: type sized for a room, scaled rather than
+     reflowed. At 2560x1440 the scale is 1 and the projector is untouched. */
+  html { background: #0A0A0A; overflow: hidden; }
+  /* The canvas is the height, not the window: `min-h-screen` on the body resolves against
+     the viewport, which after the scale is a different number entirely -- that is what left
+     the table hugging the top third of the screen. */
+  body { width: 2560px; height: 1440px; min-height: 1440px !important; transform-origin: top left; }
 </style>
 </head>
 <body class="bg-surface text-on-surface min-h-screen">
@@ -40,7 +50,7 @@
       <th class="text-right px-6 py-3 w-28" data-i18n="board.place"></th>
       <th class="text-right px-4 py-3 w-24 num">#</th>
       <th class="text-left  px-4 py-3" data-i18n="board.athlete"></th>
-      <th class="text-left  px-4 py-3 w-[38%]" data-i18n="board.progress"></th>
+      <th class="text-left  px-4 py-3" style="width:38%" data-i18n="board.progress"></th>
       <th class="text-right px-6 py-3 w-56" data-i18n="board.time"></th>
     </tr>
   </thead>
@@ -147,4 +157,15 @@ poll(); tick();
 setInterval(poll, 1000);
 setInterval(tick, 250);
 </script>
+<script>
+function fitScreen() {
+  const scale = Math.min(innerWidth / 2560, innerHeight / 1440);
+  const left = Math.max(0, (innerWidth - 2560 * scale) / 2);
+  const top = Math.max(0, (innerHeight - 1440 * scale) / 2);
+  document.body.style.transform = `translate(${left}px, ${top}px) scale(${scale})`;
+}
+addEventListener("resize", fitScreen);
+fitScreen();
+</script>
+<footer class="fixed bottom-0 right-0 px-6 py-3 text-sm tracking-widest text-on-surface-variant">uCareMedi.com</footer>
 </body></html>

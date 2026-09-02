@@ -1,0 +1,24 @@
+# The USB stick that holds the off-machine copy of the backups (ADR 0012).
+#
+# Format one stick as exFAT or ext4 and label it HYROXBACKUP:
+#
+#     mkfs.exfat -n HYROXBACKUP /dev/sdX1
+#
+# Then enable this unit and set HYROX_BACKUP_MIRROR=/media/hyroxbackup in
+# /etc/hyrox/hub.env. Without both, the machine still backs itself up locally -- it just has
+# no copy that survives its own disk failing.
+
+[Unit]
+Description=HYROX backup volume
+# Nothing waits for it. A venue that pulled the stick out must still boot and run classes.
+
+[Mount]
+What=/dev/disk/by-label/HYROXBACKUP
+Where=/media/hyroxbackup
+Type=auto
+# nofail: a missing stick delays nothing at boot. The backup job is what notices and says
+# so, because that is the moment it matters.
+Options=nofail,noatime
+
+[Install]
+WantedBy=multi-user.target

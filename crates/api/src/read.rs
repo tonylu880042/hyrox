@@ -18,9 +18,12 @@
 use crate::error::{storage, ApiError};
 use crate::state::ReadOnly;
 use crate::wire::{
-    AthleteStages, CoachResponse, ExercisesResponse, Freshness, LiveResponse, ResultResponse,
-    LeaderboardResponse, SessionResponse, StagesResponse, TemplateResponse, TemplatesResponse,
+    AthleteStages, CoachResponse, EntryResponse, ExercisesResponse, Freshness, LiveResponse,
+    SettingsResponse,
+    ResultResponse, LeaderboardResponse, SessionResponse, StagesResponse, TemplateResponse,
+    TemplatesResponse,
 };
+use domain::EntryCode;
 use application::Health;
 use application::HubStore;
 use axum::extract::{
@@ -58,6 +61,15 @@ where
         // badge (ADR 0009). Read-only, like everything else on this surface.
         .route("/api/health", get(health))
         .route("/api/leaderboard", get(leaderboard))
+        // An entrant's own two reads: who am I, and how did I do (ADR 0011). They are read
+        // from a phone the venue does not control, so they live here and nowhere else.
+        // Read by the projector itself, which carries no operator name: it is a screen.
+        .route("/api/settings", get(settings))
+        // The venue's own logo. Read by every screen, including the projector, which has
+        // no operator identity -- it is a wall.
+        .route("/api/logo", get(logo))
+        .route("/api/entry/{code}", get(entry))
+        .route("/api/entry/{code}/qr.svg", get(entry_qr))
         .with_state(state)
 }
 
@@ -254,4 +266,120 @@ where
         results: read.leaderboard().await,
         freshness: freshness(&read).await,
     })
+}
+
+/// One entrant's own view of themselves: their name, their bib, and their row of today's
+/// results (ADR 0011).
+///
+/// The code in the path is the athlete id, so no lookup table is needed and nothing can
+/// drift out of step. Parsed rather than compared raw, because somebody typing it off a
+/// phone types `O` for `0`.
+///
+/// Scoped to the class on now: an entry code is issued for a session, and a code that is
+/// not on today's roster is a `404` rather than an empty answer that reads like "you have
+/// no result yet".
+async fn entry<S>(
+    State(read): State<ReadOnly<S>>,
+    Path(code): Path<String>,
+) -> Result<Json<EntryResponse>, ApiError>
+where
+    S: HubStore,
+{
+    let code = parse_code(&code)?;
+    let results = read.leaderboard().await;
+    let row = results
+        .rows
+        .iter()
+        .find(|r| r.athlete_id == code.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::not_found("UNKNOWN_ENTRY", format!("no entrant {code} in this class"))
+        })?;
+    Ok(Json(EntryResponse {
+        freshness: freshness(&read).await,
+        code: code.to_string(),
+        session_name: results.session_name.clone(),
+        session_status: results.status,
+        ordering: results.ordering,
+        course_length: results.course.len(),
+        row,
+    }))
+}
+
+/// The entrant's QR, drawn by the hub.
+///
+/// It carries the six characters and nothing else -- not a URL. A desk scanner is a
+/// keyboard: scanning has to type a code into a search box, and a scanner that types a
+/// whole URL would be useless there (ADR 0011).
+///
+/// SVG rather than PNG so it stays sharp on any phone, and served from the hub like every
+/// other asset, because a venue with no internet must still be able to hand out entries.
+async fn entry_qr(Path(code): Path<String>) -> Result<impl IntoResponse, ApiError> {
+    let code = parse_code(code.trim_end_matches(".svg"))?;
+    let svg = qrcode::QrCode::new(code.as_str().as_bytes())
+        .map_err(|e| ApiError::invalid_body(format!("cannot encode {code}: {e}")))?
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(240, 240)
+        .quiet_zone(true)
+        .build();
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        svg,
+    ))
+}
+
+fn parse_code(raw: &str) -> Result<EntryCode, ApiError> {
+    EntryCode::parse(raw).map_err(|e| ApiError::invalid_body(format!("{raw:?}: {e}")))
+}
+
+/// What this venue has chosen for itself (M6 follow-up).
+///
+/// On the read surface because the live screen is the main reader and it has no operator
+/// identity -- it is a screen on a wall. Writing one is `PUT /api/operator/settings`.
+async fn settings<S>(State(read): State<ReadOnly<S>>) -> Result<Json<SettingsResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let settings = read.venue_settings().await.map_err(storage)?;
+    Ok(Json(SettingsResponse {
+        freshness: freshness(&read).await,
+        live_page_ms: settings.live_page_ms,
+        live_page_size: settings.live_page_size,
+        demo_available: read.demo_available(),
+        page_layouts: crate::wire::layouts(),
+    }))
+}
+
+/// The venue's logo, or a plain 404 where none was uploaded.
+///
+/// 404 rather than a blank image: a screen has to be able to tell "this gym has no logo"
+/// from "the logo failed to load", and lay itself out accordingly.
+///
+/// Served with the type that was recorded when it was accepted, never one guessed here, and
+/// with `nosniff` so a browser cannot decide it is something more interesting than a
+/// picture.
+async fn logo<S>(State(read): State<ReadOnly<S>>) -> Result<impl IntoResponse, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let asset = read
+        .venue_asset(application::VENUE_LOGO)
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| ApiError::not_found("NO_LOGO", "this venue has not uploaded a logo"))?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, asset.media_type),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            // Re-read rather than cached: a logo changed on a tablet has to reach the
+            // projector, and the file is tens of kilobytes on a local network.
+            (axum::http::header::CACHE_CONTROL, "no-cache".to_string()),
+        ],
+        asset.bytes,
+    ))
 }

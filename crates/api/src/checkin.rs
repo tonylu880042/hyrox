@@ -18,7 +18,10 @@ use crate::error::ApiError;
 use crate::identity::{Body, OperatorDevice};
 use crate::read::freshness;
 use crate::state::CheckIn;
-use crate::wire::{BindRequest, BindResponse, CheckInResponse, EnteredResponse, EnterRequest};
+use crate::wire::{
+    BindRequest, BindResponse, CheckInResponse, EnteredResponse, EnterRequest, SignupRequest,
+    SignupResponse,
+};
 use application::{Entrant, HubStore, OperatorCommand};
 use axum::extract::State;
 use axum::routing::{get, post};
@@ -34,6 +37,10 @@ where
     Router::new()
         .route("/", get(pending))
         .route("/entrants", post(enter))
+        // Self sign-up (ADR 0011): the one route on this hub a member of the public reaches.
+        // It is here rather than under /api/operator because it does exactly what the door
+        // does -- put a name on the roster -- and the surface's other guarantees hold for it.
+        .route("/signup", post(signup))
         .route("/bind", post(bind))
         .route("/rebind", post(rebind))
         .with_state(state)
@@ -137,3 +144,45 @@ where
         athletes: view.athletes,
     }))
 }
+
+/// Somebody entering a mock race on their own phone (ADR 0011).
+///
+/// The only unauthenticated write on the hub, and it is deliberately the narrowest one
+/// there is:
+///
+/// * **No operator header.** There is no device to name, and an audit row naming a tablet
+///   that did not do it would be a lie. The row says `SELF SIGN-UP`, which is the fact.
+/// * **A name and nothing else.** No bib -- printed numbers are the desk's to hand out, and
+///   letting the public claim one invites two people wearing 07. No member id -- claiming
+///   somebody else's membership from an unauthenticated route is not a thing we will offer.
+/// * **Nothing else on this surface moves.** Binding a band still requires the desk's
+///   header, so an entry is inert until a helper hands over a wristband.
+///
+/// The entry code that comes back is the whole point: it is their athlete id, the QR they
+/// carry, and the number they look their result up with afterwards.
+async fn signup<S>(
+    State(checkin): State<CheckIn<S>>,
+    Body(request): Body<SignupRequest>,
+) -> Result<Json<SignupResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let read = checkin.read();
+    let cmd = OperatorCommand::new(SELF_SIGNUP, read.now());
+    let entrant = Entrant::walk_in(request.display_name);
+    let code = checkin.enter(entrant, &cmd).await?;
+
+    let view = read.checkin().await;
+    let athlete = view.athletes.iter().find(|a| a.athlete_id == code);
+    Ok(Json(SignupResponse {
+        freshness: freshness(read).await,
+        display_name: athlete.map(|a| a.name.clone()).unwrap_or_default(),
+        bib: athlete.map(|a| a.bib),
+        code,
+    }))
+}
+
+/// What the audit trail calls an entrant who registered themselves. Not a device name: no
+/// device did it (CLAUDE.md 20; ADR 0001 D1).
+const SELF_SIGNUP: &str = "SELF SIGN-UP";

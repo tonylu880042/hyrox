@@ -16,7 +16,7 @@ fn event() -> EdgeEvent {
         reader_id: ReaderId::parse("rfid-02").unwrap(),
         boot_id: 18,
         sequence: 10_382,
-        tag_id: "E280117000001234".to_string(),
+        tag_id: vec!["E280117000001234".to_string()],
         detected_at: 1_787_734_821_382,
         uptime_ms: 382_912,
     }
@@ -69,14 +69,14 @@ fn rubbish_on_one_of_our_topics_is_reported_whole_and_never_fails() {
         b"".to_vec(),
         // Structurally valid JSON, but not an event the contract accepts: a negative
         // counter would poison the idempotency key (CLAUDE.md 16).
-        br#"{"device_id":"esp32-a4cf128b3d91","reader_id":"rfid-02","boot_id":-1,
+        br#"{"device_id":"a4cf128b3d91","reader_id":"rfid-02","boot_id":-1,
              "sequence":1,"tag_id":"E28","detected_at":1,"uptime_ms":1}"#
             .to_vec(),
         vec![0xff, 0xfe, 0x00, 0x01],
     ] {
         match classify(&topic::events(&device()), &payload) {
             Inbound::Undecodable { topic, payload: kept, .. } => {
-                assert_eq!(topic, "hyrox/v1/edge/esp32-a4cf128b3d91/events");
+                assert_eq!(topic, "hyrox/v1/edge/a4cf128b3d91/events");
                 // Kept whole: it is the only evidence of what the device actually sent.
                 assert_eq!(kept, payload);
             }
@@ -87,7 +87,7 @@ fn rubbish_on_one_of_our_topics_is_reported_whole_and_never_fails() {
 
 #[test]
 fn a_topic_that_is_not_ours_is_foreign_not_an_error() {
-    for name in ["hyrox/v2/edge/esp32-a4cf128b3d91/events", "other/app/topic", ""] {
+    for name in ["hyrox/v2/edge/a4cf128b3d91/events", "other/app/topic", ""] {
         match classify(name, b"whatever") {
             Inbound::Foreign { topic } => assert_eq!(topic, name),
             other => panic!("expected {name} to be foreign, got {other:?}"),

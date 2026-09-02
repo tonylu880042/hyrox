@@ -30,7 +30,12 @@ pub struct EdgeEvent {
     pub reader_id: ReaderId,
     pub boot_id: i64,
     pub sequence: i64,
-    pub tag_id: String,
+    /// Every tag the reader saw in one inventory round (ADR 0014).
+    ///
+    /// UHF anti-collision reports several tags at once, so the unit on the wire is the
+    /// round, not the tag: one message, one `sequence`, one ACK. Never empty — a round
+    /// that saw nothing is not an event.
+    pub tag_id: Vec<String>,
     /// Epoch milliseconds on the edge clock. This is the **official** timing source
     /// (CLAUDE.md 11, 17) and the only timestamp a result may ever be computed from.
     pub detected_at: i64,
@@ -67,7 +72,9 @@ impl EdgeEvent {
                 return Err(WireError::NegativeCounter { field, value });
             }
         }
-        if self.tag_id.trim().is_empty() {
+        // An empty round, or a blank entry in one, is malformed rather than merely odd:
+        // either would put a read of nobody into the immutable raw store.
+        if self.tag_id.is_empty() || self.tag_id.iter().any(|t| t.trim().is_empty()) {
             return Err(WireError::EmptyField("tag_id"));
         }
         Ok(())

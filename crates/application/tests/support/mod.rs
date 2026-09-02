@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead,
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead, SeenReader,
 };
 use domain::{
     AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, Interpreted, MemberRef,
@@ -54,6 +54,11 @@ struct Inner {
     /// (CLAUDE.md 19, 20).
     voided: Vec<i64>,
     audits: Vec<AuditEntry>,
+    seen_readers: Vec<SeenReader>,
+    venue_settings: Vec<(String, String)>,
+    deleted_readers: Vec<(String, String)>,
+    venue_assets: Vec<(String, application::VenueAsset)>,
+    backups: Vec<std::path::PathBuf>,
     sessions: Vec<Session>,
     configs: Vec<SessionConfig>,
     readers: Vec<ReaderRegistration>,
@@ -164,6 +169,31 @@ impl FakeStore {
             .collect()
     }
 
+    /// Readers the hub has heard from, whether configured or not (M6 settings screen).
+    pub fn with_reader_keys_seen(self, seen: Vec<(String, String, Instant, i64)>) -> Self {
+        self.inner.lock().unwrap().seen_readers = seen
+            .into_iter()
+            .map(|(device_id, reader_id, last_seen, reads)| SeenReader {
+                device_id,
+                reader_id,
+                last_seen,
+                reads,
+            })
+            .collect();
+        self
+    }
+
+    /// A venue setting already stored, including one that makes no sense.
+    pub fn with_venue_setting(self, key: &str, value: &str) -> Self {
+        self.inner.lock().unwrap().venue_settings.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Readers the map was asked to forget, in order.
+    pub fn deleted_readers(&self) -> Vec<(String, String)> {
+        self.inner.lock().unwrap().deleted_readers.clone()
+    }
+
     pub fn audits(&self) -> Vec<AuditEntry> {
         self.inner.lock().unwrap().audits.clone()
     }
@@ -230,8 +260,13 @@ impl HubStore for FakeStore {
         inner
             .calls
             .push(Call::Raw { tag_id: raw.tag_id.clone(), sequence: raw.sequence });
+        // Keyed the way `crates/storage` keys it: the round's idempotency key plus the tag,
+        // because one round carries several tags (ADR 0014).
         let existing = inner.raw.iter().position(|r| {
-            r.device_id == raw.device_id && r.boot_id == raw.boot_id && r.sequence == raw.sequence
+            r.device_id == raw.device_id
+                && r.boot_id == raw.boot_id
+                && r.sequence == raw.sequence
+                && r.tag_id == raw.tag_id
         });
         if let Some(i) = existing {
             return Ok(RawCommit {
@@ -404,6 +439,69 @@ impl HubStore for FakeStore {
         Ok(exists)
     }
 
+    /// The fake writes no file: what the tests care about is that a backup was asked for,
+    /// and by which surface.
+    async fn backup_to(&self, path: &std::path::Path) -> Result<(), FakeError> {
+        self.inner.lock().unwrap().backups.push(path.to_path_buf());
+        Ok(())
+    }
+
+    async fn delete_reader(&self, device_id: &str, reader_id: &str) -> Result<(), FakeError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .deleted_readers
+            .push((device_id.to_string(), reader_id.to_string()));
+        Ok(())
+    }
+
+    async fn venue_settings(&self) -> Result<Vec<(String, String)>, FakeError> {
+        Ok(self.inner.lock().unwrap().venue_settings.clone())
+    }
+
+    async fn save_venue_setting(
+        &self,
+        key: &str,
+        value: &str,
+        _at: Instant,
+        _by: &str,
+    ) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.venue_settings.retain(|(k, _)| k != key);
+        inner.venue_settings.push((key.to_string(), value.to_string()));
+        Ok(())
+    }
+
+    async fn venue_asset(
+        &self,
+        key: &str,
+    ) -> Result<Option<application::VenueAsset>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.venue_assets.iter().find(|(k, _)| k == key).map(|(_, a)| a.clone()))
+    }
+
+    async fn save_venue_asset(
+        &self,
+        key: &str,
+        media_type: &str,
+        bytes: &[u8],
+        _at: Instant,
+        _by: &str,
+    ) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.venue_assets.retain(|(k, _)| k != key);
+        inner.venue_assets.push((
+            key.to_string(),
+            application::VenueAsset { media_type: media_type.to_string(), bytes: bytes.to_vec() },
+        ));
+        Ok(())
+    }
+
+    async fn delete_venue_asset(&self, key: &str) -> Result<(), FakeError> {
+        self.inner.lock().unwrap().venue_assets.retain(|(k, _)| k != key);
+        Ok(())
+    }
+
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
         inner.calls.push(Call::Audit { action: entry.action.clone() });
@@ -465,6 +563,10 @@ impl HubStore for FakeStore {
         let mut entries = self.inner.lock().unwrap().bindings.clone();
         entries.sort_by_key(|b| b.bound_at);
         Ok(BindingLedger::restore(entries))
+    }
+
+    async fn reader_keys_seen(&self) -> Result<Vec<SeenReader>, FakeError> {
+        Ok(self.inner.lock().unwrap().seen_readers.clone())
     }
 
     async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, FakeError> {

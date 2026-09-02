@@ -1,0 +1,15 @@
+# One scheduled backup (ADR 0012). Cheap enough to run while a class is on the floor:
+# `VACUUM INTO` reads through a normal transaction, and in WAL mode a reader never blocks
+# ingestion.
+
+[Unit]
+Description=HYROX database backup
+After=hyrox-hub.service
+Wants=hyrox-hub.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/hyrox/backup scheduled
+# A backup of a venue's database is seconds. Ten minutes is the point at which something
+# is wrong and the unit should say so rather than hang.
+TimeoutStartSec=600

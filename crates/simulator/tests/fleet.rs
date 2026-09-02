@@ -62,8 +62,8 @@ async fn a_fleet_of_devices_reports_independently() {
 #[test]
 fn macs_are_configurable_per_device() {
     let d = device("A4-CF-12-8B-3D-91", &["rfid-01"]);
-    assert_eq!(d.device_id().as_str(), "esp32-a4cf128b3d91");
-    assert_eq!(d.device_id().mac_hex(), "a4cf128b3d91");
+    assert_eq!(d.device_id().as_str(), "a4cf128b3d91");
+    assert_eq!(d.device_id().as_str(), "a4cf128b3d91");
 }
 
 // --- repeated reads and re-arm, through the whole path --------------------------------

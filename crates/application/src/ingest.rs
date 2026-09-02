@@ -1,15 +1,21 @@
 //! The ingestion use case (CLAUDE.md 8, 11, 15, 16, 19).
 //!
-//! One raw read walks the whole pipeline here:
+//! One inventory round walks the whole pipeline here. UHF anti-collision means a round may
+//! carry several tags (ADR 0014): the round is the unit of delivery -- one message, one
+//! idempotency key, one ACK -- and each tag in it is a read of its own from there on.
 //!
 //! ```text
-//! raw edge event
+//! raw edge event (1..n tags)
 //!   -> commit raw            (durable, idempotent; earns the ACK -- ADR 0002)
 //!   -> resolve the reader    through ReaderRegistry   -> UNKNOWN_READER exception
 //!   -> resolve the tag       through BindingLedger    -> pending binding, or a roster exception
 //!   -> domain::decide + apply
 //!   -> commit the interpretation
 //! ```
+//!
+//! Every tag in the round is committed before the ACK is minted, so a round is released
+//! all-or-nothing: a failure part way through leaves the earlier tags stored, no ACK, and a
+//! resend that finds them already there (CLAUDE.md 15, 16).
 //!
 //! No branch drops the event (CLAUDE.md 31 principle 1). A read the hub cannot make sense
 //! of still ends up in the raw store, and either in the operator's exception inbox or on
@@ -19,7 +25,7 @@ use crate::live_session::LiveSession;
 use crate::ports::{HubStore, InterpretedWrite, RawRead};
 use contract::{Ack, AckStatus, CommitOutcome, EventStore, ReceivedEvent, WireError};
 use domain::{ExceptionReason, Instant, Interpreted, ReaderKey, TagId};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 
 /// What one committed read turned out to mean.
 #[derive(Clone, Debug)]
@@ -39,12 +45,16 @@ pub enum IngestOutcome {
     Unattributable,
 }
 
-/// A committed read and the ACK it earned.
+/// A committed round and the ACK it earned.
 #[derive(Debug)]
 pub struct Ingested {
-    /// Proof the read is durable. Publishing it releases the edge's copy (CLAUDE.md 15).
+    /// Proof the whole round is durable. Publishing it releases the edge's copy
+    /// (CLAUDE.md 15).
     pub ack: Ack,
-    pub outcome: IngestOutcome,
+    /// One outcome per tag in the round, in the order the reader reported them. A
+    /// redelivery yields a single [`IngestOutcome::Duplicate`]: the round was interpreted
+    /// the first time, and doing it again is exactly what CLAUDE.md 16 forbids.
+    pub outcomes: Vec<IngestOutcome>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -70,7 +80,7 @@ pub async fn ingest_read<S: HubStore>(
     store: &S,
     received: &ReceivedEvent,
 ) -> Result<Ingested, IngestError<S::Error>> {
-    let sink = RawSink { store, raw_event_id: AtomicI64::new(0) };
+    let sink = RawSink { store, raw_event_ids: Mutex::new(Vec::new()) };
     // Routed through `contract::ingest` on purpose: it is the only place an `Ack` can be
     // minted, and only on the line after a successful commit (ADR 0002). Doing the commit here
     // and building an ACK beside it would reopen exactly the hole that ADR closed.
@@ -79,51 +89,62 @@ pub async fn ingest_read<S: HubStore>(
         contract::IngestError::Malformed(w) => IngestError::Malformed(w),
     })?;
     if ack.payload().status == AckStatus::Duplicate {
-        return Ok(Ingested { ack, outcome: IngestOutcome::Duplicate });
+        return Ok(Ingested { ack, outcomes: vec![IngestOutcome::Duplicate] });
     }
-    let raw_event_id = sink.raw_event_id.load(Ordering::Relaxed);
+    let raw_event_ids = sink.raw_event_ids.into_inner().expect("the sink is not poisoned");
 
     let edge = received.event();
-    // Official timing, always (CLAUDE.md 11, 17).
+    // Official timing, always (CLAUDE.md 11, 17). Every tag in a round was in the field at
+    // the same instant, so they share it.
     let at = Instant(edge.detected_at);
 
-    let Ok(tag) = TagId::parse(&edge.tag_id) else {
-        return Ok(Ingested { ack, outcome: IngestOutcome::Unattributable });
-    };
+    // Each tag is interpreted on its own: they are different people, and one of them being
+    // unbound says nothing about the next. `raw_event_ids` is in the order the tags were
+    // committed, which is the order they arrived in.
+    let mut outcomes = Vec::with_capacity(edge.tag_id.len());
+    for (raw_tag, raw_event_id) in edge.tag_id.iter().zip(raw_event_ids) {
+        let Ok(tag) = TagId::parse(raw_tag) else {
+            outcomes.push(IngestOutcome::Unattributable);
+            continue;
+        };
 
-    // Tag resolution across every session, not just this one: one band is on one wrist
-    // (ADR 0001 D3), so a tag held elsewhere is "someone else's", not "unbound".
-    let holder = state
-        .bindings
-        .active()
-        .find(|b| b.tag_id == tag)
-        .map(|b| (b.session_id.clone(), b.athlete_id.clone()));
-    let Some((bound_session, athlete_id)) = holder else {
-        state.note_pending_tag(tag.clone());
-        return Ok(Ingested { ack, outcome: IngestOutcome::PendingBinding { tag_id: tag } });
-    };
+        // Tag resolution across every session, not just this one: one band is on one wrist
+        // (ADR 0001 D3), so a tag held elsewhere is "someone else's", not "unbound".
+        let holder = state
+            .bindings
+            .active()
+            .find(|b| b.tag_id == tag)
+            .map(|b| (b.session_id.clone(), b.athlete_id.clone()));
+        let Some((bound_session, athlete_id)) = holder else {
+            state.note_pending_tag(tag.clone());
+            outcomes.push(IngestOutcome::PendingBinding { tag_id: tag });
+            continue;
+        };
 
-    let on_roster = bound_session == state.session.id && state.athlete(&athlete_id).is_some();
-    let event = match attribute_read(
-        state,
-        store,
-        &athlete_id,
-        on_roster,
-        edge.device_id.as_str(),
-        edge.reader_id.as_str(),
-        Some(raw_event_id),
-        at,
-    )
-    .await
-    {
-        Ok(event) => event,
-        Err(source) => return Err(IngestError::Interpretation { ack, source }),
-    };
+        let on_roster = bound_session == state.session.id && state.athlete(&athlete_id).is_some();
+        let event = match attribute_read(
+            state,
+            store,
+            &athlete_id,
+            on_roster,
+            edge.device_id.as_str(),
+            edge.reader_id.as_str(),
+            Some(raw_event_id),
+            at,
+        )
+        .await
+        {
+            Ok(event) => event,
+            Err(source) => return Err(IngestError::Interpretation { ack, source }),
+        };
+        outcomes.push(IngestOutcome::Interpreted { athlete_id, event });
+    }
+
     if let Err(source) = store.save_session(&state.session, state.class_start).await {
         return Err(IngestError::Interpretation { ack, source });
     }
 
-    Ok(Ingested { ack, outcome: IngestOutcome::Interpreted { athlete_id, event } })
+    Ok(Ingested { ack, outcomes })
 }
 
 /// Interprets one read for a known athlete and folds it in -- but only after the store has
@@ -188,34 +209,51 @@ pub(crate) async fn attribute_read<S: HubStore>(
 }
 
 /// Adapts the hub's store to `contract::EventStore` so the ACK keeps its type-level guarantee,
-/// while still surfacing the row id the interpretation has to be linked to.
+/// while still surfacing the row ids the interpretations have to be linked to.
 ///
-/// The id is stashed in an atomic rather than returned because `EventStore::commit` is the
+/// The ids are stashed here rather than returned because `EventStore::commit` is the
 /// contract ADR 0002 froze, and widening it would put ACK minting back in every adapter's
 /// hands. Written and read within one task, either side of a single await.
 struct RawSink<'a, S: HubStore> {
     store: &'a S,
-    raw_event_id: AtomicI64,
+    raw_event_ids: Mutex<Vec<i64>>,
 }
 
 impl<S: HubStore> EventStore for RawSink<'_, S> {
     type Error = S::Error;
 
+    /// Commits every tag in the round. Returning `Ok` -- and so earning the ACK -- means all
+    /// of them are durable; a failure part way through leaves the earlier rows stored and no
+    /// ACK, and the resend finds them by their key (CLAUDE.md 16).
     async fn commit(&self, event: &ReceivedEvent) -> Result<CommitOutcome, S::Error> {
         let edge = event.event();
-        let committed = self
-            .store
-            .commit_raw(&RawRead {
-                device_id: edge.device_id.as_str().to_string(),
-                reader_id: edge.reader_id.as_str().to_string(),
-                boot_id: edge.boot_id,
-                sequence: edge.sequence,
-                tag_id: edge.tag_id.clone(),
-                detected_at: Instant(edge.detected_at),
-                received_at: Instant(event.received_at()),
-            })
-            .await?;
-        self.raw_event_id.store(committed.raw_event_id, Ordering::Relaxed);
-        Ok(committed.outcome)
+        let mut ids = Vec::with_capacity(edge.tag_id.len());
+        // `AlreadyStored` only when the *whole* round was already here. A partially stored
+        // round is a resend of one the hub never finished, so it still has work to do.
+        let mut every_tag_already_stored = true;
+        for tag in &edge.tag_id {
+            let committed = self
+                .store
+                .commit_raw(&RawRead {
+                    device_id: edge.device_id.as_str().to_string(),
+                    reader_id: edge.reader_id.as_str().to_string(),
+                    boot_id: edge.boot_id,
+                    sequence: edge.sequence,
+                    tag_id: tag.clone(),
+                    detected_at: Instant(edge.detected_at),
+                    received_at: Instant(event.received_at()),
+                })
+                .await?;
+            if committed.outcome == CommitOutcome::Stored {
+                every_tag_already_stored = false;
+            }
+            ids.push(committed.raw_event_id);
+        }
+        *self.raw_event_ids.lock().expect("the sink is not poisoned") = ids;
+        Ok(if every_tag_already_stored {
+            CommitOutcome::AlreadyStored
+        } else {
+            CommitOutcome::Stored
+        })
     }
 }

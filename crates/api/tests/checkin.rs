@@ -190,7 +190,10 @@ async fn a_walk_in_is_entered_with_only_a_name() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body["athlete_id"].as_str().expect("an id").starts_with("w-"));
+    // A walk-in's id is their entry code: six characters they can carry on a QR and type
+    // back afterwards (ADR 0011).
+    let id = body["athlete_id"].as_str().expect("an id");
+    assert!(domain::EntryCode::parse(id).is_ok(), "{id:?} should be an entry code");
     let saved = store.saved_athletes().pop().expect("a roster row");
     assert_eq!(saved.display_name, "陳小明");
     assert_eq!(saved.member_id, None, "no member reference is the record, not a gap");

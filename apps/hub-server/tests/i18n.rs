@@ -198,3 +198,72 @@ fn every_api_error_code_has_a_translation() {
         assert!(keys.iter().any(|k| *k == key), "{key} is missing from the dictionary");
     }
 }
+
+/// `app.css` is a captured Tailwind build, not a live compiler: a class written as an
+/// arbitrary value -- `h-[48px]`, `max-w-[360px]` -- exists only if it happened to be in
+/// the source when that CSS was generated. Writing a new one produces no rule at all, and
+/// the element renders at its natural size while the markup still looks correct.
+///
+/// Found the hard way: a venue logo styled `h-[48px]` came out four times its size and
+/// pushed the whole header onto two lines. Inline styles are the answer for anything new.
+#[test]
+fn no_screen_invents_an_arbitrary_tailwind_class_the_stylesheet_does_not_have() {
+    let css = include_str!("../static/app.css");
+    let screens: [(&str, &str); 7] = [
+        ("training.html", include_str!("../static/training.html")),
+        ("leaderboard.html", include_str!("../static/leaderboard.html")),
+        ("checkin.html", include_str!("../static/checkin.html")),
+        ("workout.html", include_str!("../static/workout.html")),
+        ("signup.html", include_str!("../static/signup.html")),
+        ("settings.html", include_str!("../static/settings.html")),
+        ("result.html", include_str!("../static/result.html")),
+    ];
+
+    // Nothing may be added to this list. An arbitrary Tailwind class that app.css does not
+    // carry produces no rule at all, so the markup looks right and the element renders at
+    // whatever it inherited -- the quietest kind of visual bug there is.
+    // Empty, and it should stay that way. The five that were here when this test was
+    // written have been converted to inline styles; the projector's per-station clock was
+    // rendering at 16px where the design says 46, which on a wall is the difference between
+    // a number and a smudge.
+    const ALREADY_DEAD: [&str; 0] = [];
+
+    let mut missing: Vec<String> = Vec::new();
+    for (name, html) in screens {
+        for class in arbitrary_classes(html) {
+            // The stylesheet escapes the brackets; either spelling counts as present.
+            let escaped = class.replace('[', "\\[").replace(']', "\\]");
+            if !css.contains(&class) && !css.contains(&escaped) {
+                missing.push(format!("{name}: {class}"));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    missing.retain(|m| !ALREADY_DEAD.contains(&m.as_str()));
+    assert!(
+        missing.is_empty(),
+        "classes with no rule in app.css (use an inline style instead): {missing:?}"
+    );
+}
+
+/// Every `utility-[value]` token that appears inside a `class="..."` attribute. Hand-rolled
+/// rather than a regex crate: one shape, twenty lines, no dependency.
+fn arbitrary_classes(html: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (_, attribute) in html.match_indices("class=\"").filter_map(|(i, _)| {
+        let rest = &html[i + 7..];
+        rest.find('"').map(|end| (i, &rest[..end]))
+    }) {
+        for token in attribute.split_whitespace() {
+            let Some(open) = token.find('[') else { continue };
+            if token.ends_with(']')
+                && open > 0
+                && token[..open].chars().all(|c| c.is_ascii_lowercase() || c == '-')
+            {
+                found.push(token.to_string());
+            }
+        }
+    }
+    found
+}

@@ -3,6 +3,7 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>HYROX</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/app.css">
 <script src="/i18n.js"></script>
@@ -22,6 +23,7 @@
     <span class="text-lg" data-i18n="checkin.title">Check-in</span>
     <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant whitespace-nowrap">
       <span id="freshness" class="font-mono"></span>
+      <span class="text-xs tracking-widest text-on-surface-variant">uCareMedi.com</span>
       <span id="lang" class="flex gap-1"></span>
     </div>
   </div>
@@ -60,6 +62,21 @@
       <button class="bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-i18n="checkin.add"></button>
     </form>
     <ul id="entrants" class="flex flex-col gap-2"></ul>
+  </section>
+
+  <!-- Finding an entrant who registered on their own phone (ADR 0011). A barcode scanner
+       is a keyboard: it types the six characters here and presses Enter. The camera is the
+       fallback for a desk with no scanner. -->
+  <section class="bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-1" data-i18n="checkin.findCode">Entry code</h2>
+    <p class="text-sm text-on-surface-variant mb-3" data-i18n="checkin.findCodeHint"></p>
+    <div class="flex flex-wrap gap-2">
+      <input id="code" maxlength="9" autocapitalize="characters" spellcheck="false"
+             class="tag-chip flex-1 min-w-[9rem] bg-surface-container-high border border-outline-variant rounded px-3 py-2 uppercase"/>
+      <button id="scan" class="border border-outline rounded px-4 py-2" data-i18n="checkin.scan"></button>
+    </div>
+    <video id="cam" class="hidden w-full max-w-sm mt-3 rounded border border-outline-variant" muted playsinline></video>
+    <p id="code-found" class="mt-3"></p>
   </section>
 
   <!-- Bands a reader has seen that belong to nobody yet. -->
@@ -150,6 +167,74 @@ function renderEntrants() {
     host.appendChild(li);
   }
 }
+
+// ── Finding an entrant by their code (ADR 0011) ───────────────────────────────
+// The code is the athlete id, so "look them up" is a filter over the roster we already
+// hold -- no extra request, and it works while the desk's connection is flaky.
+function findByCode(raw) {
+  const code = String(raw || "").trim().toUpperCase().replace(/[\s_-]/g, "")
+    .replace(/O/g, "0").replace(/[IL]/g, "1");
+  const found = VIEW.athletes.find((a) => a.athlete_id === code);
+  const out = document.getElementById("code-found");
+  if (!found) {
+    out.className = "mt-3 text-error";
+    out.textContent = I18N.t("checkin.codeNotFound").replace("{0}", code);
+    return null;
+  }
+  out.className = "mt-3";
+  out.textContent = `${found.bib ?? ""} ${found.name} — ${I18N.t(found.tag_id ? "checkin.bound" : "checkin.unbound")}`;
+  // Pre-select them on every band waiting to be claimed, so the next tap binds to them.
+  document.querySelectorAll("#pending select.who").forEach((sel) => (sel.value = found.athlete_id));
+  return found;
+}
+
+document.getElementById("code").addEventListener("keydown", (e) => {
+  // A scanner ends its burst with Enter. A person presses it too.
+  if (e.key === "Enter") { e.preventDefault(); findByCode(e.target.value); }
+});
+document.getElementById("code").addEventListener("input", (e) => {
+  if (e.target.value.replace(/[\s_-]/g, "").length >= 6) findByCode(e.target.value);
+});
+
+// Camera scanning uses the browser's own BarcodeDetector -- no library to vendor, nothing
+// to load from a CDN. It needs a secure context, which plain http on a venue LAN is not,
+// so this is the fallback and the scanner is the plan.
+let STREAM = null;
+document.getElementById("scan").onclick = async () => {
+  const video = document.getElementById("cam");
+  if (STREAM) {
+    STREAM.getTracks().forEach((t) => t.stop());
+    STREAM = null;
+    video.classList.add("hidden");
+    document.getElementById("scan").textContent = I18N.t("checkin.scan");
+    return;
+  }
+  if (!window.isSecureContext) return toast(I18N.t("checkin.scanInsecure"), true);
+  if (!("BarcodeDetector" in window)) return toast(I18N.t("checkin.scanUnavailable"), true);
+  try {
+    STREAM = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  } catch (e) {
+    return toast(I18N.t("checkin.scanUnavailable"), true);
+  }
+  video.srcObject = STREAM;
+  video.classList.remove("hidden");
+  await video.play();
+  document.getElementById("scan").textContent = I18N.t("checkin.scanStop");
+  const detector = new BarcodeDetector({ formats: ["qr_code"] });
+  const tick = async () => {
+    if (!STREAM) return;
+    try {
+      const [hit] = await detector.detect(video);
+      if (hit && findByCode(hit.rawValue)) {
+        document.getElementById("code").value = hit.rawValue;
+        document.getElementById("scan").click();
+        return;
+      }
+    } catch (e) { /* a frame that did not decode is the normal case */ }
+    setTimeout(tick, 300);
+  };
+  tick();
+};
 
 // ── Bands nobody owns yet ─────────────────────────────────────────────────────
 function renderPending() {

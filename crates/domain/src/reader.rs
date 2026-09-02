@@ -95,6 +95,19 @@ impl ReaderRegistry {
         }
     }
 
+    /// Takes a reader out of the map, answering with what was there.
+    ///
+    /// Safe for everything already recorded, and that is not a coincidence: `raw_events`
+    /// keeps the device and reader that produced each read (CLAUDE.md 19), and an
+    /// interpretation records the **station** rather than the reader. So removing one
+    /// changes only what happens to the *next* read from it -- which becomes an
+    /// `UNKNOWN_READER` exception, visible in the inbox rather than silently dropped
+    /// (CLAUDE.md 31).
+    pub fn remove(&mut self, key: &ReaderKey) -> Option<ReaderRegistration> {
+        let at = self.registrations.iter().position(|r| &r.key == key)?;
+        Some(self.registrations.remove(at))
+    }
+
     pub fn resolve(&self, key: &ReaderKey) -> Result<&ReaderRegistration, UnknownReader> {
         self.registrations.iter().find(|r| &r.key == key).ok_or_else(|| UnknownReader {
             device_id: key.device_id.clone(),

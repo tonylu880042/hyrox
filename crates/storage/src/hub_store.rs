@@ -6,7 +6,7 @@
 
 use crate::{RawEvent, Store, StoreError};
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead,
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead, SeenReader, VenueAsset,
 };
 use domain::{
     AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, PhysicalStation,
@@ -96,6 +96,47 @@ impl HubStore for Store {
         Store::void_interpreted(self, interpreted_event_id, at, operator, reason).await
     }
 
+    async fn backup_to(&self, path: &std::path::Path) -> Result<(), StoreError> {
+        Store::backup_to(self, path).await
+    }
+
+    async fn delete_reader(&self, device_id: &str, reader_id: &str) -> Result<(), StoreError> {
+        Store::delete_reader(self, device_id, reader_id).await
+    }
+
+    async fn venue_settings(&self) -> Result<Vec<(String, String)>, StoreError> {
+        Store::venue_settings(self).await
+    }
+
+    async fn save_venue_setting(
+        &self,
+        key: &str,
+        value: &str,
+        at: Instant,
+        by: &str,
+    ) -> Result<(), StoreError> {
+        Store::save_venue_setting(self, key, value, at, by).await
+    }
+
+    async fn venue_asset(&self, key: &str) -> Result<Option<VenueAsset>, StoreError> {
+        Store::venue_asset(self, key).await
+    }
+
+    async fn save_venue_asset(
+        &self,
+        key: &str,
+        media_type: &str,
+        bytes: &[u8],
+        at: Instant,
+        by: &str,
+    ) -> Result<(), StoreError> {
+        Store::save_venue_asset(self, key, media_type, bytes, at, by).await
+    }
+
+    async fn delete_venue_asset(&self, key: &str) -> Result<(), StoreError> {
+        Store::delete_venue_asset(self, key).await
+    }
+
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {
         self.save_audit(entry).await
     }
@@ -122,6 +163,10 @@ impl HubStore for Store {
 
     async fn bindings(&self) -> Result<BindingLedger, StoreError> {
         Store::bindings(self).await
+    }
+
+    async fn reader_keys_seen(&self) -> Result<Vec<SeenReader>, StoreError> {
+        Store::reader_keys_seen(self).await
     }
 
     async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, StoreError> {

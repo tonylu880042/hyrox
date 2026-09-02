@@ -7,8 +7,9 @@
 //! by the real ingestion path: publish → subscribe → decode → commit → ACK. Nothing
 //! short-circuits it.
 //!
-//! Behind the `dev-simulator` feature (on by default) and the `HYROX_SIM` environment
-//! variable, so a venue build carries no emulated hardware at all.
+//! Behind the `dev-simulator` feature (on by default) and, at run time, the demo button on
+//! the settings screen (`HYROX_DEMO=1`), so a venue build carries no emulated hardware at
+//! all and a venue machine never starts any.
 //!
 //! Two tasks rather than one `select!`: rumqttc's `EventLoop::poll` is not cancel-safe, and
 //! cancelling it at a tick boundary could drop an acknowledgement mid-flight.
@@ -35,9 +36,14 @@ const STEP: std::time::Duration = std::time::Duration::from_millis(100);
 /// contract -- the real one belongs with the firmware team.
 const RESEND_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Boots the device, publishes the class, and applies the hub's acknowledgements. Runs for
-/// as long as the process lives.
-pub async fn run(clock: VirtualClock, config: MqttConfig) {
+/// Boots the device, publishes the class, and applies the hub's acknowledgements.
+/// Publishing ends when `running` goes false, and the ACK poller is dropped with it: the
+/// demo button needs an off switch (M6 follow-up).
+pub async fn run_until(
+    clock: VirtualClock,
+    config: MqttConfig,
+    running: Arc<std::sync::atomic::AtomicBool>,
+) {
     let device = match boot(clock) {
         Ok(device) => device,
         Err(e) => {
@@ -54,8 +60,9 @@ pub async fn run(clock: VirtualClock, config: MqttConfig) {
 
     let (device, eventloop) = MqttDevice::attach(device, &config);
     let device = Arc::new(Mutex::new(device));
-    tokio::spawn(acks(Arc::clone(&device), eventloop));
-    publish_class(device, clock).await;
+    let poller = tokio::spawn(acks(Arc::clone(&device), eventloop));
+    publish_class(device, clock, running).await;
+    poller.abort();
 }
 
 /// One collector carrying every reader in the dev venue -- the layout CLAUDE.md 7.3 allows
@@ -76,13 +83,17 @@ fn boot(clock: VirtualClock) -> Result<SimDevice, simulator::ConfigError> {
 
 /// Presents each scripted tag to its reader as the virtual clock reaches it, then publishes
 /// whatever the journal is owed an ACK for.
-async fn publish_class(device: Arc<Mutex<MqttDevice>>, clock: VirtualClock) {
+async fn publish_class(
+    device: Arc<Mutex<MqttDevice>>,
+    clock: VirtualClock,
+    running: Arc<std::sync::atomic::AtomicBool>,
+) {
     let script = feeder::script(clock.class_start());
     let mut cursor = 0usize;
     let mut ticker = tokio::time::interval(STEP);
     let mut last_resend = tokio::time::Instant::now();
 
-    loop {
+    while running.load(std::sync::atomic::Ordering::SeqCst) {
         ticker.tick().await;
         let now = clock.now();
         let mut guard = device.lock().await;

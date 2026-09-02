@@ -20,11 +20,19 @@ use domain::{AthleteState, Instant, Session, SessionConfig};
 
 /// What to start if there is nothing to resume.
 pub struct SessionPlan {
-    /// A DRAFT session; it is armed as part of starting.
+    /// A DRAFT session; `start_now` decides whether it is armed and started as well.
     pub session: Session,
     pub config: SessionConfig,
     pub roster: Vec<RosterEntry>,
     pub class_start: Instant,
+    /// Whether to arm and start it immediately.
+    ///
+    /// False is what a hub boots with: an empty DRAFT class, nothing timing, waiting for a
+    /// coach to build it. It used to be unconditionally true, which was invisible while the
+    /// startup plan carried a fixture course and twelve invented athletes -- and wrong the
+    /// moment it did not, because a RUNNING class cannot be configured (ADR 0001 D2), so a
+    /// venue could not put a course on the very class its hub had started for it.
+    pub start_now: bool,
 }
 
 pub struct RosterEntry {
@@ -72,8 +80,16 @@ pub async fn resume_or_start<S: HubStore>(
             let config = stored.unwrap_or(plan.config);
             let athletes = store.rebuild_athletes(&existing.id).await?;
             let exceptions = store.exception_count(&existing.id).await?;
+            // Bibs are stored, not replayed (they are not events), so they have to be read
+            // back explicitly. Without this the door hands out a number somebody is already
+            // wearing and the store refuses the write -- an entrant turned away at a race
+            // they paid to enter, by a restart nobody saw (CLAUDE.md 21).
+            let bibs = store.athlete_bibs(&existing.id).await?;
             let mut state = LiveSession::new(existing, config, class_start)
                 .with_athletes(athletes);
+            for (athlete_id, bib) in bibs {
+                state.note_bib(&athlete_id, bib);
+            }
             state.exception_count = exceptions;
             load_venue(store, &mut state).await?;
             return Ok((state, recovery));
@@ -81,10 +97,12 @@ pub async fn resume_or_start<S: HubStore>(
     }
 
     let mut session = plan.session;
-    session
-        .mark_ready()
-        .and_then(|()| session.start())
-        .expect("a fresh draft always starts; terminal states go through the reopen use case");
+    if plan.start_now {
+        session
+            .mark_ready()
+            .and_then(|()| session.start())
+            .expect("a fresh draft always starts; terminal states go through the reopen use case");
+    }
     store.save_session(&session, plan.class_start).await?;
     // After the session row, not before: the configuration belongs to a session that exists.
     store.save_session_config(&plan.config).await?;

@@ -50,9 +50,19 @@ pub use live_session::LiveSession;
 pub use operator::{OperatorCommand, OperatorError};
 pub use ports::{
     AuditEntry, DirectoryError, HubStore, InterpretedWrite, MemberDirectory, RawCommit, RawRead,
-    StoredException, StoredRawRead, UnconfiguredDirectory,
+    SeenReader, StoredException, StoredRawRead, UnconfiguredDirectory,
 };
-pub use readers::register_reader;
+pub use readers::{register_reader, unregister_reader, unregistered_readers};
+pub mod assets;
+pub use assets::{
+    delete_venue_asset, save_venue_asset, venue_asset, AssetError, VenueAsset, MAX_ASSET_BYTES,
+    VENUE_LOGO,
+};
+pub mod settings;
+pub use settings::{
+    save_venue_setting, venue_settings, SettingError, VenueSettings, DEFAULT_LIVE_PAGE_MS,
+    DEFAULT_LIVE_PAGE_SIZE, LIVE_PAGE_LAYOUTS, LIVE_PAGE_MS, LIVE_PAGE_SIZE,
+};
 pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
 pub use results::{live_results, results, Ordering, ResultRow, SessionResults, SplitRow};
 pub use stages::{current_expectation, current_stage, stages, StageStatus, StageView};

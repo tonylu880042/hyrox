@@ -312,19 +312,33 @@ Binding must be traceable by Session.
 
 ## 7.3 Edge Device Identity
 
-ESP32 `device_id` is derived from the ESP32 Base MAC address.
+`device_id` **is** the edge device's Base MAC address.
 
-Canonical internal format:
+Canonical internal format (ADR 0015):
 
 ```text
-esp32-a4cf128b3d91
+a4cf128b3d91
 ```
+
+Twelve lower-case hex digits, no separators, no prefix.
+
+The id is normalised, not decorated. Normalisation is the part that earns its keep: `:`,
+`-` and `.` separators times upper and lower case give six spellings of one MAC, and six
+rows in the Reader map where there is one device. A lookup that misses on punctuation fails
+**silently** — every read from that reader files as UNKNOWN_READER, with no error to say
+why.
+
+Two entry points, and only two:
+
+- config files and human input go through a parser that accepts `A4:CF:12:8B:3D:91`,
+  `a4-cf-12-8b-3d-91` or bare hex, and normalises
+- the wire accepts the canonical form only; separators are rejected
 
 Do not create random UUIDs as the primary hardware identity.
 
 Keep `reader_id` separate from `device_id`.
 
-One ESP32 may support more than one Reader in the future.
+One device may support more than one Reader.
 
 ---
 
@@ -607,6 +621,12 @@ The value must:
 - be validated in the real venue
 - preferably be configurable per Reader
 
+Suppression state is per **Reader x Tag**, never per Reader alone.
+
+UHF sees a whole crowd at once. Presence kept per Reader would let athletes still standing
+in the field hold a departed tag's re-arm open indefinitely, and that athlete's next entry
+would never produce an event — a silent loss, which section 31 forbids first of all.
+
 ESP32 handles RF-level suppression.
 
 Central Hub handles business-level deduplication.
@@ -665,15 +685,35 @@ Minimum event fields:
 
 ```json
 {
-  "device_id": "esp32-a4cf128b3d91",
+  "device_id": "a4cf128b3d91",
   "reader_id": "rfid-02",
   "boot_id": 18,
   "sequence": 10382,
-  "tag_id": "E280117000001234",
+  "tag_id": ["E280117000001234", "E280117000005678"],
   "detected_at": 1787734821382,
   "uptime_ms": 382912
 }
 ```
+
+`tag_id` is an **array** (ADR 0014).
+
+The venue uses UHF RFID, whose anti-collision reports every tag in the field in one
+inventory round. The message therefore carries the round, not a single tag:
+
+```text
+unit of delivery = one inventory round   one message, one sequence, one ACK
+unit of record   = one tag               one row per tag in raw_events
+```
+
+Rules:
+
+- The array holds only the tags that count as **new sightings** in that round; tags still
+  continuously present are suppressed out of it (section 14).
+- An empty array is not an event. A round where every tag was suppressed publishes nothing
+  and consumes no `sequence`.
+- Central Hub fans the round out: each tag is resolved and interpreted for its own athlete,
+  and one tag being unbound says nothing about the next.
+- The single-string form is not accepted on the wire.
 
 Central Hub adds:
 
@@ -698,6 +738,13 @@ The combination below must be idempotent:
 ```text
 device_id + boot_id + sequence
 ```
+
+It addresses **one round**, not one tag. The ACK's granularity must equal the edge
+journal's granularity, or the edge has to track which tags within a round were released.
+
+Central Hub commits every tag in a round before minting the ACK. A commit that fails part
+way through yields no ACK, so the edge resends the whole round: the tags already stored are
+recognised by their key, and the missing ones are inserted.
 
 Duplicate delivery is allowed.
 
@@ -965,6 +1012,7 @@ The simulator must be able to emulate:
 - configurable MAC addresses
 - multiple Readers
 - multiple RFID Tags
+- multi-tag inventory rounds (UHF anti-collision)
 - repeated RF reads
 - Tag absence / re-arm
 - MQTT disconnect
@@ -1072,6 +1120,10 @@ Current known open issues include:
 - exact Coach correction permission model
 - production networking / VLAN design
 - Linux service packaging
+- whether the event needs an `rssi` field (mis-read filtering currently belongs to the
+  reader: power, antenna aiming, RSSI threshold — the hub cannot tell an athlete at the
+  antenna from someone walking past)
+- peak tags per inventory round, and the inventory period
 
 When blocked by an unresolved product rule:
 

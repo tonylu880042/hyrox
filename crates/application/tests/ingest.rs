@@ -13,6 +13,16 @@ use domain::{
 use contract::{AckStatus, EdgeEvent, ReceivedEvent};
 use support::{Call, FakeStore};
 
+/// A round of one tag yields one outcome. The unwrap is the assertion: anything else means
+/// the fan-out over a round changed shape (ADR 0014).
+fn sole(ingested: &application::Ingested) -> application::IngestOutcome {
+    match ingested.outcomes.as_slice() {
+        [outcome] => outcome.clone(),
+        other => panic!("one tag in, one outcome out; got {other:?}"),
+    }
+}
+
+
 const DEVICE: &str = "a4:cf:12:8b:3d:91";
 const CLASS_START: Instant = Instant(1_000_000);
 
@@ -22,13 +32,20 @@ fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
         reader_id: contract::ReaderId::parse(reader).expect("reader id"),
         boot_id: 7,
         sequence,
-        tag_id: tag.to_string(),
+        tag_id: vec![tag.to_string()],
         detected_at: at,
         uptime_ms: at - CLASS_START.0,
     };
     // received_at is deliberately later than detected_at: arrival is diagnostics, never
     // timing (CLAUDE.md 17).
     ReceivedEvent::new(event, at + 250)
+}
+
+/// One inventory round carrying several tags, all seen at the same instant (ADR 0014).
+fn round(reader: &str, tags: &[&str], sequence: i64, at: i64) -> ReceivedEvent {
+    let mut e = read(reader, "unused", sequence, at).into_event();
+    e.tag_id = tags.iter().map(|t| t.to_string()).collect();
+    ReceivedEvent::new(e, at + 250)
 }
 
 /// One armed training session, one athlete, a SKIERG entry reader, tag bound.
@@ -39,12 +56,12 @@ fn armed_session() -> LiveSession {
 
     let mut readers = ReaderRegistry::new();
     readers.register(ReaderRegistration::new(
-        ReaderKey::parse(&format!("esp32-{}", DEVICE.replace(':', "")), "rfid-01").expect("key"),
+        ReaderKey::parse(&DEVICE.replace(':', ""), "rfid-01").expect("key"),
         "SKIERG",
         ReaderMode::Entry,
     ));
     readers.register(ReaderRegistration::new(
-        ReaderKey::parse(&format!("esp32-{}", DEVICE.replace(':', "")), "rfid-02").expect("key"),
+        ReaderKey::parse(&DEVICE.replace(':', ""), "rfid-02").expect("key"),
         "SKIERG",
         ReaderMode::Exit,
     ));
@@ -69,7 +86,7 @@ async fn a_known_reader_and_a_bound_tag_produce_an_entry() {
         .await
         .expect("ingest");
 
-    match out.outcome {
+    match sole(&out) {
         IngestOutcome::Interpreted { ref athlete_id, event: Interpreted::Entered { ref station, started_timing, .. } } => {
             assert_eq!(athlete_id, "a1");
             assert_eq!(station, "SKIERG");
@@ -142,7 +159,7 @@ async fn an_unregistered_reader_becomes_an_unknown_reader_exception() {
         .expect("ingest");
 
     assert!(matches!(
-        out.outcome,
+        sole(&out),
         IngestOutcome::Interpreted {
             event: Interpreted::Exception { reason: ExceptionReason::UnknownReader, .. },
             ..
@@ -165,7 +182,7 @@ async fn a_device_id_that_is_not_canonical_is_an_unknown_reader() {
         .expect("ingest");
 
     assert!(matches!(
-        out.outcome,
+        sole(&out),
         IngestOutcome::Interpreted {
             event: Interpreted::Exception { reason: ExceptionReason::UnknownReader, .. },
             ..
@@ -182,7 +199,7 @@ async fn an_unbound_tag_is_a_pending_binding_and_not_an_exception() {
         .await
         .expect("ingest");
 
-    match out.outcome {
+    match sole(&out) {
         IngestOutcome::PendingBinding { ref tag_id } => assert_eq!(tag_id.as_str(), "TAG-NOBODY"),
         other => panic!("expected a pending binding, got {other:?}"),
     }
@@ -223,7 +240,7 @@ async fn a_tag_bound_to_someone_outside_the_roster_is_an_exception() {
         .await
         .expect("ingest");
 
-    match out.outcome {
+    match sole(&out) {
         IngestOutcome::Interpreted {
             ref athlete_id,
             event: Interpreted::Exception { reason: ExceptionReason::AthleteNotInSession, .. },
@@ -243,7 +260,7 @@ async fn a_redelivered_event_is_acknowledged_but_interpreted_only_once() {
     let second = ingest_read(&mut state, &store, &event).await.expect("redelivery");
 
     // Duplicate delivery is allowed, duplicate processing is not (CLAUDE.md 16).
-    assert!(matches!(second.outcome, IngestOutcome::Duplicate));
+    assert!(matches!(sole(&second), IngestOutcome::Duplicate));
     assert_eq!(second.ack.payload().status, AckStatus::Duplicate);
     assert_eq!(store.interpreted().len(), 1);
     assert_eq!(state.athlete("a1").unwrap().runs.len(), 1);
@@ -260,7 +277,7 @@ async fn an_event_arriving_before_the_session_is_armed_is_an_exception() {
         .expect("ingest");
 
     assert!(matches!(
-        out.outcome,
+        sole(&out),
         IngestOutcome::Interpreted {
             event: Interpreted::Exception { reason: ExceptionReason::SessionNotArmed, .. },
             ..
@@ -321,13 +338,13 @@ async fn a_read_with_an_unusable_tag_is_stored_but_cannot_be_attributed() {
     let store = FakeStore::new();
     let mut state = armed_session();
     let mut event = read("rfid-01", "TAG-A1", 1, 1_010_000).into_event();
-    event.tag_id = "   ".to_string();
+    event.tag_id = vec!["   ".to_string()];
 
     let out = ingest_read(&mut state, &store, &ReceivedEvent::new(event, 1_010_250))
         .await
         .expect("ingest");
 
-    assert!(matches!(out.outcome, IngestOutcome::Unattributable));
+    assert!(matches!(sole(&out), IngestOutcome::Unattributable));
     // Still durable: there is nothing to name it, but nothing is discarded either.
     assert_eq!(store.raw_count(), 1);
     assert!(state.pending_tags().is_empty(), "an unusable tag is not a check-in to-do");
@@ -392,4 +409,95 @@ async fn memory_and_the_log_agree_after_a_recovered_write_failure() {
     assert_eq!(replayed.current_station, live.current_station);
     assert_eq!(replayed.started_at, live.started_at);
     assert_eq!(replayed.runs.len(), live.runs.len());
+}
+
+// --- UHF inventory rounds (ADR 0014) -------------------------------------------------
+
+#[tokio::test]
+async fn every_tag_in_a_round_is_interpreted_for_its_own_athlete() {
+    // Two people at the antenna in the same instant. They are different athletes, so the
+    // round has to fan out; folding it into one read would silently lose the second.
+    let store = FakeStore::new();
+    let mut state = armed_session();
+    state
+        .bindings
+        .bind("s1", &TagId::parse("TAG-B2").unwrap(), "a2", CLASS_START)
+        .expect("bind the second band");
+    state.athletes.push(AthleteState::ready("a2", "LIN WEI"));
+
+    let out = ingest_read(&mut state, &store, &round("rfid-01", &["TAG-A1", "TAG-B2"], 1, 1_010_000))
+        .await
+        .expect("ingest");
+
+    assert_eq!(out.outcomes.len(), 2, "one outcome per tag, in the order they were read");
+    let who: Vec<&str> = out
+        .outcomes
+        .iter()
+        .map(|o| match o {
+            IngestOutcome::Interpreted { athlete_id, .. } => athlete_id.as_str(),
+            other => panic!("expected an interpretation, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(who, ["a1", "a2"]);
+
+    // Both entered SKIERG, both off the same detection instant (CLAUDE.md 11, 17).
+    for id in ["a1", "a2"] {
+        assert_eq!(state.athlete(id).unwrap().current_station.as_deref(), Some("SKIERG"));
+        assert_eq!(state.athlete(id).unwrap().started_at, Some(Instant(1_010_000)));
+    }
+    assert_eq!(store.raw_count(), 2, "one raw row per tag");
+}
+
+#[tokio::test]
+async fn a_round_earns_one_ack_after_every_tag_in_it_is_durable() {
+    // The ACK addresses the round, not the tag: `device_id + boot_id + sequence` is what the
+    // edge journals and what it releases (CLAUDE.md 15, 16).
+    let store = FakeStore::new();
+    let mut state = armed_session();
+    let event = round("rfid-01", &["TAG-A1", "TAG-NOBODY"], 3, 1_010_000);
+
+    let out = ingest_read(&mut state, &store, &event).await.expect("ingest");
+
+    assert_eq!(out.ack.payload().sequence, 3);
+    assert_eq!(out.ack.payload().status, AckStatus::Stored);
+    assert_eq!(store.raw_count(), 2, "the unbound tag is stored too, not dropped");
+    // An unbound band in the round does not hold up the bound one beside it.
+    assert!(matches!(out.outcomes[0], IngestOutcome::Interpreted { .. }));
+    assert!(matches!(out.outcomes[1], IngestOutcome::PendingBinding { .. }));
+}
+
+#[tokio::test]
+async fn a_redelivered_round_is_acked_but_interpreted_once() {
+    let store = FakeStore::new();
+    let mut state = armed_session();
+    let event = round("rfid-01", &["TAG-A1"], 4, 1_010_000);
+
+    ingest_read(&mut state, &store, &event).await.expect("first");
+    let second = ingest_read(&mut state, &store, &event).await.expect("redelivery");
+
+    assert!(matches!(sole(&second), IngestOutcome::Duplicate));
+    assert_eq!(second.ack.payload().status, AckStatus::Duplicate);
+    assert_eq!(store.raw_count(), 1);
+    assert_eq!(state.athlete("a1").unwrap().runs.len(), 1);
+}
+
+#[tokio::test]
+async fn a_resent_round_that_was_only_half_stored_finishes_the_job() {
+    // A commit that failed part way through leaves rows but no ACK, so the edge resends the
+    // whole round. The tags already there must not be reinterpreted, and the missing one
+    // must still land (CLAUDE.md 16, 31).
+    let store = FakeStore::new();
+    let mut state = armed_session();
+    // The first tag of the round arrives on its own -- what a partial commit leaves behind.
+    ingest_read(&mut state, &store, &round("rfid-01", &["TAG-A1"], 5, 1_010_000))
+        .await
+        .expect("the half that got through");
+    assert_eq!(store.raw_count(), 1);
+
+    let out = ingest_read(&mut state, &store, &round("rfid-01", &["TAG-A1", "TAG-NOBODY"], 5, 1_010_000))
+        .await
+        .expect("the resend");
+
+    assert_eq!(out.ack.payload().status, AckStatus::Stored, "the round was not fully stored");
+    assert_eq!(store.raw_count(), 2, "only the missing tag is inserted");
 }

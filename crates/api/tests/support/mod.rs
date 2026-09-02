@@ -12,7 +12,7 @@
 use api::{Clock, Hub};
 use application::{
     AuditEntry, HubStore, InterpretedWrite, LiveSession, RawCommit, RawRead, StoredException,
-    StoredRawRead,
+    StoredRawRead, SeenReader,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -55,6 +55,12 @@ struct Inner {
     interpreted: Vec<(String, Option<i64>, Interpreted)>,
     voided: Vec<i64>,
     audits: Vec<AuditEntry>,
+    seen_readers: Vec<SeenReader>,
+    venue_settings: Vec<(String, String)>,
+    deleted_readers: Vec<(String, String)>,
+    venue_assets: Vec<(String, application::VenueAsset)>,
+    power_actions: Vec<String>,
+    backups: Vec<std::path::PathBuf>,
     sessions: Vec<Session>,
     configs: Vec<SessionConfig>,
     readers: Vec<ReaderRegistration>,
@@ -118,6 +124,21 @@ impl FakeStore {
             .interpreted
             .push((athlete_id.to_string(), None, event));
         inner.interpreted.len() as i64
+    }
+
+    /// Where a backup was asked to be written, in the order it was asked for.
+    pub fn backups(&self) -> Vec<std::path::PathBuf> {
+        self.inner.lock().unwrap().backups.clone()
+    }
+
+    /// What the settings screen asked of the machine, in order (M6).
+    pub fn power_actions(&self) -> Vec<String> {
+        self.inner.lock().unwrap().power_actions.clone()
+    }
+
+    /// Readers the map was asked to forget, in order.
+    pub fn deleted_readers(&self) -> Vec<(String, String)> {
+        self.inner.lock().unwrap().deleted_readers.clone()
     }
 
     pub fn audits(&self) -> Vec<AuditEntry> {
@@ -267,6 +288,10 @@ impl HubStore for FakeStore {
         Ok(BindingLedger::restore(entries))
     }
 
+    async fn reader_keys_seen(&self) -> Result<Vec<SeenReader>, FakeError> {
+        Ok(self.inner.lock().unwrap().seen_readers.clone())
+    }
+
     async fn raw_tags_since(&self, since: Instant) -> Result<Vec<String>, FakeError> {
         let mut seen: Vec<String> = Vec::new();
         for r in &self.inner.lock().unwrap().raw {
@@ -392,6 +417,69 @@ impl HubStore for FakeStore {
         Ok(exists)
     }
 
+    /// The fake writes no file: what the tests care about is that a backup was asked for,
+    /// and by which surface.
+    async fn backup_to(&self, path: &std::path::Path) -> Result<(), FakeError> {
+        self.inner.lock().unwrap().backups.push(path.to_path_buf());
+        Ok(())
+    }
+
+    async fn delete_reader(&self, device_id: &str, reader_id: &str) -> Result<(), FakeError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .deleted_readers
+            .push((device_id.to_string(), reader_id.to_string()));
+        Ok(())
+    }
+
+    async fn venue_settings(&self) -> Result<Vec<(String, String)>, FakeError> {
+        Ok(self.inner.lock().unwrap().venue_settings.clone())
+    }
+
+    async fn save_venue_setting(
+        &self,
+        key: &str,
+        value: &str,
+        _at: Instant,
+        _by: &str,
+    ) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.venue_settings.retain(|(k, _)| k != key);
+        inner.venue_settings.push((key.to_string(), value.to_string()));
+        Ok(())
+    }
+
+    async fn venue_asset(
+        &self,
+        key: &str,
+    ) -> Result<Option<application::VenueAsset>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.venue_assets.iter().find(|(k, _)| k == key).map(|(_, a)| a.clone()))
+    }
+
+    async fn save_venue_asset(
+        &self,
+        key: &str,
+        media_type: &str,
+        bytes: &[u8],
+        _at: Instant,
+        _by: &str,
+    ) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.venue_assets.retain(|(k, _)| k != key);
+        inner.venue_assets.push((
+            key.to_string(),
+            application::VenueAsset { media_type: media_type.to_string(), bytes: bytes.to_vec() },
+        ));
+        Ok(())
+    }
+
+    async fn delete_venue_asset(&self, key: &str) -> Result<(), FakeError> {
+        self.inner.lock().unwrap().venue_assets.retain(|(k, _)| k != key);
+        Ok(())
+    }
+
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), FakeError> {
         self.inner.lock().unwrap().audits.push(entry.clone());
         Ok(())
@@ -477,9 +565,75 @@ pub fn running_session() -> LiveSession {
     state
 }
 
+/// The fake is also the power control. One object recording everything keeps the fixtures
+/// unchanged and the assertions in one place; a real deployment has two separate things.
+impl api::Power for FakeStore {
+    fn request(&self, action: api::PowerAction) -> Result<(), String> {
+        let name = match action {
+            api::PowerAction::Poweroff => "POWEROFF",
+            api::PowerAction::Reboot => "REBOOT",
+            api::PowerAction::RestartService => "RESTART_SERVICE",
+        };
+        self.inner.lock().unwrap().power_actions.push(name.to_string());
+        Ok(())
+    }
+}
+
+/// A hub that offers demo data, and a handle to see what was asked of it.
+pub struct FakeDemo {
+    calls: std::sync::Mutex<Vec<&'static str>>,
+}
+
+impl FakeDemo {
+    pub fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl api::Demo for FakeDemo {
+    fn available(&self) -> bool {
+        true
+    }
+    fn load(&self) -> Result<(), String> {
+        self.calls.lock().unwrap().push("load");
+        Ok(())
+    }
+    fn clear(&self) -> Result<(), String> {
+        self.calls.lock().unwrap().push("clear");
+        Ok(())
+    }
+}
+
+/// A hub set up the way a test machine is: demo data available.
+pub fn demo_hub(state: LiveSession) -> (Router, Arc<FakeDemo>) {
+    let store = Arc::new(FakeStore::new());
+    let demo = Arc::new(FakeDemo { calls: std::sync::Mutex::new(Vec::new()) });
+    let hub = Hub::new(
+        state,
+        Arc::clone(&store),
+        Arc::new(FixedClock(NOW)),
+        250,
+        16,
+        "test",
+        std::env::temp_dir().join("hyrox-test-backups"),
+    )
+    .with_power(Arc::clone(&store) as Arc<dyn api::Power>)
+    .with_demo(Arc::clone(&demo) as Arc<dyn api::Demo>);
+    (api::router(hub), demo)
+}
+
 /// A router over the given session and store, on a clock the test controls.
 pub fn hub(state: LiveSession, store: Arc<FakeStore>) -> (Router, Arc<FakeStore>) {
-    let hub = Hub::new(state, Arc::clone(&store), Arc::new(FixedClock(NOW)), 250, 16, "test");
+    let hub = Hub::new(
+        state,
+        Arc::clone(&store),
+        Arc::new(FixedClock(NOW)),
+        250,
+        16,
+        "test",
+        std::env::temp_dir().join("hyrox-test-backups"),
+    )
+    .with_power(Arc::clone(&store) as Arc<dyn api::Power>);
     (api::router(hub), store)
 }
 
@@ -487,6 +641,17 @@ pub fn hub(state: LiveSession, store: Arc<FakeStore>) -> (Router, Arc<FakeStore>
 pub fn running() -> (Router, Arc<FakeStore>) {
     let store = Arc::new(FakeStore::new());
     hub(running_session(), store)
+}
+
+/// A class that has been run and closed, which is when the machine may be switched off.
+pub fn completed_session() -> LiveSession {
+    let mut state = running_session();
+    state.session.complete().expect("complete");
+    state
+}
+
+pub fn completed() -> (Router, Arc<FakeStore>) {
+    hub(completed_session(), Arc::new(FakeStore::new()))
 }
 
 pub fn draft() -> (Router, Arc<FakeStore>) {
@@ -507,6 +672,41 @@ pub async fn call(router: &Router, request: Request<Body>) -> (StatusCode, serde
         .expect("a readable body");
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, json)
+}
+
+/// The same, when the answer is not JSON: status, content type, body as text.
+/// The entry QR is an SVG, and "the hub draws it itself" is the property under test.
+pub async fn raw(router: &Router, request: Request<Body>) -> (StatusCode, String, String) {
+    let response = router.clone().oneshot(request).await.expect("the router always answers");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("a readable body");
+    (status, content_type, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The same again, without turning the body into text. `from_utf8_lossy` replaces every
+/// byte that is not valid UTF-8, so a PNG comes back a different length than it went in --
+/// which is exactly what an image assertion needs to compare.
+pub async fn raw_bytes(router: &Router, request: Request<Body>) -> (StatusCode, String, Vec<u8>) {
+    let response = router.clone().oneshot(request).await.expect("the router always answers");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("a readable body");
+    (status, content_type, bytes.to_vec())
 }
 
 pub fn get(path: &str) -> Request<Body> {
@@ -533,6 +733,26 @@ pub fn del(path: &str, device: &str, body: serde_json::Value) -> Request<Body> {
 /// A write with no identity at all. Must be refused, never defaulted (ADR 0001 D1).
 pub fn anonymous(method: &str, path: &str, body: serde_json::Value) -> Request<Body> {
     write(method, path, None, body)
+}
+
+/// A binary upload: the venue's logo arrives as raw bytes, not as JSON.
+pub fn upload(path: &str, device: &str, content_type: &str, bytes: Vec<u8>) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", content_type)
+        .header(api::OPERATOR_HEADER, device)
+        .body(Body::from(bytes))
+        .expect("a valid request")
+}
+
+pub fn upload_anonymous(path: &str, content_type: &str, bytes: Vec<u8>) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", content_type)
+        .body(Body::from(bytes))
+        .expect("a valid request")
 }
 
 fn write(

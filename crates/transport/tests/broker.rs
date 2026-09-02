@@ -110,7 +110,7 @@ fn event(sequence: i64) -> EdgeEvent {
         reader_id: ReaderId::parse("rfid-skierg-entry").expect("canonical reader id"),
         boot_id: 7,
         sequence,
-        tag_id: "E280117000001234".to_string(),
+        tag_id: vec!["E280117000001234".to_string()],
         detected_at: 1_787_734_821_382,
         uptime_ms: 382_912,
     }

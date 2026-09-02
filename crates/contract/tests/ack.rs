@@ -12,8 +12,8 @@ use contract::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-const CANONICAL: &str = r#"{"device_id":"esp32-a4cf128b3d91","reader_id":"rfid-02",
-    "boot_id":18,"sequence":10382,"tag_id":"E280117000001234",
+const CANONICAL: &str = r#"{"device_id":"a4cf128b3d91","reader_id":"rfid-02",
+    "boot_id":18,"sequence":10382,"tag_id":["E280117000001234"],
     "detected_at":1787734821382,"uptime_ms":382912}"#;
 
 fn event() -> EdgeEvent {
@@ -71,7 +71,7 @@ async fn a_committed_event_is_acked() {
 
     assert_eq!(store.stored(), 1);
     let p = ack.payload();
-    assert_eq!(p.device_id.as_str(), "esp32-a4cf128b3d91");
+    assert_eq!(p.device_id.as_str(), "a4cf128b3d91");
     assert_eq!(p.boot_id, 18);
     assert_eq!(p.sequence, 10382);
     assert_eq!(p.status, AckStatus::Stored);
@@ -153,11 +153,11 @@ async fn ingesting_a_payload_records_arrival_without_touching_official_time() {
 
 #[test]
 fn the_ack_wire_form_round_trips_for_the_edge_to_read() {
-    let raw = r#"{"device_id":"esp32-a4cf128b3d91","boot_id":18,"sequence":10382,"status":"STORED"}"#;
+    let raw = r#"{"device_id":"a4cf128b3d91","boot_id":18,"sequence":10382,"status":"STORED"}"#;
     let p = AckPayload::decode(raw.as_bytes()).unwrap();
     assert_eq!(p.status, AckStatus::Stored);
     assert_eq!(AckPayload::decode(&p.encode()).unwrap(), p);
 
-    let dup = r#"{"device_id":"esp32-a4cf128b3d91","boot_id":18,"sequence":1,"status":"DUPLICATE"}"#;
+    let dup = r#"{"device_id":"a4cf128b3d91","boot_id":18,"sequence":1,"status":"DUPLICATE"}"#;
     assert_eq!(AckPayload::decode(dup.as_bytes()).unwrap().status, AckStatus::Duplicate);
 }

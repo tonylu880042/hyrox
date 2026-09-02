@@ -17,10 +17,11 @@
 //! browser ---HTTP/WS---> api::router --> api capability state --> application use cases
 //! ```
 //!
-//! `HYROX_DB`, `HYROX_MQTT_HOST`, `HYROX_MQTT_PORT`, `HYROX_MQTT_CLIENT_ID` and `HYROX_SIM`
+//! `HYROX_DB`, `HYROX_MQTT_HOST`, `HYROX_MQTT_PORT`, `HYROX_MQTT_CLIENT_ID` and `HYROX_DEMO`
 //! configure it; see `README.md`.
 
 mod feeder;
+mod power;
 mod fonts;
 mod mqtt;
 
@@ -29,19 +30,31 @@ mod mqtt;
 /// `--no-default-features` leaves it out of a venue build entirely.
 #[cfg(feature = "dev-simulator")]
 mod sim;
+/// The demo venue behind the settings screen's button (M6 follow-up).
+#[cfg(feature = "dev-simulator")]
+mod demo;
+
+/// Whether this machine offers demo data. A build without the emulated collector never does.
+fn demo_enabled() -> bool {
+    #[cfg(feature = "dev-simulator")]
+    {
+        demo::enabled()
+    }
+    #[cfg(not(feature = "dev-simulator"))]
+    {
+        false
+    }
+}
 
 use api::{Clock, Hub};
-use application::{
-    apply_finish_policy, checkin::bind_tag, register_reader, snapshot, OperatorCommand,
-    Recovery, RosterEntry, SessionPlan,
-};
+use application::{apply_finish_policy, snapshot, Recovery, SessionPlan};
 use axum::{
     response::{Html, Redirect},
     routing::get,
     Router,
 };
 use domain::{
-    Duration, ExerciseLibrary, FinishPolicy, Instant, Session, SessionConfig, SessionMode,
+    Duration, ExerciseLibrary, Instant, Session, SessionConfig, SessionMode,
     WorkoutTemplate,
 };
 use std::{
@@ -56,6 +69,25 @@ use transport::MqttConfig;
 /// running it faster keeps the screen moving while iterating on the UI.
 /// ponytail: dev-only knob. Real ingestion uses detected_at straight from the edge.
 const SPEED: i64 = 12;
+
+/// Exit code for a damaged database. The systemd unit lists it in
+/// `RestartPreventExitStatus`, so the machine stops instead of restart-looping into the
+/// same broken file (ADR 0012).
+const EXIT_DATABASE_DAMAGED: i32 = 78;
+
+/// Where backups are written and looked for. `HYROX_BACKUP_DIR` overrides it; the default
+/// sits beside the database, which on the appliance is systemd's `StateDirectory`.
+fn backup_dir(db_url: &str) -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("HYROX_BACKUP_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let path = db_url.trim_start_matches("sqlite://");
+    std::path::Path::new(path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("backups")
+}
 
 /// The hub's MQTT client id. Stable on purpose: with `clean_session = false` the broker
 /// holds this client's QoS 1 subscription and its queued messages while the hub is down, so
@@ -80,6 +112,10 @@ const SNAPSHOT_CHANNEL_CAPACITY: usize = 16;
 const TRAINING_HTML: &str = include_str!("../static/training.html");
 const WORKOUT_HTML: &str = include_str!("../static/workout.html");
 const CHECKIN_HTML: &str = include_str!("../static/checkin.html");
+/// The entrant's own page: sign up, keep the QR, look the result up (ADR 0011).
+const SIGNUP_HTML: &str = include_str!("../static/signup.html");
+/// The venue's settings screen: readers, devices, exceptions, power (M6).
+const SETTINGS_HTML: &str = include_str!("../static/settings.html");
 const LEADERBOARD_HTML: &str = include_str!("../static/leaderboard.html");
 const RESULT_HTML: &str = include_str!("../static/result.html");
 /// The interface dictionary both screens read their labels from (roadmap M7). Served from
@@ -91,6 +127,8 @@ const I18N_JS: &str = include_str!("../static/i18n.js");
 use fonts::FONTS;
 
 const APP_CSS: &str = include_str!("../static/app.css");
+/// The tab icon. One letter, one colour: it is read at 16 pixels.
+const FAVICON: &str = include_str!("../static/favicon.svg");
 const FONTS_CSS: &str = include_str!("../static/fonts.css");
 
 /// The development clock: the class script's time, run fast.
@@ -146,9 +184,26 @@ fn wall_clock_ms() -> i64 {
 #[tokio::main]
 async fn main() {
     let db = std::env::var("HYROX_DB").unwrap_or_else(|_| "sqlite://hyrox.db".to_string());
-    let store = Store::open(&db)
-        .await
-        .unwrap_or_else(|e| panic!("cannot open {db}: {e}"));
+    let store = match Store::open(&db).await {
+        Ok(store) => store,
+        // A damaged file is not a crash to retry: restarting into it forever would keep
+        // acknowledging nothing and hide the problem behind a flapping unit. Stop, say what
+        // to do, and exit with the code the systemd unit refuses to restart on (ADR 0012).
+        Err(storage::StoreError::Damaged(problems)) => {
+            eprintln!("DATABASE DAMAGED: {db}");
+            for problem in &problems {
+                eprintln!("  {problem}");
+            }
+            eprintln!(
+                "\nThe hub will not start. Nothing is acknowledged while it is down, so the\n\
+                 readers keep their events (CLAUDE.md 15, 18).\n\
+                 Restore the most recent file from {}, then start the service again.",
+                backup_dir(&db).display()
+            );
+            std::process::exit(EXIT_DATABASE_DAMAGED);
+        }
+        Err(e) => panic!("cannot open {db}: {e}"),
+    };
 
     // First-run content: the exercise library and the starter templates (workout brief
     // §3, §16). Idempotent -- both are keyed writes, so a hub that has been started before
@@ -157,29 +212,24 @@ async fn main() {
     // stable ids.
     seed_workout_library(&store).await;
 
+    // A fresh hub starts with one empty DRAFT class and nothing else: no course, no roster,
+    // no readers. The venue fills it in from the training screen, or loads the demo venue
+    // from settings on a test machine (`HYROX_DEMO=1`). A customer's first boot used to show
+    // twelve invented athletes, which is worse than an empty screen (ADR 0009 amended).
     let class_start = Instant(wall_clock_ms());
+    let id = format!("s-{}", class_start.0);
     let plan = SessionPlan {
-        session: Session::new_draft(
-            format!("s-{}", class_start.0),
-            "THURSDAY 19:00 HYROX CLASS",
-            SessionMode::Training,
-        ),
-        config: SessionConfig::new(format!("s-{}", class_start.0))
-            .with_course(feeder::course())
-            .with_finish_policy(FinishPolicy::ClassDuration { limit: DEV_CLASS_LENGTH }),
-        roster: feeder::athletes()
-            .iter()
-            .enumerate()
-            .map(|(i, name)| RosterEntry {
-                athlete_id: feeder::athlete_id(i),
-                display_name: (*name).to_string(),
-            })
-            .collect(),
+        session: Session::new_draft(&id, "NEW CLASS", SessionMode::Training),
+        config: SessionConfig::new(&id),
+        roster: Vec::new(),
         class_start,
+        // Nothing is timing anybody yet. A course still has to be chosen, and a RUNNING
+        // class cannot be configured.
+        start_now: false,
     };
 
     // Resume an interrupted session rather than starting a new one (CLAUDE.md 21).
-    let (mut state, recovery) = application::resume_or_start(&store, plan)
+    let (state, recovery) = application::resume_or_start(&store, plan)
         .await
         .expect("recovery failed");
     match recovery {
@@ -200,36 +250,7 @@ async fn main() {
         Recovery::Started => println!("started new session {}", state.session.id),
     }
 
-    // Dev venue provisioning. The reader map and the bands are recovered from the store by
-    // `resume_or_start`; these calls only fill in what a fresh database does not have yet.
-    // Registering an unchanged reader is a no-op, and a band already bound is left alone.
     let session_id = state.session.id.clone();
-    let provisioning = OperatorCommand::new("DEV FEEDER", state.class_start);
-    for registration in feeder::readers() {
-        register_reader(&mut state, &store, &registration, &provisioning)
-            .await
-            .expect("dev reader registration");
-    }
-    for (tag, athlete_id) in feeder::bands() {
-        // Two reasons to leave a band alone, and both are the hub being right rather than
-        // the hub being in the way:
-        //
-        // * the athlete is not on this session's roster -- once a coach builds their own
-        //   class from a template, the roster is theirs, not the dev script's (ADR 0001 D4);
-        // * the band is already on somebody's wrist. Tag uniqueness is checked across
-        //   *every* session, not within one (migration 0003), so a band handed out in
-        //   yesterday's class is still bound today until someone unbinds it.
-        //
-        // Neither is an error worth refusing to boot over. A venue machine that will not
-        // start because of demo data is a far worse failure than a missing demo band.
-        let on_roster = state.athlete(&athlete_id).is_some();
-        let already_worn = state.bindings.active().any(|b| b.tag_id == tag);
-        if on_roster && !already_worn {
-            if let Err(e) = bind_tag(&mut state, &store, &tag, &athlete_id, &provisioning).await {
-                eprintln!("dev band {tag:?} not bound: {e:?}");
-            }
-        }
-    }
 
     // Dev virtual clock only: pick up where the stored events left off instead of replaying
     // the class from zero. Not a business value.
@@ -240,7 +261,11 @@ async fn main() {
         .map(|t| t.0 - state.class_start.0)
         .unwrap_or(0);
 
-    let clock = VirtualClock::start(state.class_start, resume_offset, SPEED);
+    let backups = backup_dir(&db);
+    // Real time on a venue machine. The fast clock exists so a demo class does not take
+    // twenty minutes to watch, and it must never be what a customer's screens read.
+    let speed = if demo_enabled() { SPEED } else { 1 };
+    let clock = VirtualClock::start(state.class_start, resume_offset, speed);
     let hub = Hub::new(
         state,
         Arc::new(store),
@@ -250,22 +275,26 @@ async fn main() {
         // The shipped artefact's version, which is what `/api/health` is asked for
         // (ADR 0009) -- not any library crate's.
         env!("CARGO_PKG_VERSION"),
-    );
+        backups,
+    )
+    // The settings screen's power buttons (M6). The policy -- a class on the floor wins --
+    // is enforced above this; all that is handed over here is the mechanism.
+    .with_power(Arc::new(power::SystemdPower));
+
+    // Demo data on demand (M6 follow-up). Present only in a build that carries the emulated
+    // collector, and inert unless HYROX_DEMO says otherwise -- the hub and the demo need
+    // each other, so the hub is handed over once it exists.
+    #[cfg(feature = "dev-simulator")]
+    let hub = {
+        let venue = Arc::new(demo::DemoVenue::new(clock, broker_config()));
+        let hub = hub.with_demo(venue.clone());
+        venue.attach(hub.clone());
+        hub
+    };
 
     // Real ingestion: everything that reaches the screen from here on arrived over the
     // broker (CLAUDE.md 15, 16).
     let broker = broker_config();
-
-    #[cfg(feature = "dev-simulator")]
-    if std::env::var("HYROX_SIM").as_deref() != Ok("off") {
-        // A separate client id: the emulated collector is a different MQTT client from the
-        // hub, exactly as a real ESP32 is.
-        let device = MqttConfig {
-            client_id: format!("hyrox-sim-{}", feeder::DEVICE_MAC.replace(':', "")),
-            ..broker.clone()
-        };
-        tokio::spawn(sim::run(clock, device));
-    }
 
     tokio::spawn(mqtt::run(hub.clone(), broker));
     tokio::spawn(tick_loop(hub.clone()));
@@ -278,10 +307,16 @@ async fn main() {
         .route("/live", get(|| async { Html(TRAINING_HTML) }))
         .route("/workout", get(|| async { Html(WORKOUT_HTML) }))
         .route("/checkin", get(|| async { Html(CHECKIN_HTML) }))
+        .route("/signup", get(|| async { Html(SIGNUP_HTML) }))
+        .route("/settings", get(|| async { Html(SETTINGS_HTML) }))
         .route("/leaderboard", get(|| async { Html(LEADERBOARD_HTML) }))
         .route("/result", get(|| async { Html(RESULT_HTML) }))
         .route("/i18n.js", get(|| async { asset("text/javascript; charset=utf-8", I18N_JS) }))
         .route("/app.css", get(|| async { asset("text/css; charset=utf-8", APP_CSS) }))
+        .route("/favicon.svg", get(|| async { asset("image/svg+xml; charset=utf-8", FAVICON) }))
+        // Browsers ask for this by name before they have parsed any markup, so it answers
+        // with the same drawing rather than a 404 in every venue's log.
+        .route("/favicon.ico", get(|| async { asset("image/svg+xml; charset=utf-8", FAVICON) }))
         .route("/fonts.css", get(|| async { asset("text/css; charset=utf-8", FONTS_CSS) }))
         .route("/fonts/{file}", get(font))
         .merge(api::router(hub));
@@ -290,9 +325,11 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .unwrap_or_else(|e| panic!("cannot bind {addr}: {e}"));
-    println!("HYROX Central Hub listening on http://{addr}/live");
+    println!("HYROX 訓練與競賽應用系統 listening on http://{addr}/live");
     println!("  workout builder: http://{addr}/workout");
     println!("  check-in:        http://{addr}/checkin");
+    println!("  race entry:      http://{addr}/signup");
+    println!("  settings:        http://{addr}/settings");
     println!("  leaderboard:     http://{addr}/leaderboard");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

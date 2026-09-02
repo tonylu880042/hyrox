@@ -2,9 +2,10 @@
 # The nightly window (ADR 0009 §6): ask, update, verify, power off.
 #
 #   1. ask the hub whether it may be stopped -- a live class wins, always
-#   2. update if there is an update
-#   3. verify the new version actually comes back up, and roll back if it does not
-#   4. power the machine off, update or no update
+#   2. take a backup before touching anything (ADR 0012)
+#   3. update if there is an update
+#   4. verify the new version actually comes back up, and roll back if it does not
+#   5. power the machine off, update or no update
 #
 # Every exit is 0 except a genuine fault. "A class is still running" is a normal outcome of
 # a nightly job, not a failure, and a red unit in the morning should mean something.
@@ -52,6 +53,23 @@ if ! safe_to_stop; then
     log "nothing done; will try again at the next window"
     exit 0
 fi
+
+# One implementation of "what a backup is", shared with the twice-daily timer (ADR 0012).
+# Taken before the update, because the update is the risky part.
+BACKUP="${HYROX_BACKUP_CMD:-/usr/lib/hyrox/backup}"
+
+# A failed backup stops the night here. An un-backed-up machine may keep running a class
+# tomorrow; an un-backed-up machine that then fails an update may not.
+"$BACKUP" pre-update
+case $? in
+    0) ;;
+    # The backup exists on the machine but not on the stick. Worth a line in the journal,
+    # not worth withholding a security update for however long the stick stays lost.
+    2) log "backup has no off-machine copy -- continuing" ;;
+    # No backup at all. An un-backed-up machine may keep running a class tomorrow; an
+    # un-backed-up machine that then fails an update may not.
+    *) log "no backup taken -- not updating tonight"; exit 1 ;;
+esac
 
 before=$(installed_version)
 

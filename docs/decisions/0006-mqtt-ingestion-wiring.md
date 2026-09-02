@@ -90,7 +90,8 @@ raw 與 interpreted 都仍是各一列。
 - 為什麼不是保留舊 feeder 當 fallback：那會留下第二條不經過 broker 的 ingestion 路徑，
   而「螢幕上的東西到底走過哪一條路」正是這個里程碑要消除的疑問。
 - 為什麼安全：`dev-simulator` feature 預設開啟但可關（`--no-default-features` 讓模擬器
-  完全不進建置），執行期另有 `HYROX_SIM=off`。場地部署用前者。
+  完全不進建置），執行期則要 `HYROX_DEMO=1` 才會出現按鈕、按了才會跑（M6 後續修訂：
+  原本是開機就跑、`HYROX_SIM=off` 才不跑）。場地部署用前者。
 
 `crates/simulator` 因此新增 `broker` feature（預設關閉）。既有的 `Bench` / `Link`
 行程內測試一行未動——那是 CLAUDE.md 24 要求的「沒有 broker 也能測」的所在，

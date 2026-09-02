@@ -16,6 +16,7 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
 # The tests drive the router in-process with `tower::ServiceExt::oneshot`: no listener, no

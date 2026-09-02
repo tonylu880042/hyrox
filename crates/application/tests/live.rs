@@ -27,7 +27,7 @@ fn session() -> LiveSession {
     s.start().expect("arm");
     let mut readers = ReaderRegistry::new();
     readers.register(ReaderRegistration::new(
-        ReaderKey::parse("esp32-a4cf128b3d91", "rfid-01").unwrap(),
+        ReaderKey::parse("a4cf128b3d91", "rfid-01").unwrap(),
         "SKIERG",
         ReaderMode::Entry,
     ));

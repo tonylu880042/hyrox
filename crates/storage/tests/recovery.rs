@@ -3,12 +3,22 @@
 use domain::{interpret, AthleteState, Instant, ReaderBinding, ReaderMode, Session, SessionMode};
 use storage::{RawEvent, Store};
 
+/// A round of one tag yields one outcome. The unwrap is the assertion: anything else means
+/// the fan-out over a round changed shape (ADR 0014).
+fn sole(ingested: &application::Ingested) -> application::IngestOutcome {
+    match ingested.outcomes.as_slice() {
+        [outcome] => outcome.clone(),
+        other => panic!("one tag in, one outcome out; got {other:?}"),
+    }
+}
+
+
 const T0: i64 = 1_787_734_800_000;
 fn at(ms: i64) -> Instant { Instant(T0 + ms) }
 
 fn raw(seq: i64, detected: i64) -> RawEvent {
     RawEvent {
-        device_id: "esp32-a4cf128b3d91".into(),
+        device_id: "a4cf128b3d91".into(),
         reader_id: "rfid-02".into(),
         boot_id: 18,
         sequence: seq,
@@ -187,6 +197,7 @@ mod resumed {
                 display_name: "CHEN YU-TING".into(),
             }],
             class_start: at(0),
+            start_now: true,
         }
     }
 
@@ -196,7 +207,7 @@ mod resumed {
             reader_id: contract::ReaderId::parse(reader).expect("reader id"),
             boot_id: 7,
             sequence,
-            tag_id: tag.to_string(),
+            tag_id: vec![tag.to_string()],
             detected_at: at(ms).0,
             uptime_ms: ms,
         };
@@ -204,7 +215,7 @@ mod resumed {
     }
 
     fn skierg_entry() -> ReaderRegistration {
-        let device = format!("esp32-{}", DEVICE.replace(':', ""));
+        let device = DEVICE.replace(':', "");
         ReaderRegistration::new(
             ReaderKey::parse(&device, "rfid-01").expect("key"),
             "SKIERG",
@@ -316,7 +327,7 @@ mod resumed {
             .await
             .unwrap();
         assert!(matches!(
-            out.outcome,
+            crate::sole(&out),
             application::IngestOutcome::Interpreted {
                 event: Interpreted::Exception { reason: ExceptionReason::UnknownReader, .. },
                 ..
@@ -396,7 +407,7 @@ mod resumed {
         let (mut state, _) = resume_or_start(&store, plan(FinishPolicy::CoachDecides, None))
             .await
             .unwrap();
-        let device = format!("esp32-{}", DEVICE.replace(':', ""));
+        let device = DEVICE.replace(':', "");
         for (reader, mode) in [("rfid-01", ReaderMode::Entry), ("rfid-02", ReaderMode::Exit)] {
             register_reader(
                 &mut state,

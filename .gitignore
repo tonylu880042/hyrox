@@ -4,3 +4,4 @@ target/
 *.db-wal
 *.db-shm
 design/live/icon-sheet.html
+design/demo/out/

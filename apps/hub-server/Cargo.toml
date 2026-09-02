@@ -24,5 +24,5 @@ simulator = { path = "../../crates/simulator", features = ["broker"], optional =
 default = ["dev-simulator"]
 # Runs the emulated ESP32 fleet in-process, publishing over the real broker, so
 # `cargo run -p hub-server` alone shows a moving class. Turn it off at runtime with
-# `HYROX_SIM=off`, or out of the build with `--no-default-features`.
+# `HYROX_DEMO` unset (the default), or out of the build with `--no-default-features`.
 dev-simulator = ["dep:simulator"]

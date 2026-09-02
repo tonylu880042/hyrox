@@ -207,3 +207,60 @@ async fn the_read_models_show_the_bib_that_was_assigned() {
     let results = application::live_results(&state);
     assert_eq!(results.rows.iter().map(|r| r.bib).collect::<Vec<_>>(), [1, 7]);
 }
+
+// --- the entry code (ADR 0011) --------------------------------------------------------
+
+/// A walk-in's athlete id **is** their entry code: the number on their QR, the number the
+/// desk types to find them, and the number they use to look up their result afterwards.
+/// One value, so nothing can drift out of step.
+#[tokio::test]
+async fn a_walk_in_is_issued_a_six_character_entry_code() {
+    let store = FakeStore::new();
+    let mut state = session();
+
+    let id = enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk()).await.unwrap();
+
+    let code = domain::EntryCode::parse(&id).expect("the id is an entry code");
+    assert_eq!(code.as_str(), id);
+}
+
+#[tokio::test]
+async fn two_walk_ins_are_issued_different_codes() {
+    let store = FakeStore::new();
+    let mut state = session();
+
+    let a = enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk()).await.unwrap();
+    let b = enter(&mut state, &store, Entrant::walk_in("林大華"), &desk()).await.unwrap();
+
+    assert_ne!(a, b);
+}
+
+/// Members keep their 健身管 identity (ADR 0010). Issuing them a code as well would give
+/// one person two numbers and no rule for which one wins.
+#[tokio::test]
+async fn a_member_keeps_their_member_id_and_gets_no_code() {
+    let store = FakeStore::new();
+    let mut state = session();
+    let member = MemberRef::new("M-1042", "王淑芬", MembershipStatus::Active);
+
+    let id = enter(&mut state, &store, Entrant::member(&member), &desk()).await.unwrap();
+
+    assert_eq!(id, "M-1042");
+}
+
+/// The audit trail says who did it (CLAUDE.md 20). Somebody registering themselves on
+/// their own phone is a different fact from a helper entering them, and the row must not
+/// pretend a tablet did it.
+#[tokio::test]
+async fn a_self_registration_is_recorded_as_such() {
+    let store = FakeStore::new();
+    let mut state = session();
+
+    enter(&mut state, &store, Entrant::walk_in("陳小明"), &OperatorCommand::new("SELF SIGN-UP", NOW))
+        .await
+        .unwrap();
+
+    let entry = store.audits().pop().expect("an audit row");
+    assert_eq!(entry.operator, "SELF SIGN-UP");
+    assert_eq!(entry.action, "ATHLETE_ENTER");
+}

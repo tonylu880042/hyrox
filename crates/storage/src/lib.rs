@@ -6,7 +6,8 @@
 mod hub_store;
 mod workout;
 
-use application::{AuditEntry, StoredException, StoredRawRead};
+use application::{AuditEntry, StoredException, StoredRawRead, SeenReader, VenueAsset,
+};
 use domain::{
     AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, ReaderKey,
     ReaderMode,
@@ -28,6 +29,20 @@ pub enum StoreError {
     /// parse. Distinct from `Corrupt` so the message carries serde's own diagnosis.
     #[error("stored document: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("backup: {0}")]
+    Io(#[from] std::io::Error),
+    /// The file itself is damaged. Separate from every other error because the answer is
+    /// different: not "retry", but "stop, and restore last night's backup" (ADR 0012).
+    #[error("the database is damaged: {}", .0.join("; "))]
+    Damaged(Vec<String>),
+}
+
+/// Whether an error from SQLite means "this file is damaged" rather than "that write did
+/// not go through". The two need different answers, and only one of them is worth waking
+/// somebody up for (ADR 0012).
+fn is_corruption(error: &sqlx::Error) -> bool {
+    let Some(db) = error.as_database_error() else { return false };
+    matches!(db.code().as_deref(), Some("11") | Some("26"))
 }
 
 /// A raw reader event exactly as it arrived from the edge (CLAUDE.md 16).
@@ -62,9 +77,64 @@ impl Store {
             // rows per athlete per station.
             .synchronous(sqlx::sqlite::SqliteSynchronous::Full)
             .foreign_keys(true);
-        let pool = SqlitePool::connect_with(opts).await?;
-        sqlx::migrate!("../../migrations").run(&pool).await?;
-        Ok(Self { pool })
+        // Damage can surface here rather than in the check below: opening sets the journal
+        // mode, and that reads pages. Either way the answer is the same one.
+        let pool = SqlitePool::connect_with(opts)
+            .await
+            .map_err(|e| if is_corruption(&e) { StoreError::Damaged(vec![e.to_string()]) } else { e.into() })?;
+        let store = Self { pool };
+        // Before the migrations, not after: a migration against a damaged file writes into
+        // the damage. And before anything is served, because acknowledging a read out of a
+        // broken database tells the ESP32 to delete its only other copy of it
+        // (ADR 0002, 0012; CLAUDE.md 15, 31).
+        store.quick_check().await?;
+        sqlx::migrate!("../../migrations").run(&store.pool).await?;
+        Ok(store)
+    }
+
+    /// Reads every page and reports what is wrong with them (ADR 0012).
+    ///
+    /// `quick_check` rather than `integrity_check`: it finds the damage that matters -- a
+    /// page that will not parse -- without the index cross-check, which on a venue's
+    /// database is seconds rather than milliseconds. This runs on every start, so it has to
+    /// be cheap enough that nobody is tempted to switch it off.
+    pub async fn quick_check(&self) -> Result<(), StoreError> {
+        let rows: Vec<String> = match sqlx::query_scalar("PRAGMA quick_check")
+            .fetch_all(&self.pool)
+            .await
+        {
+            Ok(rows) => rows,
+            // Badly damaged files fail the check itself rather than reporting rows:
+            // SQLITE_CORRUPT (11) or SQLITE_NOTADB (26). That is still a damage report,
+            // and callers must not have to tell the two shapes apart.
+            Err(e) if is_corruption(&e) => return Err(StoreError::Damaged(vec![e.to_string()])),
+            Err(e) => return Err(e.into()),
+        };
+        // SQLite answers with the single row "ok", or one row per problem.
+        if rows.len() == 1 && rows[0].eq_ignore_ascii_case("ok") {
+            return Ok(());
+        }
+        Err(StoreError::Damaged(rows))
+    }
+
+    /// Copies the database to `path` while the hub keeps running (ADR 0012).
+    ///
+    /// `VACUUM INTO` is SQLite's supported online backup: it reads a consistent snapshot
+    /// through a normal read transaction, so committed data sitting in the `-wal` is
+    /// included. Copying the main file with `cp` is the classic way to produce a backup
+    /// that is missing exactly the transactions you wanted, or is outright corrupt.
+    ///
+    /// It refuses an existing target, and we keep that: a backup that silently replaces
+    /// last night's is one backup rather than a history.
+    pub async fn backup_to(&self, path: &std::path::Path) -> Result<(), StoreError> {
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        // Single-quoted SQL literal, so a path containing one has to be doubled. Not a
+        // bound parameter: VACUUM INTO does not take one.
+        let target = path.display().to_string().replace('\'', "''");
+        sqlx::query(&format!("VACUUM INTO '{target}'")).execute(&self.pool).await?;
+        Ok(())
     }
 
     /// The connection pool, for asserting the settings this store was opened with.
@@ -140,16 +210,23 @@ impl Store {
         Ok(rows.into_iter().map(|r| (r.get("athlete_id"), r.get("bib"))).collect())
     }
 
-    /// Stores a raw event, returning its id. A redelivery of the same
-    /// `device_id + boot_id + sequence` returns the existing id instead of inserting again:
-    /// duplicate delivery is allowed, duplicate processing is not (CLAUDE.md 16).
+    /// Stores one tag's read, returning its id. A redelivery of the same
+    /// `device_id + boot_id + sequence` **and tag** returns the existing id instead of
+    /// inserting again: duplicate delivery is allowed, duplicate processing is not
+    /// (CLAUDE.md 16).
+    ///
+    /// The tag is part of the lookup because a UHF inventory round carries several of them
+    /// under one sequence (ADR 0014). The idempotency key the edge and the ACK speak is
+    /// still `device_id + boot_id + sequence`; this row is one read inside that round.
     pub async fn save_raw(&self, e: &RawEvent) -> Result<(i64, bool), StoreError> {
         let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM raw_events WHERE device_id = ?1 AND boot_id = ?2 AND sequence = ?3",
+            "SELECT id FROM raw_events
+             WHERE device_id = ?1 AND boot_id = ?2 AND sequence = ?3 AND tag_id = ?4",
         )
         .bind(&e.device_id)
         .bind(e.boot_id)
         .bind(e.sequence)
+        .bind(&e.tag_id)
         .fetch_optional(&self.pool)
         .await?;
         if let Some(id) = existing {
@@ -620,6 +697,121 @@ impl Store {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.iter().map(|r| r.get::<String, _>("tag_id")).collect())
+    }
+
+    /// One of the venue's images, or `None` if nobody uploaded it (M6 follow-up).
+    pub async fn venue_asset(&self, key: &str) -> Result<Option<VenueAsset>, StoreError> {
+        let row = sqlx::query("SELECT media_type, bytes FROM venue_assets WHERE key = ?1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| VenueAsset { media_type: r.get("media_type"), bytes: r.get("bytes") }))
+    }
+
+    /// Stores one, replacing whatever was there. A venue has one logo, not a gallery.
+    pub async fn save_venue_asset(
+        &self,
+        key: &str,
+        media_type: &str,
+        bytes: &[u8],
+        at: Instant,
+        by: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO venue_assets (key, media_type, bytes, updated_at, updated_by)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(key) DO UPDATE SET
+                media_type = excluded.media_type,
+                bytes = excluded.bytes,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by",
+        )
+        .bind(key)
+        .bind(media_type)
+        .bind(bytes)
+        .bind(at.0)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_venue_asset(&self, key: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM venue_assets WHERE key = ?1")
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Forgets one reader's mapping (ADR 0007 §7, amended). The reads it produced stay in
+    /// `raw_events`, which nothing here touches.
+    pub async fn delete_reader(&self, device_id: &str, reader_id: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM readers WHERE device_id = ?1 AND reader_id = ?2")
+            .bind(device_id)
+            .bind(reader_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Every venue setting that has been chosen (M6 follow-up).
+    pub async fn venue_settings(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = sqlx::query("SELECT key, value FROM venue_settings ORDER BY key")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| (r.get("key"), r.get("value"))).collect())
+    }
+
+    /// Stores one, replacing any previous value. Keyed upsert, so setting the same number
+    /// twice is one row rather than a history -- the history is the audit log.
+    pub async fn save_venue_setting(
+        &self,
+        key: &str,
+        value: &str,
+        at: Instant,
+        by: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO venue_settings (key, value, updated_at, updated_by)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(at.0)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every reader the hub has ever heard from (M6 settings screen).
+    ///
+    /// Over `raw_events`, which holds the reads it could not attribute as well as the ones
+    /// it could -- that is the whole point: an antenna nobody has configured yet is
+    /// invisible everywhere except here.
+    pub async fn reader_keys_seen(&self) -> Result<Vec<SeenReader>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT device_id, reader_id, MAX(detected_at) AS last_seen, COUNT(*) AS reads
+             FROM raw_events
+             GROUP BY device_id, reader_id
+             ORDER BY last_seen DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| SeenReader {
+                device_id: r.get("device_id"),
+                reader_id: r.get("reader_id"),
+                last_seen: Instant(r.get::<i64, _>("last_seen")),
+                reads: r.get("reads"),
+            })
+            .collect())
     }
 
     /// Reads of one tag that no interpreted event points at, oldest first (ADR 0001 D3).

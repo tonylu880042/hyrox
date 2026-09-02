@@ -293,7 +293,7 @@ async fn a_created_class_keeps_the_venue_readers_and_bands() {
     let mut state = draft_session();
     let mut readers = domain::ReaderRegistry::new();
     readers.register(domain::ReaderRegistration::new(
-        domain::ReaderKey::parse("esp32-a4cf128b3d91", "rfid-01").unwrap(),
+        domain::ReaderKey::parse("a4cf128b3d91", "rfid-01").unwrap(),
         "SKIERG",
         domain::ReaderMode::Toggle,
     ));

@@ -70,7 +70,7 @@ fn the_view_reports_the_session_status_by_name() {
 #[test]
 fn a_device_with_a_backlog_blocks_the_maintenance_window() {
     let mut state = session(SessionStatus::Completed);
-    let device = DeviceId::parse("esp32-a4cf128b3d91").expect("a device id");
+    let device = DeviceId::parse("a4cf128b3d91").expect("a device id");
     support::note_backlog(&mut state, &device, 42, NOW);
 
     let view = health(&state, NOW);
@@ -83,7 +83,7 @@ fn a_device_with_a_backlog_blocks_the_maintenance_window() {
 #[test]
 fn a_device_that_has_caught_up_does_not_block() {
     let mut state = session(SessionStatus::Completed);
-    let device = DeviceId::parse("esp32-a4cf128b3d91").expect("a device id");
+    let device = DeviceId::parse("a4cf128b3d91").expect("a device id");
     support::note_backlog(&mut state, &device, 0, NOW);
 
     let view = health(&state, NOW);
@@ -95,7 +95,7 @@ fn a_device_that_has_caught_up_does_not_block() {
 #[test]
 fn both_blockers_are_reported_together_so_one_fix_does_not_hide_the_other() {
     let mut state = session(SessionStatus::Running);
-    let device = DeviceId::parse("esp32-a4cf128b3d91").expect("a device id");
+    let device = DeviceId::parse("a4cf128b3d91").expect("a device id");
     support::note_backlog(&mut state, &device, 7, NOW);
 
     let view = health(&state, NOW);

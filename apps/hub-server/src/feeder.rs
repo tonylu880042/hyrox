@@ -79,7 +79,7 @@ fn reader_id(station: &str, mode: ReaderMode) -> String {
 }
 
 fn device_id() -> String {
-    format!("esp32-{}", DEVICE_MAC.replace(':', ""))
+    DEVICE_MAC.replace(':', "")
 }
 
 /// The reader map the hub interprets reads through (CLAUDE.md 8). Handed to the registration

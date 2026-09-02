@@ -318,7 +318,7 @@ async fn a_reader_is_registered_and_then_reported_with_its_freshness() {
             "/api/operator/readers",
             DESK,
             json!({
-                "device_id": "esp32-a4cf128b3d91",
+                "device_id": "a4cf128b3d91",
                 "reader_id": "rfid-01",
                 "station": "SKIERG",
                 "zone": "STATION ROW",
@@ -432,4 +432,148 @@ async fn an_operator_device_may_be_named_in_chinese() {
     assert_eq!(status, StatusCode::OK, "a Chinese device name must be accepted");
     let audit = store.audits().pop().expect("an audit record");
     assert_eq!(audit.operator, "櫃檯平板", "the name must reach the audit trail verbatim");
+}
+
+// --- backups (ADR 0012) ---------------------------------------------------------------
+
+/// The nightly window asks the hub to take the backup, rather than copying the file from a
+/// shell script: the hub is the only process allowed to touch the database (ADR 0009), and
+/// `cp` of a live SQLite file is the classic way to produce a corrupt copy.
+#[tokio::test]
+async fn the_operator_surface_takes_a_backup_and_says_where_it_went() {
+    let (router, store) = running();
+
+    let (status, body) = call(&router, post("/api/operator/backup", DESK, json!({}))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let path = body["path"].as_str().expect("the path it was written to");
+    assert!(path.ends_with(".db"), "{path:?} should name a database file");
+    assert_eq!(store.backups().len(), 1, "one backup was taken");
+    assert_eq!(store.backups()[0].display().to_string(), path);
+}
+
+/// Backups are dated so a rotation can keep several, and so the morning after a bad night
+/// somebody can tell which one is which.
+#[tokio::test]
+async fn each_backup_is_named_for_the_moment_it_was_taken() {
+    let (router, _store) = running();
+
+    let (_, body) = call(&router, post("/api/operator/backup", DESK, json!({}))).await;
+
+    let name = std::path::Path::new(body["path"].as_str().expect("a path"))
+        .file_name()
+        .expect("a file name")
+        .to_string_lossy()
+        .to_string();
+    // The name carries the moment it was taken, and it is the same moment the response
+    // reports -- so a rotation can sort by name, and a restore can be matched to the audit
+    // row that says who asked for it.
+    let at = body["at"].as_i64().expect("the moment it was taken");
+    assert_eq!(name, format!("hyrox-{at}.db"));
+}
+
+/// It changes what is on disk, so it is a write: it carries the operator's device name and
+/// lands in the audit trail like every other one (ADR 0001 D1; CLAUDE.md 20).
+#[tokio::test]
+async fn taking_a_backup_is_audited() {
+    let (router, store) = running();
+
+    call(&router, post("/api/operator/backup", DESK, json!({}))).await;
+
+    let audit = store.audits().pop().expect("an audit record");
+    assert_eq!(audit.action, "DATABASE_BACKUP");
+    assert_eq!(audit.operator, DESK);
+}
+
+#[tokio::test]
+async fn a_backup_needs_an_operator_name_like_any_other_write() {
+    let (router, _store) = running();
+
+    let (status, body) =
+        call(&router, support::anonymous("POST", "/api/operator/backup", json!({}))).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "OPERATOR_REQUIRED");
+}
+
+// --- adding and removing readers (ADR 0007 §7, amended) --------------------------------
+
+/// A venue can be set up before the hardware is on the wall: the same route that assigns a
+/// reader the hub has heard from also accepts one typed in by hand.
+#[tokio::test]
+async fn a_reader_can_be_registered_by_hand_and_then_removed() {
+    let (router, store) = running();
+
+    let (status, body) = call(
+        &router,
+        post(
+            "/api/operator/readers",
+            DESK,
+            json!({
+                "device_id": "a4cf128b3d91",
+                "reader_id": "rfid-07",
+                "station": "WALL BALLS",
+                "mode": "ENTRY"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["readers"].as_array().expect("a list").iter().any(|r| r["reader_id"] == "rfid-07"),
+        "the new reader is on the map"
+    );
+
+    let (status, body) = call(
+        &router,
+        support::del(
+            "/api/operator/readers/a4cf128b3d91/rfid-07",
+            DESK,
+            json!({ "reason": "這支拆掉了" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body["readers"].as_array().expect("a list").iter().any(|r| r["reader_id"] == "rfid-07"),
+        "and off it again"
+    );
+    assert_eq!(store.deleted_readers(), [("a4cf128b3d91".to_string(), "rfid-07".to_string())]);
+}
+
+/// Reads from it stop being attributed from here on, so somebody has to say why
+/// (CLAUDE.md 20).
+#[tokio::test]
+async fn removing_a_reader_needs_a_reason() {
+    let (router, _store) = running();
+    call(
+        &router,
+        post(
+            "/api/operator/readers",
+            DESK,
+            json!({ "device_id": "a4cf128b3d91", "reader_id": "rfid-07", "station": "WALL BALLS", "mode": "ENTRY" }),
+        ),
+    )
+    .await;
+
+    let (status, body) =
+        call(&router, support::del("/api/operator/readers/a4cf128b3d91/rfid-07", DESK, json!({}))).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "REASON_REQUIRED");
+}
+
+#[tokio::test]
+async fn removing_a_reader_nobody_registered_is_a_clear_no() {
+    let (router, _store) = running();
+
+    let (status, body) = call(
+        &router,
+        support::del("/api/operator/readers/a4cf128b3d91/rfid-99", DESK, json!({ "reason": "x" })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "UNKNOWN_READER");
 }

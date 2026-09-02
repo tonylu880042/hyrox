@@ -46,6 +46,10 @@ without one.
 | `GET` | `/api/workout-templates/{id}` | — | — | `{ freshness, template }`; `404 UNKNOWN_TEMPLATE` |
 | `GET` | `/api/stages` | — | — | `{ freshness, athletes }` — per-athlete stage list, `current_stage` and `expectation` (ADR 0008) |
 | `GET` | `/api/leaderboard` | — | — | `{ freshness, results }` — the running session, ranked where the finish rule allows it (ADR 0010) |
+| `GET` | `/api/settings` | — | — | `{ freshness, live_page_ms, live_page_size, page_layouts, demo_available }` — the venue's own numbers, defaults filled in (ADR 0013) |
+| `GET` | `/api/logo` | — | — | the venue's logo as it was uploaded, with `nosniff`; `404 NO_LOGO` where none was |
+| `GET` | `/api/entry/{code}` | — | — | `{ freshness, code, session_name, session_status, ordering, course_length, row }` — one entrant's own row (ADR 0011); `404 UNKNOWN_ENTRY`, `400 INVALID_BODY` for something that is not a code |
+| `GET` | `/api/entry/{code}/qr.svg` | — | — | the entrant's QR as SVG, drawn by the hub. It carries the six characters, not a URL: a desk scanner is a keyboard, and one that typed a whole URL into the search box would be useless |
 | `GET` | `/api/health` | — | — | `{ version, session_status, class_live, devices_with_backlog, safe_to_stop, blocked_by }` (ADR 0009) |
 
 `/api/health` is the one read with **no `freshness` envelope**. It is consumed by the
@@ -66,11 +70,24 @@ test asserts is verb-free.
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/checkin` | — | — | `{ freshness, pending, athletes }` |
 | `POST` | `/api/checkin/entrants` | ✎ | `display_name`; optional `bib`, `member_id` | `{ freshness, athlete_id, pending, athletes }` |
+| `POST` | `/api/checkin/signup` | ✎ | `display_name` **only** | `{ freshness, code, display_name, bib }` — self sign-up (ADR 0011) |
 | `POST` | `/api/checkin/bind` | ✎ | `tag_id`, `athlete_id` | `{ freshness, claimed }` |
 | `POST` | `/api/checkin/rebind` | ✎! | `tag_id`, `athlete_id`, `reason` | `{ freshness, claimed }` |
 
 `claimed` lists the interpretations produced by replaying reads that happened before anyone
 owned the band (ADR 0001 D3). Empty is the ordinary case.
+
+`POST /api/checkin/signup` is the **one route on the hub that takes no operator header**
+(ADR 0011). An entrant at a mock race fills it in on their own phone, so there is no device
+to name and the audit row says `SELF SIGN-UP` — the fact, rather than a tablet's name
+borrowed to satisfy D1. It takes a name and nothing else: a `bib` here would let the public
+claim a printed number, and a `member_id` would be a membership claim nobody checked. Both
+are ignored rather than refused. Binding a band still requires the desk's header, so an
+entry is inert until a helper hands over a wristband.
+
+A walk-in's `athlete_id` **is** their entry code — six characters from Crockford's base 32
+without `U`. It is the id, the QR, and the number they type to find their result, so the
+three cannot drift apart. Members keep their `member_id` and are issued no code.
 
 ### Operator — the write surface
 
@@ -78,7 +95,8 @@ owned the band (ADR 0001 D3). Empty is the ordinary case.
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/operator` | — | — | session, config, readers, devices, both badges |
 | `GET` | `/api/operator/readers` | — | — | `{ freshness, readers }` |
-| `POST` | `/api/operator/readers` | ✎ | `device_id`, `reader_id`, `station`, `mode`; optional `zone` | `{ freshness, readers }` |
+| `POST` | `/api/operator/readers` | ✎ | `device_id`, `reader_id`, `station`, `mode`; optional `zone` | `{ freshness, readers }` — adds or repoints one |
+| `DELETE` | `/api/operator/readers/{device_id}/{reader_id}` | ✎! | `reason` | `{ freshness, readers }`; `404 UNKNOWN_READER` |
 | `PUT` | `/api/operator/config` | ✎ | `finish_policy`; optional `course` | the new session view |
 | `GET` | `/api/operator/exceptions` | — | — | `{ freshness, exceptions }` |
 | `POST` | `/api/operator/exceptions/{id}/void` | ✎! | `reason` | the remaining inbox |
@@ -95,12 +113,36 @@ owned the band (ADR 0001 D3). Empty is the ordinary case.
 | `PUT` | `/api/operator/templates/{id}` | ✎ | same; the **path id wins** | `{ freshness, templates }` |
 | `DELETE` | `/api/operator/templates/{id}` | ✎! | `reason` | `{ freshness, templates }` |
 | `POST` | `/api/operator/templates/{id}/duplicate` | ✎ | `new_id`, `name`; optional `owner_id` | `{ freshness, templates }` |
+| `GET` | `/api/operator/readers/unregistered` | — | — | `{ freshness, readers }` — antennas the hub has heard from and cannot resolve, most recently tapped first (ADR 0013) |
+| `PUT` | `/api/operator/settings` | ✎ | any of `live_page_ms`, `live_page_size` | the settings view; `422 INVALID_SETTING`, `404 UNKNOWN_SETTING` |
+| `POST` | `/api/operator/logo` | ✎ | the image as the raw body | `{ freshness, media_type, bytes }`; `415 UNSUPPORTED_IMAGE`, `413 IMAGE_TOO_LARGE` |
+| `DELETE` | `/api/operator/logo` | ✎ | — | the same shape, emptied |
+| `POST` | `/api/operator/power` | ✎! | `action` (`POWEROFF`/`REBOOT`/`RESTART_SERVICE`), `reason` | `{ freshness, action, at }`; `409 CLASS_RUNNING`, `503 POWER_UNAVAILABLE` |
+| `POST` | `/api/operator/backup` | ✎ | optional `reason` | `{ freshness, path, at }` — takes a copy of the database now (ADR 0012) |
+| `POST` | `/api/operator/demo` | ✎ | — | `{ freshness, loaded }` — loads a fixture class and starts emulated reads; `409 CLASS_RUNNING`, `503 DEMO_UNAVAILABLE` |
+| `DELETE` | `/api/operator/demo` | ✎ | — | the same shape, `loaded: false` — stops the emulated reads |
 | `POST` | `/api/operator/class` | ✎ | `template_id`, `session_id`, `name`, `finish_policy` | the new session view |
 
 `POST /api/operator/templates` never takes a `source`: whether a template may be written is
 decided by the **stored** row, not by the payload, or the read-only rule on system templates
 would be bypassed by sending `"source": "COACH"`. `version` is likewise not accepted — the
 use case reads what is stored and moves it on, so a client cannot pin, rewind or skip one.
+
+`POST /api/operator/backup` is what the nightly maintenance window calls (ADR 0009 §6). The
+hub does the copying because it is the only process allowed to touch the database, and
+`VACUUM INTO` is SQLite's supported online backup — a shell script running `cp` on a live
+database produces a copy missing whatever sits in the `-wal`, or a corrupt one. The file is
+named for the moment it was taken, so sorting by name sorts by time; the caller rotates the
+directory. It is audited as `DATABASE_BACKUP`: a copy of the venue's whole history left the
+database, and who asked is worth keeping even though nothing recorded changed.
+
+`POST /api/operator/demo` exists on every build but answers `503 DEMO_UNAVAILABLE` unless the
+machine was started with `HYROX_DEMO=1`; `GET /api/settings` reports the same thing as
+`demo_available`, so the settings screen draws no demo section at all rather than a button
+that fails. Loading is refused while a class is running -- twelve invented athletes appearing
+in somebody's evening is indistinguishable from a bug -- while stopping is allowed at any
+time, because a demo gone wrong is exactly when the off switch is needed. What was already
+recorded stays: `raw_events` is immutable, and the demo class is ended like any other.
 
 `POST /api/operator/class` compiles the template, snapshots the result onto a new **DRAFT**
 session, and makes it the hub's active class. Today's tweaks then go through
@@ -112,6 +154,7 @@ session, and makes it the hub's active class. Today's tweaks then go through
 | --- | --- | --- | --- |
 | `GET` | `/` | — | `307` to `/live` |
 | `GET` | `/live` | — | the live screen's HTML |
+| `GET` | `/settings` | — | the venue's settings screen: readers, devices, exceptions, power (ADR 0013) |
 
 ---
 
@@ -213,6 +256,12 @@ A domain invariant saying no is an answer, not a fault. Only a failed store writ
 | 400 | `INVALID_BODY` | unparsable body, missing required field, bad tag id, bad reader key |
 | 404 | `UNKNOWN_SESSION` | `/api/result/{id}` for a session the store does not hold |
 | 404 | `UNKNOWN_ATHLETE` | binding to somebody off the roster |
+| 415 | `UNSUPPORTED_IMAGE` | a venue image that is not PNG or JPEG. **SVG is refused on purpose**: it can carry script, and the hub would serve it from its own origin to every screen |
+| 413 | `IMAGE_TOO_LARGE` | over 512 KB |
+| 422 | `INVALID_SETTING` | a value outside what the setting accepts, e.g. a page size that is not an offered layout |
+| 409 | `CLASS_RUNNING` | switching the machine off while a class is on the floor (ADR 0013) |
+| 503 | `POWER_UNAVAILABLE` | this machine has no power control wired in — a developer build, or a missing polkit rule |
+| 404 | `UNKNOWN_ENTRY` | an entry code that is not on this class's roster (ADR 0011) |
 | 404 | `UNKNOWN_EVENT` | voiding an interpreted event id that does not exist |
 | 409 | `ILLEGAL_TRANSITION` | e.g. completing a DRAFT session, or starting one that was never made READY (ADR 0001 D2, 0008) |
 | 409 | `HAS_INTERPRETED_EVENTS` | ARMED → DRAFT after something was interpreted (D2) |
@@ -249,9 +298,15 @@ These are not oversights. Each of them would require inventing a product rule (C
   `ordering` is `FINISH_TIME`; under every other rule rows come back in bib order with
   `place: null` and `ordering` is `BIB`. A class that ends on the clock stops everyone
   having done different amounts of work, so ordering it by time would not be honest.
-* **No reader deletion.** No use case removes a reader, and removal would mean deciding
-  what becomes of the events already attributed through it. Re-registering the same
-  `(device_id, reader_id)` replaces its mapping, which is what repointing a reader is.
+* ~~**No reader deletion.**~~ **Amended 2026-09-02.** The stated worry -- what becomes of
+  the events already attributed through it -- turned out not to exist: `raw_events` keeps
+  the device and reader behind every read (CLAUDE.md 19), and an interpretation records the
+  **station**, not the reader. So removing a registration cannot orphan anything; it only
+  decides what happens to the *next* read, which becomes an `UNKNOWN_READER` exception in
+  the inbox rather than progress. `DELETE /api/operator/readers/{device_id}/{reader_id}`
+  does it, with a reason, audited as `READER_REMOVE` carrying what the reader used to mean.
+  Re-registering the same `(device_id, reader_id)` still replaces its mapping, which is what
+  repointing a reader is.
 * **No "accept as-is" or "reinterpret" on an exception.** D4 names three actions and only
   `void` has a use case. See `docs/open-issues.md`.
 * **No `operator_identity`.** D1 chose device-level traceability on purpose.

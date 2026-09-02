@@ -1,15 +1,18 @@
 //! Edge device and reader identity (CLAUDE.md 7.3).
 //!
-//! `device_id` is derived from the ESP32 base MAC and nothing else: a random UUID would
-//! be lost on reflash and would make a swapped board indistinguishable from a new one.
-//! `reader_id` is a separate type because one ESP32 may host several readers later.
+//! `device_id` is the device's base MAC and nothing else: a random UUID would be lost on
+//! reflash and would make a swapped board indistinguishable from a new one.
+//! `reader_id` is a separate type because one device may host several readers.
+//!
+//! The id is *normalised*, not decorated (ADR 0015). Six spellings of one MAC --
+//! `:`/`-`/`.` separators, upper or lower case -- would become six rows in the reader
+//! registry, and the lookup would miss on punctuation alone. That failure is silent: the
+//! hub reports no error, it just files every read from that reader as UNKNOWN_READER.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
-/// Canonical prefix. Named rather than inlined so the format lives in exactly one place.
-const DEVICE_ID_PREFIX: &str = "esp32-";
-/// A base MAC is six bytes, so the canonical id carries twelve hex digits.
+/// A base MAC is six bytes, so the canonical id is twelve hex digits.
 const MAC_HEX_LEN: usize = 12;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize)]
@@ -18,7 +21,6 @@ pub struct DeviceId(String);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeviceIdError {
-    MissingPrefix,
     WrongLength { found: usize },
     NotHex,
 }
@@ -26,7 +28,6 @@ pub enum DeviceIdError {
 impl fmt::Display for DeviceIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingPrefix => write!(f, "device id must start with {DEVICE_ID_PREFIX:?}"),
             Self::WrongLength { found } => {
                 write!(f, "device id needs {MAC_HEX_LEN} hex digits, found {found}")
             }
@@ -38,16 +39,16 @@ impl fmt::Display for DeviceIdError {
 impl std::error::Error for DeviceIdError {}
 
 impl DeviceId {
-    /// Parse a canonical `esp32-a4cf128b3d91`. Case-insensitive on input because CLAUDE.md
-    /// writes reader/device ids in both cases (§8 upper, §16 lower); one stored form keeps
-    /// a lookup from missing on case alone. Everything else is rejected.
+    /// Parse a canonical `a4cf128b3d91`. Case-insensitive on input because CLAUDE.md writes
+    /// reader/device ids in both cases (§8 upper, §16 lower); one stored form keeps a lookup
+    /// from missing on case alone. Separators are **not** accepted here -- they belong to
+    /// [`Self::from_mac_str`], which is what config files and human input go through.
     pub fn parse(raw: &str) -> Result<Self, DeviceIdError> {
         let lowered = raw.to_ascii_lowercase();
-        let hex = lowered.strip_prefix(DEVICE_ID_PREFIX).ok_or(DeviceIdError::MissingPrefix)?;
-        if hex.len() != MAC_HEX_LEN {
-            return Err(DeviceIdError::WrongLength { found: hex.len() });
+        if lowered.len() != MAC_HEX_LEN {
+            return Err(DeviceIdError::WrongLength { found: lowered.len() });
         }
-        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if !lowered.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(DeviceIdError::NotHex);
         }
         Ok(Self(lowered))
@@ -55,8 +56,7 @@ impl DeviceId {
 
     /// The only sanctioned way to mint an id for a device the hub has not seen before.
     pub fn from_mac(mac: [u8; 6]) -> Self {
-        let mut s = String::with_capacity(DEVICE_ID_PREFIX.len() + MAC_HEX_LEN);
-        s.push_str(DEVICE_ID_PREFIX);
+        let mut s = String::with_capacity(MAC_HEX_LEN);
         for byte in mac {
             s.push(hex_digit(byte >> 4));
             s.push(hex_digit(byte & 0x0f));
@@ -79,16 +79,11 @@ impl DeviceId {
         if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(DeviceIdError::NotHex);
         }
-        Ok(Self(format!("{DEVICE_ID_PREFIX}{hex}")))
+        Ok(Self(hex))
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// The MAC digits without the prefix, for display next to hardware labels.
-    pub fn mac_hex(&self) -> &str {
-        &self.0[DEVICE_ID_PREFIX.len()..]
     }
 }
 

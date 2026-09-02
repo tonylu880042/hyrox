@@ -1,6 +1,8 @@
-# HYROX Central Hub
+# HYROX 訓練與競賽應用系統
 
-On-site host system for HYROX competition and training sessions. See [CLAUDE.md](CLAUDE.md)
+On-site host system for HYROX competition and training sessions. 程式碼、crate 名稱與
+ADR 沿用內部名稱 **Central Hub**；面向使用者的畫面與影片一律用「HYROX 訓練與競賽應用系統」
+（簡中：HYROX 训练与竞赛应用系统；英文：HYROX TRAINING & COMPETITION SYSTEM）。 See [CLAUDE.md](CLAUDE.md)
 for the full specification, [docs/roadmap.md](docs/roadmap.md) for where the build has got to,
 and [docs/decisions/](docs/decisions/) for architecture decisions.
 
@@ -25,10 +27,13 @@ served locally at `/i18n.js` so a venue with no internet still gets its own lang
 The REST and WebSocket API sits under `/api` and `/ws` — see `docs/api.md` for the endpoint
 table, the operator-identity header, and the freshness readout every read carries.
 
-The dev build also runs an emulated ESP32 in-process (`crates/simulator`) which publishes a
-scripted class **over the broker**, so the screen moves without hardware while still
-exercising the real ingestion path: publish → subscribe → decode → commit → ACK. Clock speed
-is the `SPEED` constant in `apps/hub-server/src/main.rs`.
+A hub starts empty: one DRAFT class, no course, no roster, no readers. Start it with
+`HYROX_DEMO=1` and the settings screen grows a **Demo data** tab, which loads a whole fixture
+venue (course, twelve athletes, readers, bands) and runs an emulated ESP32 in-process
+(`crates/simulator`) publishing a scripted class **over the broker** — so the screen moves
+without hardware while still exercising the real ingestion path: publish → subscribe →
+decode → commit → ACK. That mode also runs the class clock at `SPEED`
+(`apps/hub-server/src/main.rs`); without it the hub keeps real time.
 
 | Variable | Default | |
 | --- | --- | --- |
@@ -36,7 +41,7 @@ is the `SPEED` constant in `apps/hub-server/src/main.rs`.
 | `HYROX_BIND` | `127.0.0.1:8730` | Where the HTTP surface listens. Loopback by default on purpose — `cargo run` must not put an unauthenticated write surface on the café's wifi. The appliance sets `0.0.0.0:8730` in its unit file (ADR 0009). |
 | `HYROX_MQTT_HOST` / `HYROX_MQTT_PORT` | `127.0.0.1` / `1883` | Broker address. |
 | `HYROX_MQTT_CLIENT_ID` | `hyrox-hub` | Stable on purpose: the broker holds this client's QoS 1 queue while the hub is down. |
-| `HYROX_SIM` | on | `off` disables the emulated collector. `--no-default-features` removes it from the build. |
+| `HYROX_DEMO` | off | `1` offers the demo venue on the settings screen: a fixture class plus an emulated collector, loaded and stopped by hand. `--no-default-features` removes it from the build. |
 
 Restarting resumes the live session (READY, RUNNING or PAUSED): athlete state is rebuilt by replaying the stored
 interpreted events, and already ingested reads are skipped by their idempotency key. A class that was PAUSED comes

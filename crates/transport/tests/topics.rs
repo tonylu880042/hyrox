@@ -10,9 +10,9 @@ fn device() -> DeviceId {
 #[test]
 fn events_flow_up_and_acks_flow_down_on_separate_branches() {
     let d = device();
-    assert_eq!(topic::events(&d), "hyrox/v1/edge/esp32-a4cf128b3d91/events");
-    assert_eq!(topic::ack(&d), "hyrox/v1/hub/esp32-a4cf128b3d91/ack");
-    assert_eq!(topic::status(&d), "hyrox/v1/edge/esp32-a4cf128b3d91/status");
+    assert_eq!(topic::events(&d), "hyrox/v1/edge/a4cf128b3d91/events");
+    assert_eq!(topic::ack(&d), "hyrox/v1/hub/a4cf128b3d91/ack");
+    assert_eq!(topic::status(&d), "hyrox/v1/edge/a4cf128b3d91/status");
     assert_eq!(topic::TIME_SYNC, "hyrox/v1/hub/time");
 }
 
@@ -42,9 +42,9 @@ fn an_arriving_ack_topic_names_the_device_it_is_addressed_to() {
 #[test]
 fn a_foreign_or_malformed_topic_names_no_device() {
     for t in [
-        "hyrox/v1/edge/esp32-a4cf128b3d91/status",
-        "hyrox/v1/hub/esp32-a4cf128b3d91/ack",
-        "hyrox/v2/edge/esp32-a4cf128b3d91/events",
+        "hyrox/v1/edge/a4cf128b3d91/status",
+        "hyrox/v1/hub/a4cf128b3d91/ack",
+        "hyrox/v2/edge/a4cf128b3d91/events",
         "hyrox/v1/edge/not-a-device/events",
         "",
     ] {

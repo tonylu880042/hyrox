@@ -48,6 +48,10 @@ pub enum OperatorError<E> {
     /// rule is undecided (CLAUDE.md 12, 28) and must not be invented by a button.
     #[error("no finish rule is configured for this session")]
     NoFinishRule,
+    /// No such reader on the map. Reported rather than silently succeeding: an operator who
+    /// removed nothing must not be told they removed something.
+    #[error("no reader registered as {device_id} {reader_id}")]
+    UnknownReader { device_id: String, reader_id: String },
     #[error("athlete {0:?} is not in this session")]
     UnknownAthlete(String),
     /// Two vests with the same number in one session is a timing error waiting to happen
@@ -65,6 +69,20 @@ pub enum OperatorError<E> {
     /// than silently succeeding: an operator who voided nothing must not be told they did.
     #[error("no interpreted event with id {0}")]
     UnknownEvent(i64),
+    /// A class is on the floor. Used where an action would abandon it -- creating a second
+    /// class (ADR 0008), and switching the machine off (M6).
+    #[error("a class is in progress")]
+    ClassInProgress,
+    /// The machine has no power control wired in: a developer's build, or an appliance
+    /// whose permission rule is missing. Reported rather than pretended: a settings screen
+    /// that says "shutting down" while nothing happens is worse than an error.
+    #[error("power control unavailable: {0}")]
+    PowerUnavailable(String),
+    /// This machine was not set up to carry demo data. A customer's hub, in other words.
+    #[error("this hub does not carry demo data")]
+    DemoUnavailable,
+    #[error("demo data failed: {0}")]
+    DemoFailed(String),
     #[error("store write failed")]
     Storage(E),
 }

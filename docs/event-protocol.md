@@ -9,25 +9,35 @@
 `crates/contract` 只依賴 `domain` 的身分型別（`DeviceId` / `ReaderId`，CLAUDE.md 7.3），
 讓線路解碼直接落在 Hub 查表所用的同一個型別上（ADR 0005）。
 
+給讀取器／韌體團隊的實作面摘要（欄位、topic、自測指令、拒收原因對照）：
+[docs/reader-integration.md](reader-integration.md)。
+
 ---
 
 ## 1. 身分
 
 ### device_id（CLAUDE.md 7.3）
 
-由 ESP32 Base MAC 導出，格式固定：
+**就是裝置的 Base MAC**，12 位小寫 hex、無分隔符號、無前綴（ADR 0015）：
 
 ```text
-esp32-a4cf128b3d91
+a4cf128b3d91
 ```
 
-`DeviceId::from_mac_str` 接受 `A4:CF:12:8B:3D:91`、`a4-cf-12-8b-3d-91`、`a4cf128b3d91`
-三種寫法（給設定檔與人手輸入用），一律正規化為上述形式。不使用隨機 UUID：
-重新燒錄不得讓同一台機器變成兩台。
+`esp32-` 前綴已取消。它換不到東西，而且對非 ESP32 的 UHF 讀取器是錯誤宣告。
+既有資料庫由 migration 0008 就地改寫（`raw_events` 與 `readers` 兩張表）。
 
-**線路上只接受正規形式**：`device_id` 欄位走 `DeviceId::parse`，大小寫不拘，
-但不接受分隔符號——`esp32-a4:cf:12:8b:3d:91` 會被判為 malformed。
-韌體送出的就是自己的正規 id，分隔符號只會出現在人寫的設定裡（ADR 0005）。
+保留的是**正規化**，那才是有承重的一半：`:` `-` `.` 三種分隔符號 × 大小寫
+= 同一台機器六種拼法，而 Reader 對應表查不到時失敗是**安靜**的——
+那台讀取器的每一筆讀取都變成 `UNKNOWN_READER` 例外，不會有任何錯誤說明原因。
+
+| | |
+|---|---|
+| `DeviceId::from_mac_str` | 給設定檔與人手輸入。接受 `A4:CF:12:8B:3D:91`、`a4-cf-12-8b-3d-91`、`a4.cf.12.8b.3d.91`、裸 hex，一律正規化 |
+| `DeviceId::parse` | 給線路。**只**接受正規形式（大小寫不拘），分隔符號拒收 |
+
+不使用隨機 UUID：重新燒錄不得讓同一台機器變成兩台。
+舊的 `esp32-` 形式在線路上一併拒收，不做相容接受——兩種拼法並存正是正規形式要防的事。
 
 ### reader_id
 
@@ -47,11 +57,11 @@ CLAUDE.md §8 內文寫 `RFID-02`、§16 JSON 範例寫 `rfid-02`，折疊大小
 
 ```json
 {
-  "device_id": "esp32-a4cf128b3d91",
+  "device_id": "a4cf128b3d91",
   "reader_id": "rfid-02",
   "boot_id": 18,
   "sequence": 10382,
-  "tag_id": "E280117000001234",
+  "tag_id": ["E280117000001234", "E280117000005678"],
   "detected_at": 1787734821382,
   "uptime_ms": 382912
 }
@@ -63,7 +73,7 @@ CLAUDE.md §8 內文寫 `RFID-02`、§16 JSON 範例寫 `rfid-02`，折疊大小
 | `reader_id` | string | Reader 身分（Hub 據此對應 Station / Zone / Role） |
 | `boot_id` | i64 ≥ 0 | 開機序號，開機遞增 |
 | `sequence` | i64 ≥ 0 | 該次開機內的事件序號，開機後重新起算 |
-| `tag_id` | string 非空 | RFID Tag |
+| `tag_id` | string 陣列，非空 | 該輪 inventory 中所有新出現的 Tag（ADR 0014） |
 | `detected_at` | i64 ≥ 0 | epoch 毫秒，**官方計時來源** |
 | `uptime_ms` | i64 ≥ 0 | 本次開機經過毫秒，診斷用 |
 
@@ -71,7 +81,28 @@ Hub 收件時另外補上 `received_at`，**只用於診斷**（CLAUDE.md 17）�
 程式碼以 `ReceivedEvent` 把兩者分開存放，`official_time()` 永遠回傳
 `detected_at`，`arrival_lag_ms()` 明確標示為診斷用途。
 
-負數計數器與空 `tag_id` 一律拒收（`WireError`），不進儲存層。
+負數計數器一律拒收（`WireError`），不進儲存層。`tag_id` 為**空陣列**或其中含**空字串**
+同樣拒收：兩者都會把「沒有人的讀取」寫進不可變的 raw store。
+**單一字串形式已不再接受**——韌體若還送舊形式，會在整合期大聲失敗，而不是在場地安靜失敗。
+
+---
+
+### 2.1 一輪 inventory，多張 Tag（ADR 0014）
+
+UHF 的 anti-collision 一次回報多張 Tag，因此線路上的單位是**一輪**，不是一張：
+
+```text
+投遞單位 = 一輪 inventory   一則訊息、一個 sequence、一則 ACK
+紀錄單位 = 一張 Tag         raw_events 一張一列
+```
+
+`crates/application` 的 ingest 把一輪展開成每張 Tag 各自的判讀
+（`Ingested::outcomes`，順序即讀取器回報的順序）。**整輪都 commit 之後才鑄造 ACK**：
+中途失敗就沒有 ACK，邊緣重送整輪，已存在的以判重鍵略過、缺的補上。
+`CommitOutcome::AlreadyStored` 只在整輪每一張都已存在時回報。
+
+`raw_events` 的唯一鍵因此加寬為 `(device_id, boot_id, sequence, tag_id)`
+（migration 0007）。判重鍵本身沒有變，見下節。
 
 ---
 
@@ -81,7 +112,8 @@ Hub 收件時另外補上 `received_at`，**只用於診斷**（CLAUDE.md 17）�
 device_id + boot_id + sequence
 ```
 
-以 `EventId` 型別表示，不用鬆散的 tuple 傳遞。
+以 `EventId` 型別表示，不用鬆散的 tuple 傳遞。**它標定一輪，不是一張 Tag**：
+ACK 的粒度必須等於邊緣 journal 的粒度，否則邊緣得追蹤「這一輪五張裡有三張被 ACK」的部分狀態。
 
 - **重複投遞允許**，重複業務處理不允許。
 - `boot_id` 是必要的：`sequence` 會在重開機後歸零，少了 `boot_id` 會與前次
@@ -160,7 +192,7 @@ RFID 偵測 → ESP32 journal → MQTT publish → Hub 收件
 
 ```json
 {
-  "device_id": "esp32-a4cf128b3d91",
+  "device_id": "a4cf128b3d91",
   "boot_id": 18,
   "sequence": 10382,
   "status": "STORED"
@@ -194,6 +226,9 @@ re-arm 後再次出現                → SEND
 - 邊界：離開時間「等於」timeout 尚未 re-arm，需**大於**才 re-arm。
 - **Station 停留時間永遠不得當作抑制時間。**
 - 每次讀取都會延長 presence，所以 Tag 在天線前停留整站也不會中途 re-arm。
+- **presence 必須是「每讀頭 × 每張 Tag」**（ADR 0014）。只記到讀頭層級的話，
+  場中持續有人會把已離開者的 re-arm 一直往後推，他的下一次進站永遠不會產生事件。
+- 整輪皆被抑制則不發訊息，且**不消耗 `sequence`**：序號有洞看起來就像事件遺失。
 - 重開機清空 presence：該狀態在 ESP32 上是 RAM。
 
 實際數值必須在場地以真實天線驗證後調整。
@@ -217,7 +252,7 @@ append-only log + ACK cursor + ring buffer。
 
 ```json
 {
-  "device_id": "esp32-a4cf128b3d91",
+  "device_id": "a4cf128b3d91",
   "boot_id": 18,
   "pending_events": 8123,
   "journal_capacity": 10000,
@@ -239,6 +274,7 @@ retained：新啟動的 Hub 應立刻看見在它上線前就已告警的裝置�
 | `absent_timeout` 實際值 | 預設 4000 ms | 場地實測 |
 | Journal 告警門檻 80% | 本次提出 | 營運：多早通知才來得及處理 |
 | ESP32 時間同步訊息格式 | 只保留了 topic，未定義 payload | 韌體 |
+| UHF 事件是否加 `rssi` 欄位 | 未加。誤讀過濾放在讀取器端 | **韌體**：見 `docs/reader-integration.md` §4.2 |
 | Broker 認證 / ACL | 未處理 | 部署（CLAUDE.md 28 網路設計未決） |
 | 已 ACK 事件的保留期 | 僅實作容量回收 | **韌體**：CLAUDE.md 18 寫「當前 + 前一個 Session」，但 §8 規定邊緣不得知道 Session。見 `docs/open-issues.md` |
 | `reader_id` 是否為 Reader 自身的 MAC | 目前視為獨立於 `device_id` 的識別碼 | **韌體**：若每個 Reader 各有 MAC，「一台 ESP32 多個 Reader」的模型需重新確認 |
@@ -255,7 +291,10 @@ retained：新啟動的 Hub 應立刻看見在它上線前就已告警的裝置�
 | ACK 協定、commit 前不得 ACK | `crates/contract/tests/ack.rs` |
 | Presence / re-arm 抑制 | `crates/simulator/tests/suppression.rs` |
 | Journal 語意 | `crates/simulator/tests/journal.rs` |
-| 單一裝置：Reader、Tag、重開機 | `crates/simulator/tests/device.rs` |
+| 單一裝置：Reader、Tag、重開機、UHF 一輪多張 | `crates/simulator/tests/device.rs` |
+| 一輪展開成每張 Tag 的判讀、一輪一則 ACK | `crates/application/tests/ingest.rs` |
+| migration 0007 對既有資料庫 | `crates/storage/tests/migration_0007.rs` |
+| migration 0008 去前綴、可重複執行 | `crates/storage/tests/migration_0008.rs` |
 | 斷線／重送／重複／亂序／ACK 遺失 | `crates/simulator/tests/fleet.rs` |
 
 以上全部不需要 MQTT broker、不需要 RFID 硬體（CLAUDE.md 24）。

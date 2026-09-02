@@ -25,6 +25,7 @@ fn plan() -> SessionPlan {
             display_name: "CHEN YU-TING".into(),
         }],
         class_start: START,
+        start_now: true,
     }
 }
 
@@ -277,7 +278,7 @@ async fn a_resumed_session_with_no_stored_configuration_says_so() {
 async fn a_resumed_session_gets_its_reader_map_back() {
     let store = FakeStore::new();
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
-    let key = ReaderKey::parse("esp32-a4cf128b3d91", "rfid-01").expect("key");
+    let key = ReaderKey::parse("a4cf128b3d91", "rfid-01").expect("key");
     let registration = ReaderRegistration::new(key.clone(), "SKIERG", ReaderMode::Entry);
     register_reader(&mut state, &store, &registration, &OperatorCommand::new("OP", START))
         .await
@@ -298,7 +299,7 @@ async fn re_registering_an_unchanged_reader_writes_no_audit_line() {
     // that matters -- the evening a reader was actually repointed (CLAUDE.md 20).
     let store = FakeStore::new();
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
-    let key = ReaderKey::parse("esp32-a4cf128b3d91", "rfid-01").expect("key");
+    let key = ReaderKey::parse("a4cf128b3d91", "rfid-01").expect("key");
     let cmd = OperatorCommand::new("OP", START);
     let entry = ReaderRegistration::new(key.clone(), "SKIERG", ReaderMode::Entry);
 
@@ -351,7 +352,7 @@ async fn the_checkin_queue_is_rebuilt_from_the_raw_store() {
     let (state, _) = resume_or_start(&store, plan()).await.expect("start");
     store
         .commit_raw(&application::RawRead {
-            device_id: "esp32-a4cf128b3d91".into(),
+            device_id: "a4cf128b3d91".into(),
             reader_id: "rfid-01".into(),
             boot_id: 1,
             sequence: 1,
@@ -375,7 +376,7 @@ async fn a_tag_bound_before_the_restart_is_not_queued_for_check_in_again() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     store
         .commit_raw(&application::RawRead {
-            device_id: "esp32-a4cf128b3d91".into(),
+            device_id: "a4cf128b3d91".into(),
             reader_id: "rfid-01".into(),
             boot_id: 1,
             sequence: 1,
@@ -393,4 +394,40 @@ async fn a_tag_bound_before_the_restart_is_not_queued_for_check_in_again() {
     let (resumed, _) = resume_or_start(&store, plan()).await.expect("resume");
 
     assert!(resumed.pending_tags().is_empty(), "a claimed band is not still waiting");
+}
+
+/// A bib is not replayed from events: it is a stored fact about the roster, and it must
+/// come back with the session. Without it the door hands out a number somebody is already
+/// wearing -- the store refuses the write, and the next entrant is turned away at a race
+/// they have paid to enter (CLAUDE.md 21).
+#[tokio::test]
+async fn a_resumed_session_gets_the_bibs_it_already_handed_out() {
+    let mut existing = Session::new_draft("s-old", "WED 19:00", SessionMode::Training);
+    existing.mark_ready().expect("arm");
+    existing.start().expect("arm");
+    let entered = AthleteState::ready("b1", "LIN CHIA-HAO");
+    let store = FakeStore::new()
+        .with_session(existing, Instant(500_000))
+        .with_rebuilt_athletes(vec![entered]);
+
+    let (mut state, _how) = resume_or_start(&store, plan()).await.expect("resume");
+
+    assert_eq!(state.bibs().collect::<Vec<_>>(), vec![1], "bib 1 is taken");
+
+    let id = application::enter(
+        &mut state,
+        &store,
+        application::Entrant::walk_in("陳小明"),
+        &application::OperatorCommand::new("DOOR TABLET", Instant(600_000)),
+    )
+    .await
+    .expect("entered");
+
+    let bib = store
+        .saved_athletes()
+        .into_iter()
+        .find(|a| a.athlete_id == id)
+        .expect("a roster row")
+        .bib;
+    assert_eq!(bib, 2, "the next entrant gets the next free number, not a duplicate");
 }

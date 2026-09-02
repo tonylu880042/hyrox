@@ -58,7 +58,9 @@ pub mod wire;
 pub use error::{ApiError, ErrorBody};
 pub use identity::{OperatorDevice, OPERATOR_HEADER};
 pub use read::WEBSOCKET_PATH;
-pub use state::{CheckIn, Clock, Hub, Operator, ReadOnly};
+pub use state::{
+    CheckIn, Clock, Demo, Hub, NoDemo, NoPower, Operator, Power, PowerAction, ReadOnly,
+};
 
 use application::HubStore;
 use axum::Router;

@@ -19,6 +19,16 @@ use domain::{
 use contract::{EdgeEvent, ReceivedEvent};
 use support::FakeStore;
 
+/// A round of one tag yields one outcome. The unwrap is the assertion: anything else means
+/// the fan-out over a round changed shape (ADR 0014).
+fn sole(ingested: &application::Ingested) -> application::IngestOutcome {
+    match ingested.outcomes.as_slice() {
+        [outcome] => outcome.clone(),
+        other => panic!("one tag in, one outcome out; got {other:?}"),
+    }
+}
+
+
 const DEVICE: &str = "a4:cf:12:8b:3d:91";
 const CLASS_START: Instant = Instant(1_000_000);
 
@@ -28,7 +38,7 @@ fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
         reader_id: contract::ReaderId::parse(reader).expect("reader id"),
         boot_id: 7,
         sequence,
-        tag_id: tag.to_string(),
+        tag_id: vec![tag.to_string()],
         detected_at: at,
         uptime_ms: at - CLASS_START.0,
     };
@@ -36,7 +46,7 @@ fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
 }
 
 fn readers() -> ReaderRegistry {
-    let device = format!("esp32-{}", DEVICE.replace(':', ""));
+    let device = DEVICE.replace(':', "");
     let mut registry = ReaderRegistry::new();
     for (reader, mode) in [("rfid-01", ReaderMode::Entry), ("rfid-02", ReaderMode::Exit)] {
         registry.register(ReaderRegistration::new(
@@ -291,7 +301,7 @@ async fn the_new_band_takes_over_from_the_swap_onwards() {
         .await
         .expect("ingest on the new band");
 
-    match out.outcome {
+    match sole(&out) {
         IngestOutcome::Interpreted { ref athlete_id, event: Interpreted::Exited { .. } } => {
             assert_eq!(athlete_id, "a1")
         }

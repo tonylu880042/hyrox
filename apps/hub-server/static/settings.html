@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-Hant"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/app.css">
+<script src="/i18n.js"></script>
+<style>
+  body { font-family: "Archivo Narrow", "PingFang TC", "Noto Sans TC", system-ui, sans-serif; }
+  h1, h2 { font-family: "Bebas Neue", "PingFang TC", "Noto Sans TC", sans-serif; letter-spacing: .04em; }
+  /* Set up on a tablet, standing at a wall, often with one hand holding a band. */
+  button, select, input { min-height: 48px; font-size: 16px; }
+  .mono { font-family: "JetBrains Mono", monospace; }
+</style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen">
+
+<header class="border-b border-outline-variant bg-surface-container-lowest sticky top-0 z-20">
+  <div class="max-w-5xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+    <h1 class="text-2xl sm:text-3xl text-primary">HYROX</h1>
+    <span class="text-lg" data-i18n="set.title">Settings</span>
+    <nav class="flex gap-1 text-sm order-3 w-full sm:order-none sm:w-auto">
+      <button data-view="readers"    class="nav px-3 py-2 rounded" data-i18n="set.tab.readers"></button>
+      <button data-view="devices"    class="nav px-3 py-2 rounded" data-i18n="set.tab.devices"></button>
+      <button data-view="exceptions" class="nav px-3 py-2 rounded" data-i18n="set.tab.exceptions"></button>
+      <button data-view="screen"     class="nav px-3 py-2 rounded" data-i18n="set.tab.screen"></button>
+      <button data-view="power"      class="nav px-3 py-2 rounded" data-i18n="set.tab.power"></button>
+      <!-- Only on a machine that carries demo data; hidden until /api/settings says so. -->
+      <button data-view="demo" id="tab-demo" class="nav px-3 py-2 rounded hidden" data-i18n="set.tab.demo"></button>
+    </nav>
+    <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant whitespace-nowrap">
+      <span id="freshness" class="mono"></span>
+      <span class="text-xs tracking-widest text-on-surface-variant">uCareMedi.com</span>
+      <span id="lang" class="flex gap-1"></span>
+    </div>
+  </div>
+  <div id="toast" class="hidden px-4 py-2 text-sm"></div>
+</header>
+
+<main class="max-w-5xl mx-auto px-4 py-4 space-y-4">
+
+  <!-- Readers: the list a venue is installed from, then the ones already assigned. -->
+  <section id="view-readers" class="space-y-4">
+    <div class="bg-surface-container rounded-lg border border-outline-variant p-4">
+      <h2 class="text-xl mb-1" data-i18n="set.newReaders"></h2>
+      <p class="text-sm text-on-surface-variant mb-3" data-i18n="set.newReadersHint"></p>
+      <ul id="unregistered" class="flex flex-col gap-3"></ul>
+    </div>
+    <div class="bg-surface-container rounded-lg border border-outline-variant p-4">
+      <h2 class="text-xl mb-1" data-i18n="set.addByHand"></h2>
+      <p class="text-sm text-on-surface-variant mb-3" data-i18n="set.addHint"></p>
+      <div class="flex flex-wrap gap-2 items-end">
+        <label class="flex-1" style="min-width:11rem">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.deviceId"></span>
+          <input id="new-device" maxlength="17" spellcheck="false"
+                 class="mono w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+        </label>
+        <label class="flex-1" style="min-width:9rem">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.readerId"></span>
+          <input id="new-reader" spellcheck="false"
+                 class="mono w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+        </label>
+        <label class="flex-1" style="min-width:9rem">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.station"></span>
+          <input id="new-station" list="stations"
+                 class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+        </label>
+        <label style="min-width:8rem">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.mode"></span>
+          <select id="new-mode" class="w-full bg-surface-container border border-outline-variant rounded px-3 py-2"></select>
+        </label>
+        <button id="add-reader" class="bg-primary text-on-primary font-semibold px-5 py-2 rounded" data-i18n="set.add"></button>
+      </div>
+    </div>
+
+    <div class="bg-surface-container rounded-lg border border-outline-variant p-4">
+      <h2 class="text-xl mb-3" data-i18n="set.registered"></h2>
+      <ul id="registered" class="flex flex-col gap-2"></ul>
+    </div>
+  </section>
+
+  <section id="view-devices" class="hidden bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-3" data-i18n="set.devices"></h2>
+    <ul id="devices" class="flex flex-col gap-2"></ul>
+  </section>
+
+  <section id="view-exceptions" class="hidden bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-3" data-i18n="set.exceptions"></h2>
+    <ul id="exceptions" class="flex flex-col gap-2"></ul>
+  </section>
+
+  <!-- What the venue adjusts for itself. Stored on the hub, not in this browser: the
+       projector is a different machine, and a setting kept here would never reach it. -->
+  <section id="view-screen" class="hidden bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-1" data-i18n="set.screen"></h2>
+    <p class="text-sm text-on-surface-variant mb-3" data-i18n="set.pageMsHint"></p>
+    <div class="flex flex-wrap gap-2 items-end">
+      <label class="w-40">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.pageMs"></span>
+        <input id="page-seconds" type="number" min="3" max="120" step="1"
+               class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2 mono"/>
+      </label>
+      <label class="w-52">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.pageSize"></span>
+        <select id="page-size" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"></select>
+      </label>
+      <button id="save-screen" class="bg-primary text-on-primary font-semibold px-5 py-2 rounded" data-i18n="set.save"></button>
+    </div>
+
+    <div class="mt-6 pt-4 border-t border-outline-variant">
+      <h2 class="text-xl mb-1" data-i18n="set.logo"></h2>
+      <p class="text-sm text-on-surface-variant mb-3" data-i18n="set.logoHint"></p>
+      <div class="flex flex-wrap gap-4 items-center">
+        <!-- Checked background: a logo is usually transparent, and a white mark on the dark
+             card would look like nothing was uploaded. -->
+        <div class="flex items-center justify-center rounded border border-outline-variant"
+             style="height:80px;width:224px;background:repeating-conic-gradient(#2a2a2a 0% 25%, #1b1b1b 0% 50%) 50%/16px 16px">
+          <img id="logo-preview" class="hidden" alt="" style="max-height:64px;max-width:208px;object-fit:contain"/>
+          <span id="logo-none" class="text-sm text-on-surface-variant" data-i18n="set.logoNone"></span>
+        </div>
+        <input id="logo-file" type="file" accept="image/png,image/jpeg" class="hidden"/>
+        <button id="logo-pick" class="border border-outline rounded px-4 py-2" data-i18n="set.logoUpload"></button>
+        <button id="logo-remove" class="border border-error text-error rounded px-4 py-2" data-i18n="set.logoRemove"></button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-power" class="hidden bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-1" data-i18n="set.power"></h2>
+    <p class="text-sm text-on-surface-variant mb-3" data-i18n="set.powerHint"></p>
+    <label class="block mb-3 max-w-md">
+      <span class="block text-xs text-on-surface-variant mb-1" data-i18n="set.powerReason"></span>
+      <input id="power-reason" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+    </label>
+    <div class="flex flex-wrap gap-2">
+      <button data-power="RESTART_SERVICE" class="pw border border-outline rounded px-4 py-2" data-i18n="set.restart"></button>
+      <button data-power="REBOOT"          class="pw border border-outline rounded px-4 py-2" data-i18n="set.reboot"></button>
+      <button data-power="POWEROFF"        class="pw border border-error text-error rounded px-4 py-2" data-i18n="set.poweroff"></button>
+    </div>
+  </section>
+
+  <!-- Demo data (M6 follow-up). A test machine's tool: a fixture class plus emulated reads,
+       so the whole pipeline can be exercised without hardware. -->
+  <section id="view-demo" class="hidden bg-surface-container rounded-lg border border-outline-variant p-4">
+    <h2 class="text-xl mb-1" data-i18n="set.demo"></h2>
+    <p class="text-sm text-on-surface-variant mb-3" data-i18n="set.demoHint"></p>
+    <div class="flex flex-wrap gap-2">
+      <button id="demo-load"  class="border border-outline rounded px-4 py-2" data-i18n="set.demoLoad"></button>
+      <button id="demo-clear" class="border border-outline rounded px-4 py-2" data-i18n="set.demoClear"></button>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+let DEVICE = localStorage.getItem("hyrox.device") || "";
+let VIEW = { readers: [], devices: [], exceptions: [], unregistered: [], stations: [] };
+const MODES = ["ENTRY", "EXIT", "TOGGLE", "CHECKPOINT", "PASSAGE"];
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+function toast(message, bad) {
+  const el = document.getElementById("toast");
+  el.textContent = message;
+  el.className = "px-4 py-2 text-sm " + (bad ? "bg-error text-on-error" : "bg-primary text-on-primary");
+  setTimeout(() => el.classList.add("hidden"), 4500);
+}
+
+/// Every write carries the tablet's name; that name is the audit identity (ADR 0001 D1).
+/// Asked for once and kept, because a helper setting up a venue should be asked their
+/// device name once, not on every antenna.
+function device() {
+  while (!DEVICE) {
+    DEVICE = (prompt(I18N.t("device.ask") || "Device name") || "").trim();
+    if (DEVICE) localStorage.setItem("hyrox.device", DEVICE);
+  }
+  return DEVICE;
+}
+
+async function api(method, path, body) {
+  const headers = { "content-type": "application/json" };
+  if (method !== "GET") headers["x-operator-device"] = device();
+  const response = await fetch(path, {
+    method,
+    headers,
+    body: method === "GET" ? undefined : JSON.stringify(body || {}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const known = I18N.t("err." + data.error);
+    throw new Error(known !== "err." + data.error ? known : (data.message || response.status));
+  }
+  return data;
+}
+
+/// I18N.t answers with the key itself when there is no translation, so a missing entry
+/// would print "exc.UNKNOWN_READER" on a screen. Fall back to the raw value instead.
+function label(prefix, value) {
+  const text = I18N.t(prefix + value);
+  return text === prefix + value ? value : text;
+}
+
+function ago(ms) {
+  if (ms == null) return "—";
+  const s = Math.round(ms / 1000);
+  if (s < 90) return I18N.t("set.lastSeen").replace("{0}", s + "s");
+  return I18N.t("set.lastSeen").replace("{0}", Math.round(s / 60) + "m");
+}
+
+// ── Readers ───────────────────────────────────────────────────────────────────
+function renderUnregistered() {
+  const host = document.getElementById("unregistered");
+  host.innerHTML = "";
+  if (!VIEW.unregistered.length) {
+    host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("set.noNewReaders")) + "</li>";
+    return;
+  }
+  for (const r of VIEW.unregistered) {
+    const li = document.createElement("li");
+    li.className = "bg-surface-container-high rounded border border-outline-variant p-3 flex flex-wrap gap-2 items-end";
+    li.innerHTML = `
+      <div class="flex-1 min-w-[12rem]">
+        <div class="mono text-sm">${esc(r.reader_id)}</div>
+        <div class="mono text-xs text-on-surface-variant">${esc(r.device_id)}</div>
+        <div class="text-xs text-on-surface-variant">
+          ${esc(I18N.t("set.reads").replace("{0}", r.reads))} · ${esc(ago(Date.now() - r.last_seen))}</div>
+      </div>
+      <label class="flex-1" style="min-width:10rem">
+        <span class="block text-xs text-on-surface-variant mb-1">${esc(I18N.t("set.station"))}</span>
+        <input class="st w-full bg-surface-container border border-outline-variant rounded px-2 py-2"
+               list="stations" value=""/>
+      </label>
+      <label style="min-width:8rem">
+        <span class="block text-xs text-on-surface-variant mb-1">${esc(I18N.t("set.mode"))}</span>
+        <select class="md w-full bg-surface-container border border-outline-variant rounded px-2 py-2">
+          ${MODES.map((m) => `<option value="${m}">${esc(label("mode.", m))}</option>`).join("")}
+        </select>
+      </label>
+      <button class="go bg-primary text-on-primary font-semibold px-4 py-2 rounded">${esc(I18N.t("set.assign"))}</button>`;
+    li.querySelector(".go").onclick = () => guard(async () => {
+      const station = li.querySelector(".st").value.trim();
+      if (!station) return toast(I18N.t("set.station"), true);
+      await api("POST", "/api/operator/readers", {
+        device_id: r.device_id,
+        reader_id: r.reader_id,
+        station,
+        mode: li.querySelector(".md").value,
+      });
+      toast(I18N.t("set.assigned").replace("{0}", station));
+      await refresh();
+    });
+    host.appendChild(li);
+  }
+}
+
+function renderRegistered() {
+  const host = document.getElementById("registered");
+  host.innerHTML = "";
+  if (!VIEW.readers.length) {
+    host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("set.noRegistered")) + "</li>";
+    return;
+  }
+  for (const r of VIEW.readers) {
+    const li = document.createElement("li");
+    li.className = "flex flex-wrap items-center gap-3 bg-surface-container-high rounded border border-outline-variant px-3 py-2";
+    li.innerHTML = `
+      <span class="mono text-sm" style="min-width:9rem">${esc(r.reader_id)}</span>
+      <span class="flex-1" style="min-width:8rem">${esc(r.station)}</span>
+      <span class="text-xs px-2 py-1 rounded border border-outline">${esc(label("mode.", r.mode))}</span>
+      <span class="text-xs text-on-surface-variant mono">${esc(ago(r.last_seen_age_ms))}</span>
+      <button class="rm border border-error text-error rounded px-3 py-2 text-sm">${esc(I18N.t("set.remove"))}</button>`;
+    li.querySelector(".rm").onclick = () => guard(async () => {
+      // A reason, like every action that changes what the hub will record (CLAUDE.md 20):
+      // from here on this antenna's reads are exceptions rather than progress.
+      const reason = (prompt(I18N.t("set.removeReason")) || "").trim();
+      if (!reason) return;
+      await api("DELETE", `/api/operator/readers/${encodeURIComponent(r.device_id)}/${encodeURIComponent(r.reader_id)}`, { reason });
+      toast(I18N.t("set.removed").replace("{0}", r.reader_id));
+      await refresh();
+    });
+    host.appendChild(li);
+  }
+}
+
+document.getElementById("add-reader").onclick = () => guard(async () => {
+  const device_id = document.getElementById("new-device").value.trim();
+  const reader_id = document.getElementById("new-reader").value.trim();
+  const station = document.getElementById("new-station").value.trim();
+  if (!device_id || !reader_id || !station) return toast(I18N.t("set.addHint"), true);
+  await api("POST", "/api/operator/readers", {
+    device_id,
+    reader_id,
+    station,
+    mode: document.getElementById("new-mode").value,
+  });
+  document.getElementById("new-reader").value = "";
+  document.getElementById("new-station").value = "";
+  toast(I18N.t("set.assigned").replace("{0}", station));
+  await refresh();
+});
+
+// ── Devices ───────────────────────────────────────────────────────────────────
+function renderDevices() {
+  const host = document.getElementById("devices");
+  host.innerHTML = "";
+  if (!VIEW.devices.length) {
+    host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("set.noDevices")) + "</li>";
+    return;
+  }
+  for (const d of VIEW.devices) {
+    const li = document.createElement("li");
+    // A device's own warning is relayed, never derived (CLAUDE.md 18).
+    const bad = d.warning && d.warning !== "HEALTHY";
+    li.className = "flex flex-wrap items-center gap-3 rounded border px-3 py-2 "
+      + (bad ? "border-error bg-surface-container-high" : "border-outline-variant bg-surface-container-high");
+    li.innerHTML = `
+      <span class="mono text-sm flex-1" style="min-width:12rem">${esc(d.device_id)}</span>
+      <span class="text-xs text-on-surface-variant">${esc(I18N.t("set.boot"))} ${esc(d.boot_id ?? "—")}</span>
+      <span class="text-xs ${bad ? "text-error" : "text-on-surface-variant"}">
+        ${esc(I18N.t("set.pending"))} ${esc(d.pending_events ?? "—")}${d.journal_capacity ? " / " + esc(d.journal_capacity) : ""}</span>
+      <span class="text-xs text-on-surface-variant mono">${esc(ago(d.last_seen_age_ms))}</span>
+      ${bad ? `<span class="text-xs px-2 py-1 rounded bg-error text-on-error">${esc(d.warning)}</span>` : ""}`;
+    host.appendChild(li);
+  }
+}
+
+// ── Exceptions ────────────────────────────────────────────────────────────────
+function renderExceptions() {
+  const host = document.getElementById("exceptions");
+  host.innerHTML = "";
+  if (!VIEW.exceptions.length) {
+    host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("set.noExceptions")) + "</li>";
+    return;
+  }
+  for (const e of VIEW.exceptions) {
+    const li = document.createElement("li");
+    li.className = "flex flex-wrap items-center gap-3 bg-surface-container-high rounded border border-outline-variant px-3 py-2";
+    li.innerHTML = `
+      <span class="text-xs px-2 py-1 rounded border border-outline">${esc(label("exc.", e.reason))}</span>
+      <span class="mono text-sm flex-1" style="min-width:8rem">${esc(e.athlete_id)}</span>
+      <span class="text-xs text-on-surface-variant mono">${esc(ago(e.age_ms))}</span>
+      <button class="vd border border-error text-error rounded px-3 py-2 text-sm">${esc(I18N.t("set.void"))}</button>`;
+    li.querySelector(".vd").onclick = () => guard(async () => {
+      // Voiding changes recorded data, so it carries a reason (CLAUDE.md 20).
+      const reason = (prompt(I18N.t("set.voidReason")) || "").trim();
+      if (!reason) return;
+      await api("POST", "/api/operator/exceptions/" + e.interpreted_event_id + "/void", { reason });
+      await refresh();
+    });
+    host.appendChild(li);
+  }
+}
+
+// ── Power ─────────────────────────────────────────────────────────────────────
+// Seconds on the screen, milliseconds on the wire: nobody sets a projector in
+// milliseconds, and nothing downstream should have to guess which unit it was given.
+document.getElementById("save-screen").onclick = () => guard(async () => {
+  const seconds = Number(document.getElementById("page-seconds").value);
+  const answer = await api("PUT", "/api/operator/settings", {
+    live_page_ms: Math.round(seconds * 1000),
+    live_page_size: Number(document.getElementById("page-size").value),
+  });
+  document.getElementById("page-seconds").value = Math.round(answer.live_page_ms / 1000);
+  toast(I18N.t("set.saved"));
+});
+
+// ── The venue's logo ──────────────────────────────────────────────────────────
+// Raw bytes, not a multipart form: one file, one request, and the only check that matters
+// happens on the hub by reading what the bytes are.
+document.getElementById("logo-pick").onclick = () => document.getElementById("logo-file").click();
+document.getElementById("logo-file").onchange = (e) => guard(async () => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const response = await fetch("/api/operator/logo", {
+    method: "POST",
+    headers: { "content-type": file.type || "application/octet-stream", "x-operator-device": device() },
+    body: file,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const known = I18N.t("err." + data.error);
+    throw new Error(known !== "err." + data.error ? known : (data.message || response.status));
+  }
+  e.target.value = "";
+  toast(I18N.t("set.logoSaved"));
+  showLogo();
+});
+
+document.getElementById("logo-remove").onclick = () => guard(async () => {
+  await api("DELETE", "/api/operator/logo");
+  toast(I18N.t("set.logoRemoved"));
+  showLogo();
+});
+
+/// The cache-buster is the point: the URL never changes, so without it the browser would
+/// keep showing the logo that was just replaced.
+function showLogo() {
+  const img = document.getElementById("logo-preview");
+  const none = document.getElementById("logo-none");
+  const probe = new Image();
+  probe.onload = () => { img.src = probe.src; img.classList.remove("hidden"); none.classList.add("hidden"); };
+  probe.onerror = () => { img.classList.add("hidden"); none.classList.remove("hidden"); };
+  probe.src = "/api/logo?t=" + Date.now();
+}
+showLogo();
+
+document.querySelectorAll(".pw").forEach((b) => b.onclick = () => guard(async () => {
+  const action = b.dataset.power;
+  const reason = document.getElementById("power-reason").value.trim();
+  if (!reason) return toast(I18N.t("err.REASON_REQUIRED"), true);
+  if (action !== "RESTART_SERVICE" && !confirm(b.textContent + " ?")) return;
+  await api("POST", "/api/operator/power", { action, reason });
+  toast(I18N.t("set.powerAsked").replace("{0}", b.textContent));
+}));
+
+// ── Demo data ─────────────────────────────────────────────────────────────────
+document.getElementById("demo-load").onclick = () => guard(async () => {
+  await api("POST", "/api/operator/demo", {});
+  toast(I18N.t("set.demoLoaded"));
+});
+document.getElementById("demo-clear").onclick = () => guard(async () => {
+  await api("DELETE", "/api/operator/demo", {});
+  toast(I18N.t("set.demoCleared"));
+});
+
+// ── Views and polling ─────────────────────────────────────────────────────────
+function show(view) {
+  for (const name of ["readers", "devices", "exceptions", "screen", "power", "demo"]) {
+    document.getElementById("view-" + name).classList.toggle("hidden", name !== view);
+  }
+  document.querySelectorAll(".nav").forEach((b) => {
+    const on = b.dataset.view === view;
+    b.className = "nav px-3 py-2 rounded " + (on ? "bg-surface-container-high text-primary" : "text-on-surface-variant");
+  });
+}
+document.querySelectorAll(".nav").forEach((b) => b.onclick = () => show(b.dataset.view));
+
+async function guard(work) {
+  try { await work(); } catch (e) { toast(e.message || String(e), true); }
+}
+
+async function refresh() {
+  const [operator, unregistered, session, settings] = await Promise.all([
+    api("GET", "/api/operator"),
+    api("GET", "/api/operator/readers/unregistered"),
+    api("GET", "/api/session"),
+    api("GET", "/api/settings"),
+  ]);
+  // Not while somebody is typing in it: a five-second poll that overwrites the field is a
+  // setting nobody can change.
+  const field = document.getElementById("page-seconds");
+  if (document.activeElement !== field) field.value = Math.round(settings.live_page_ms / 1000);
+  // Offered layouts, not a free number: the options come from the hub so the picker cannot
+  // drift from what the projector knows how to draw.
+  const sizes = document.getElementById("page-size");
+  if (document.activeElement !== sizes) {
+    sizes.innerHTML = (settings.page_layouts || [])
+      .map((l) => `<option value="${l.size}">${l.size} ${esc(I18N.t("set.people"))} (${l.columns}x${l.rows})</option>`)
+      .join("");
+    sizes.value = settings.live_page_size;
+  }
+  document.getElementById("tab-demo").classList.toggle("hidden", !settings.demo_available);
+  VIEW.readers = operator.readers || [];
+  VIEW.devices = operator.devices || [];
+  VIEW.exceptions = (await api("GET", "/api/operator/exceptions")).exceptions || [];
+  VIEW.unregistered = unregistered.readers || [];
+  // The stations the course already names, offered as suggestions: a reader's station key
+  // has to match the course exactly or its reads become exceptions (ADR 0008).
+  const course = session.config && session.config.course;
+  VIEW.stations = course ? [...new Set(course.steps.map((s) => s.station))] : [];
+  document.getElementById("stations").innerHTML =
+    VIEW.stations.map((s) => `<option value="${esc(s)}"></option>`).join("");
+
+  const f = operator.freshness;
+  document.getElementById("freshness").textContent =
+    f.last_event_age_ms == null ? "—" : Math.round(f.last_event_age_ms / 1000) + "s";
+
+  renderUnregistered();
+  renderRegistered();
+  renderDevices();
+  renderExceptions();
+}
+
+// The mode picker on the manual form, from the same list the assign rows use.
+document.getElementById("new-mode").innerHTML =
+  MODES.map((m) => `<option value="${m}">${esc(label("mode.", m))}</option>`).join("");
+
+I18N.apply();
+I18N.switcher(document.getElementById("lang"));
+document.body.insertAdjacentHTML("beforeend", '<datalist id="stations"></datalist>');
+show("readers");
+guard(refresh);
+setInterval(() => guard(refresh), 5000);
+</script>
+</body></html>

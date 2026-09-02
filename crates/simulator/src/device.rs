@@ -108,10 +108,10 @@ impl SimDevice {
         self.readers.keys().cloned().collect()
     }
 
-    /// One RF read of `tag` at `reader`.
+    /// One RF read of `tag` at `reader`: an inventory round that saw exactly one tag.
     ///
     /// A suppressed read consumes no sequence number, and neither does a read that could
-    /// not be journalled — a gap in the sequence would look like a lost event to anyone
+    /// not be journalled -- a gap in the sequence would look like a lost event to anyone
     /// auditing the log (CLAUDE.md 16).
     pub fn rf_read(
         &mut self,
@@ -119,14 +119,36 @@ impl SimDevice {
         tag: &str,
         now_ms: i64,
     ) -> Result<RfOutcome, DeviceError> {
-        let decision = {
+        self.rf_inventory(reader, &[tag], now_ms)
+    }
+
+    /// One UHF inventory round: every tag the reader saw in the same instant.
+    ///
+    /// Anti-collision means a reader reports several tags at once, so the round is the unit
+    /// on the wire (ADR 0014): the tags that count as new sightings travel in **one** event,
+    /// under one `sequence`, released by one ACK. Tags still continuously present are
+    /// suppressed out of it, and a round where every tag is suppressed publishes nothing and
+    /// consumes no sequence number.
+    ///
+    /// Presence is per tag, not per reader, so a crowd standing in the field never holds a
+    /// departed tag's re-arm open.
+    pub fn rf_inventory(
+        &mut self,
+        reader: &ReaderId,
+        tags: &[&str],
+        now_ms: i64,
+    ) -> Result<RfOutcome, DeviceError> {
+        let fresh: Vec<String> = {
             let presence = self
                 .readers
                 .get_mut(reader)
                 .ok_or_else(|| DeviceError::UnknownReader(reader.clone()))?;
-            presence.observe(tag, now_ms)
+            tags.iter()
+                .filter(|tag| presence.observe(tag, now_ms) == PresenceDecision::Emit)
+                .map(|tag| tag.to_string())
+                .collect()
         };
-        if decision == PresenceDecision::Suppressed {
+        if fresh.is_empty() {
             return Ok(RfOutcome::Suppressed);
         }
 
@@ -135,7 +157,7 @@ impl SimDevice {
             reader_id: reader.clone(),
             boot_id: self.boot_id,
             sequence: self.next_sequence,
-            tag_id: tag.to_string(),
+            tag_id: fresh,
             // Official timing is the moment of detection on the edge clock (CLAUDE.md 17).
             detected_at: now_ms,
             // Clamped: an emulated device cannot have been running for negative time. A

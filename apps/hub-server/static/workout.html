@@ -3,6 +3,7 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>HYROX</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/app.css">
 <script src="/i18n.js"></script>
@@ -28,6 +29,7 @@
     </nav>
     <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant whitespace-nowrap">
       <span id="freshness" class="font-mono"></span>
+      <span class="text-xs tracking-widest text-on-surface-variant">uCareMedi.com</span>
       <span id="lang" class="flex gap-1"></span>
       <a href="/live" class="underline" data-i18n="nav.live">Live</a>
     </div>
@@ -111,12 +113,19 @@
         <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.name">Class name</span>
         <input id="c-name" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
       </label>
-      <div class="flex gap-3 mb-3">
-        <label class="flex-1">
+      <div class="flex flex-wrap gap-3 mb-3">
+        <label class="flex-1" style="min-width:9.5rem">
+          <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.mode">Type</span>
+          <select id="c-mode" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2">
+            <option value="TRAINING" data-i18n="mode.TRAINING"></option>
+            <option value="COMPETITION" data-i18n="mode.COMPETITION"></option>
+          </select>
+        </label>
+        <label class="flex-1" style="min-width:9.5rem">
           <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.coach">Coach</span>
           <input id="c-coach" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
         </label>
-        <label class="flex-1">
+        <label class="flex-1 min-w-[10rem]">
           <span class="block text-xs text-on-surface-variant mb-1" data-i18n="class.ends">Ends</span>
           <select id="c-finish" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2">
             <option value="COACH_DECIDES" data-i18n="finish.COACH_DECIDES"></option>
@@ -136,9 +145,10 @@
     <div id="class-live" class="hidden mt-4 bg-surface-container rounded-lg border border-outline-variant p-4 max-w-2xl">
       <h2 class="text-2xl mb-1" data-i18n="class.today">Today's class</h2>
       <p class="text-sm text-on-surface-variant mb-3" data-i18n-html="class.todayNote"></p>
-      <div class="mb-3 flex items-baseline gap-3">
+      <div class="mb-3 flex items-baseline flex-wrap gap-x-3 gap-y-1">
         <span id="c-status" class="font-mono text-primary text-lg"></span>
         <span id="c-elapsed" class="font-mono text-on-surface-variant"></span>
+        <span id="c-rule" class="text-sm text-on-surface-variant"></span>
       </div>
       <ol id="c-steps" class="space-y-1 mb-4 font-mono text-sm"></ol>
       <div class="flex flex-wrap gap-2">
@@ -553,6 +563,8 @@ document.getElementById("create-class").onclick = () => guard(async () => {
     template_id: CLASS_FOR.id,
     session_id: "class-" + Date.now(),
     name: document.getElementById("c-name").value.trim() || CLASS_FOR.name,
+    // 競賽和團課的差別只有兩個欄位：類型，和結束方式（競賽用「跑完課表即結束」才排得出名次）。
+    mode: document.getElementById("c-mode").value,
     coach_id: document.getElementById("c-coach").value.trim() || null,
     finish_policy: finishPolicy(),
   });
@@ -577,6 +589,7 @@ async function refreshSession() {
   live.classList.remove("hidden");
   document.getElementById("c-status").textContent = I18N.t("st." + SESSION.session.status);
   document.getElementById("c-elapsed").textContent = clock(SESSION.class_elapsed_ms);
+  document.getElementById("c-rule").textContent = ruleLine(SESSION);
 
   const steps = document.getElementById("c-steps");
   steps.innerHTML = "";
@@ -592,6 +605,19 @@ async function refreshSession() {
     li.querySelector("input").onchange = (e) => guard(() => retarget(i, +e.target.value));
     steps.appendChild(li);
   });
+}
+
+/// 今天這堂課的規則，用人話寫一行：類型 · 結束方式（含時間上限）。
+/// 這兩件事決定成績怎麼算 —— 競賽用「跑完課表即結束」才排得出名次，團課時間到就下課、
+/// 名次留白。教練必須在畫面上看得到，不能只存在 API 回應裡。
+function ruleLine(session) {
+  const policy = session.config.finish_policy || {};
+  const mode = I18N.t("mode." + session.session.mode);
+  let ends = I18N.t("finish." + policy.kind);
+  if (policy.kind === "CLASS_DURATION" && policy.limit) {
+    ends += " (" + Math.round(policy.limit / 60000) + " " + I18N.t("class.minutes") + ")";
+  }
+  return policy.kind ? mode + " · " + ends : mode;
 }
 
 // A session-only change: it rewrites this class's snapshot and never the workout it came
@@ -653,7 +679,12 @@ guard(async () => {
   TEMPLATES = tpl.templates;
   showFreshness(tpl.freshness);
   renderList();
-  show("list");
+  // 深連結：?view=list|builder|class，?template=<id> 直接開該課表的編輯器。
+  // 螢幕截圖與投影機書籤都需要能指到特定頁面，而不是永遠從清單開始。
+  const q = new URLSearchParams(location.search);
+  const wanted = TEMPLATES.find((t) => t.id === q.get("template"));
+  if (wanted) openBuilder(wanted);
+  else show(["list", "builder", "class"].includes(q.get("view")) ? q.get("view") : "list");
   setInterval(() => guard(async () => {
     const s = await api("GET", "/api/session");
     showFreshness(s.freshness);

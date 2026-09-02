@@ -6,11 +6,11 @@ use contract::{DeviceId, EdgeEvent, EventId, ReaderId, ReceivedEvent, WireError}
 
 /// The exact payload documented in CLAUDE.md 16.
 const CANONICAL: &str = r#"{
-  "device_id": "esp32-a4cf128b3d91",
+  "device_id": "a4cf128b3d91",
   "reader_id": "rfid-02",
   "boot_id": 18,
   "sequence": 10382,
-  "tag_id": "E280117000001234",
+  "tag_id": ["E280117000001234"],
   "detected_at": 1787734821382,
   "uptime_ms": 382912
 }"#;
@@ -22,11 +22,11 @@ fn canonical_event() -> EdgeEvent {
 #[test]
 fn decodes_the_documented_payload() {
     let e = canonical_event();
-    assert_eq!(e.device_id.as_str(), "esp32-a4cf128b3d91");
+    assert_eq!(e.device_id.as_str(), "a4cf128b3d91");
     assert_eq!(e.reader_id.as_str(), "rfid-02");
     assert_eq!(e.boot_id, 18);
     assert_eq!(e.sequence, 10382);
-    assert_eq!(e.tag_id, "E280117000001234");
+    assert_eq!(e.tag_id, ["E280117000001234"]);
     assert_eq!(e.detected_at, 1_787_734_821_382);
     assert_eq!(e.uptime_ms, 382_912);
 }
@@ -51,7 +51,7 @@ fn encodes_exactly_the_documented_field_set() {
             "uptime_ms"
         ]
     );
-    assert_eq!(obj["device_id"], "esp32-a4cf128b3d91");
+    assert_eq!(obj["device_id"], "a4cf128b3d91");
     assert_eq!(obj["boot_id"], 18);
 }
 
@@ -63,8 +63,8 @@ fn round_trips_through_json() {
 
 #[test]
 fn rejects_a_payload_missing_a_required_field() {
-    let bad = r#"{"device_id":"esp32-a4cf128b3d91","reader_id":"rfid-02","boot_id":1,
-                  "sequence":1,"tag_id":"E2","detected_at":1}"#;
+    let bad = r#"{"device_id":"a4cf128b3d91","reader_id":"rfid-02","boot_id":1,
+                  "sequence":1,"tag_id":["E2"],"detected_at":1}"#;
     assert!(matches!(
         EdgeEvent::decode(bad.as_bytes()),
         Err(WireError::Malformed(_))
@@ -88,11 +88,48 @@ fn rejects_counters_that_cannot_come_from_a_real_device() {
 
 #[test]
 fn rejects_an_empty_tag_id() {
+    for empty in [serde_json::json!([""]), serde_json::json!(["E2", "  "])] {
+        let mut v: serde_json::Value = serde_json::from_str(CANONICAL).unwrap();
+        v["tag_id"] = empty;
+        assert!(matches!(
+            EdgeEvent::decode(v.to_string().as_bytes()),
+            Err(WireError::EmptyField("tag_id"))
+        ));
+    }
+}
+
+#[test]
+fn a_round_carries_every_tag_the_reader_saw() {
+    // UHF anti-collision reports several tags from one inventory round (ADR 0014). They
+    // travel in one message, under one idempotency key, released by one ACK.
     let mut v: serde_json::Value = serde_json::from_str(CANONICAL).unwrap();
-    v["tag_id"] = serde_json::json!("");
+    v["tag_id"] = serde_json::json!(["E280117000001234", "E280117000005678"]);
+    let e = EdgeEvent::decode(v.to_string().as_bytes()).unwrap();
+    assert_eq!(e.tag_id, ["E280117000001234", "E280117000005678"]);
+    assert_eq!(EventId::of(&e).sequence(), 10382, "the round has one sequence, not one per tag");
+}
+
+#[test]
+fn rejects_a_round_with_no_tags_in_it() {
+    // An inventory round that saw nothing is not an event. Letting it through would burn a
+    // sequence number and store a read of nobody.
+    let mut v: serde_json::Value = serde_json::from_str(CANONICAL).unwrap();
+    v["tag_id"] = serde_json::json!([]);
     assert!(matches!(
         EdgeEvent::decode(v.to_string().as_bytes()),
         Err(WireError::EmptyField("tag_id"))
+    ));
+}
+
+#[test]
+fn rejects_a_bare_string_tag_id() {
+    // The single-tag spelling is gone, not silently accepted: firmware that still sends it
+    // must fail loudly at integration rather than quietly at the venue (CLAUDE.md 30).
+    let mut v: serde_json::Value = serde_json::from_str(CANONICAL).unwrap();
+    v["tag_id"] = serde_json::json!("E280117000001234");
+    assert!(matches!(
+        EdgeEvent::decode(v.to_string().as_bytes()),
+        Err(WireError::Malformed(_))
     ));
 }
 
@@ -103,7 +140,7 @@ fn device_id_is_derived_from_the_base_mac() {
     for mac in ["A4:CF:12:8B:3D:91", "a4-cf-12-8b-3d-91", "a4cf128b3d91"] {
         assert_eq!(
             DeviceId::from_mac_str(mac).unwrap().as_str(),
-            "esp32-a4cf128b3d91",
+            "a4cf128b3d91",
             "{mac} must normalise to the canonical device id"
         );
     }
@@ -137,10 +174,10 @@ fn reader_id_is_case_insensitive() {
 fn the_key_is_device_plus_boot_plus_sequence() {
     let e = canonical_event();
     let key = EventId::of(&e);
-    assert_eq!(key.device_id().as_str(), "esp32-a4cf128b3d91");
+    assert_eq!(key.device_id().as_str(), "a4cf128b3d91");
     assert_eq!(key.boot_id(), 18);
     assert_eq!(key.sequence(), 10382);
-    assert_eq!(key.to_string(), "esp32-a4cf128b3d91/18/10382");
+    assert_eq!(key.to_string(), "a4cf128b3d91/18/10382");
 }
 
 #[test]

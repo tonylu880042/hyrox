@@ -3,6 +3,7 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>HYROX</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/app.css">
 <script src="/i18n.js"></script>
@@ -20,6 +21,7 @@
     <span class="text-lg" data-i18n="result.title"></span>
     <span id="session" class="text-lg text-on-surface-variant"></span>
     <div class="ml-auto flex items-center gap-3 text-xs text-on-surface-variant">
+      <span class="text-xs tracking-widest text-on-surface-variant">uCareMedi.com</span>
       <span id="lang" class="flex gap-1"></span>
       <a href="/leaderboard" class="underline" data-i18n="board.title"></a>
     </div>
@@ -66,12 +68,12 @@ function card(row) {
     <summary class="flex flex-wrap items-baseline gap-3 px-4 py-3 cursor-pointer">
       <span class="display text-3xl text-primary w-10">${row.place ?? ""}</span>
       <span class="num text-on-surface-variant w-10 text-right">${row.bib}</span>
-      <span class="text-2xl flex-1 min-w-[8rem]">${esc(row.name)}</span>
+      <span class="text-2xl flex-1" style="min-width:8rem">${esc(row.name)}</span>
       <span class="text-sm text-on-surface-variant">${row.stations_completed} ${esc(I18N.t("board.stations"))}</span>
       <span class="num text-2xl">${row.finished_at == null ? esc(I18N.t("result.dnf")) : clock(row.elapsed_ms, true)}</span>
     </summary>
     <div class="px-4 pb-4 overflow-x-auto">
-      <table class="w-full text-sm min-w-[24rem]">
+      <table class="w-full text-sm" style="min-width:24rem">
         <thead class="text-on-surface-variant uppercase text-xs">
           <tr>
             <th class="px-3 py-2 text-left">#</th>

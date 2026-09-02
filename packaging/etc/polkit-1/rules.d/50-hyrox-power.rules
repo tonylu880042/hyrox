@@ -1,0 +1,33 @@
+// The hub's power buttons (M6). Three actions for one user, nothing else.
+//
+// Not sudo: the hub's unit sets NoNewPrivileges=yes, which exists precisely to stop a
+// service escalating through a setuid binary, and weakening that for the whole service to
+// win three buttons is a bad trade. Unprivileged `systemctl poweroff` does not escalate at
+// all -- it is a D-Bus call to logind, and this rule is what logind consults.
+//
+// Whether the *moment* is right is decided above this, in the API: a class on the floor
+// refuses a poweroff (ADR 0001 D1 makes the network the boundary, so that guard is the
+// only thing standing between a stray tap and a dark venue). This file only says what is
+// technically possible.
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "hyrox") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    // Closing time, and after an update.
+    if (action.id === "org.freedesktop.login1.power-off" ||
+        action.id === "org.freedesktop.login1.reboot" ||
+        action.id === "org.freedesktop.login1.power-off-multiple-sessions" ||
+        action.id === "org.freedesktop.login1.reboot-multiple-sessions") {
+        return polkit.Result.YES;
+    }
+
+    // Restarting the hub's own service, and nothing else's: this is how a wedged screen is
+    // fixed without walking to the machine, and it must not become a way to stop Mosquitto.
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "hyrox-hub.service") {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

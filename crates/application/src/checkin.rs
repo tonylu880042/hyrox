@@ -7,7 +7,7 @@ use crate::ingest::attribute_read;
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
 use crate::ports::{AuditEntry, HubStore};
-use domain::{AthleteState, Instant, Interpreted, MemberRef, TagId};
+use domain::{AthleteState, EntryCode, Instant, Interpreted, MemberRef, TagId};
 
 /// Somebody to put on the roster (ADR 0010).
 ///
@@ -79,12 +79,14 @@ pub async fn enter<S: HubStore>(
         None => (1..).find(|n| !state.bibs().any(|b| b == *n)).expect("a free bib exists"),
     };
 
-    // A member keeps one identity across every class; a walk-in gets one scoped to this
-    // session, which is the only place they exist.
-    let athlete_id = entrant
-        .member_id
-        .clone()
-        .unwrap_or_else(|| format!("w-{}-{}", state.session.id, bib));
+    // A member keeps one identity across every class. A walk-in is issued an entry code:
+    // six characters that are their athlete id, the number on the QR they carry, and the
+    // number they type afterwards to find their result (ADR 0011). One value for all three,
+    // so nothing can drift out of step.
+    let athlete_id = match entrant.member_id.clone() {
+        Some(member_id) => member_id,
+        None => free_entry_code(state).to_string(),
+    };
 
     store
         .save_athlete(&state.session.id, &athlete_id, name, bib, entrant.member_id.as_deref())
@@ -109,6 +111,28 @@ pub async fn enter<S: HubStore>(
         .await
         .map_err(OperatorError::Storage)?;
     Ok(athlete_id)
+}
+
+/// A code nobody on this roster is already using.
+///
+/// The randomness is `RandomState`, which the standard library seeds from the OS. No crate
+/// is needed for it, and the domain stays pure: it only knows how to turn a number into six
+/// characters (CLAUDE.md 29).
+///
+/// Six characters out of a 32-character alphabet is a billion codes; the retry is here for
+/// correctness rather than because a collision is expected, and it gives up rather than
+/// looping forever on a session that somehow holds them all.
+fn free_entry_code(state: &LiveSession) -> EntryCode {
+    use std::hash::{BuildHasher, Hasher, RandomState};
+    for _ in 0..64 {
+        let code = EntryCode::encode(RandomState::new().build_hasher().finish());
+        if state.athlete(code.as_str()).is_none() {
+            return code;
+        }
+    }
+    // Every attempt collided, which means the roster is impossibly large or the OS entropy
+    // is stuck. Falling back to the bib keeps the door open instead of refusing an entrant.
+    EntryCode::encode(state.athletes.len() as u64)
 }
 
 /// Binds a tag to an athlete, clears it from the pending list, and claims the reads that

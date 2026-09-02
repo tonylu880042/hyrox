@@ -46,6 +46,8 @@ head = re.sub(r'<link[^>]+fonts\.google[^>]+>', '', head)
 head = re.sub(r'<link[^>]+fonts\.gstatic[^>]+>', '', head)
 head = re.sub(r'<script id="tailwind-config">.*?</script>', '', head, flags=re.S)
 head += '<link rel="stylesheet" href="/fonts.css"><link rel="stylesheet" href="/app.css">'
+# The tab icon, so a wall of open screens is identifiable at a glance.
+head += '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
 head += '<script src="/i18n.js"></script>'
 
 head = head.replace("<title>HYROX Live Leaderboard</title>", "<title>HYROX Training Class</title>")
@@ -54,8 +56,22 @@ head = head.replace("""        /* Rows share the leftover height evenly so nothi
             flex: 1 1 0;
             min-height: 0;
         }""",
-"""        .class-grid { display: grid; grid-template-columns: repeat(4, 1fr);
-            grid-template-rows: repeat(3, 1fr); gap: 12px; min-height: 0; }
+"""        /* The projector's own size. Every type size here was chosen for a 30-foot
+           room, so on a smaller screen the picture is scaled rather than reflowed: a laptop
+           shows the same screen, smaller, instead of a cropped one. At 2560x1440 the scale
+           is exactly 1, so nothing about the venue's projector changes. */
+        html { background: #0A0A0A; overflow: hidden; }
+        body { width: 2560px; height: 1440px; transform-origin: top left; }
+        /* minmax(0, 1fr), not 1fr: a grid track's min-width defaults to auto, so one long
+           name pushes the whole row wider than the screen instead of being clipped by its
+           own card. That was the overflow. */
+        .class-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 12px; min-height: 0; }
+        /* A belt for the braces: if more cards than a page ever reach this grid, the extra
+           rows take a real height instead of squeezing the explicit rows to zero and
+           stacking every card on top of the others -- which is what a 30-person class used
+           to do. Pagination is the fix; this is what stops it being invisible if it breaks. */
+        .class-grid { grid-auto-rows: minmax(120px, 1fr); }
         .athlete-card {
             position: relative; overflow: hidden;
             background-color: #131314; border: 1px solid #343535; border-left: 6px solid #FEE400;
@@ -95,16 +111,24 @@ body = r"""
 <body class="flex flex-col font-label-sm text-on-surface">
 <header class="relative w-full shrink-0 flex justify-between items-center px-margin-edge bg-surface border-b border-outline-variant h-[100px]">
 <div class="flex items-center gap-6">
-<h1 class="font-headline-md text-headline-md text-primary-fixed uppercase tracking-tighter" data-i18n="live.hub">CENTRAL HUB</h1>
+<!-- The venue's own mark leads: this wall belongs to the gym, and the system that drives
+     it is the supplier's credit in the footer. Hidden until one is uploaded, so a venue
+     without a logo gets no empty box. -->
+<!-- Inline style, not utility classes: app.css is a captured Tailwind build, so an
+     arbitrary class like h-[48px] simply does not exist in it and silently does nothing.
+     Learned by watching a 600px logo eat the header. -->
+<img id="venue-logo" class="hidden" alt=""
+     style="height:52px;max-width:260px;object-fit:contain;flex-shrink:0;margin-right:20px"/>
+<h1 class="font-headline-md text-headline-md text-primary-fixed uppercase tracking-tight whitespace-nowrap" data-i18n="live.hub">HYROX TRAINING &amp; COMPETITION SYSTEM</h1>
 <div class="h-6 w-gutter bg-outline-variant"></div>
 <div class="flex items-center gap-4">
-<span id="session-name" class="font-label-sm text-label-sm text-primary uppercase font-bold">&nbsp;</span>
+<span id="session-name" class="font-label-sm text-label-sm text-primary uppercase font-bold whitespace-nowrap">&nbsp;</span>
 <span id="mode-badge" class="px-3 py-1 bg-primary-fixed text-on-primary text-xs uppercase tracking-widest font-bold">&nbsp;</span>
 </div>
 </div>
-<div class="flex items-center gap-8">
+<div class="flex items-center gap-8 whitespace-nowrap">
 <div class="flex items-center gap-2">
-<span id="live-dot" class="w-3 h-3 rounded-full bg-[#6B6B6B]"></span>
+<span id="live-dot" class="w-3 h-3 rounded-full" style="background-color:#6B6B6B"></span>
 <span id="live-label" class="font-label-sm text-label-sm text-primary uppercase font-bold" data-i18n="live.connecting">CONNECTING</span>
 </div>
 <div class="h-6 w-gutter bg-outline-variant"></div>
@@ -116,6 +140,9 @@ body = r"""
 <span class="station-label" style="margin:0;" data-i18n="live.classElapsed">CLASS ELAPSED</span>
 <span id="class-elapsed" class="font-telemetry-data text-[32px] font-bold text-primary tabular-nums tracking-tighter">--:--</span>
 </div>
+<div class="flex items-center gap-3 text-on-surface-variant">
+<span id="page-indicator" class="hidden font-telemetry-data text-[32px] font-bold tabular-nums tracking-tighter px-3 py-1 border border-outline-variant">1 / 1</span>
+</div>
 </div>
 </header>
 <main id="grid" class="w-full flex-grow min-h-0 overflow-hidden px-margin-edge py-[16px] class-grid bg-background"></main>
@@ -124,6 +151,9 @@ body = r"""
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">flag</span> <span data-i18n="live.finished">FINISHED</span> <span id="f-done">--</span></span>
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">route</span> <span data-i18n="live.course">COURSE</span> <span id="f-course">--</span> <span data-i18n="live.stations">STATIONS</span></span>
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">report</span> <span data-i18n="live.exceptions">EXCEPTIONS</span> <span id="f-exc">--</span></span>
+<!-- Whose system this is. Right-hand end of the footer, in the muted colour: a projector
+     screen belongs to the class on it, not to us, so the mark is present and quiet. -->
+<span class="ml-auto font-label-sm text-label-sm tracking-widest text-on-surface-variant">uCareMedi.com</span>
 </footer>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -219,7 +249,7 @@ function card(a, course) {
       ? I18N.t("live.movingTo", stationName(a.next_station))
       : I18N.t("live.moving");
     sub = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;">
-      <span class="font-telemetry-data text-[46px] font-bold tabular-nums" style="color:#7DF4FF;">${clock(a.leg_ms, true)}</span>
+      <span class="font-telemetry-data font-bold tabular-nums" style="font-size:46px;color:#7DF4FF;">${clock(a.leg_ms, true)}</span>
       <span class="station-label" style="margin:0;"><span class="material-symbols-outlined" style="font-size:22px;vertical-align:-4px;">east</span> ${next}</span></div>`;
   } else {
     glyph = `<span class="station-icon pg pg-${a.station_key}" style="color:#FFFFFF;"></span>`;
@@ -227,7 +257,7 @@ function card(a, course) {
     // Station split is what the hub can actually derive from entry/exit reads.
     // Work done inside the station is equipment telemetry the hub never sees.
     sub = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;">
-      <span class="font-telemetry-data text-[46px] font-bold tabular-nums text-primary">${clock(a.leg_ms, true)}</span>
+      <span class="font-telemetry-data font-bold tabular-nums text-primary" style="font-size:46px;">${clock(a.leg_ms, true)}</span>
       <span class="station-label" style="margin:0;">${planLabel(a.plan)}</span></div>`;
   }
 
@@ -285,10 +315,102 @@ function render(s) {
     $("fresh-text").textContent = I18N.t("freshness.ago", `${Math.floor(age / 1000)}s`);
   }
 
-  $("grid").innerHTML = s.course.length
-    ? s.athletes.map((a) => card(a, s.course)).join("")
-    : "";
+  SNAPSHOT = s;
+  renderPage();
 }
+
+/// The grid holds one page. More athletes than that and the screen rotates rather than
+/// shrinking the cards: this is read from across a gym, and a card small enough to fit
+/// thirty people is a card nobody can read (M6 follow-up, decided with the user).
+///
+/// Order is the roster's own, never "most interesting first": a projector that reorders
+/// itself makes an athlete's card move while their coach is looking at it.
+let PAGE_SIZE = 12;
+let LAYOUT = { columns: 4, rows: 3 };
+/// How long a page is held. The venue sets it on /settings -- a long thin gym reads slower
+/// than a studio -- and this is only the value used until that answer arrives.
+let PAGE_MS = 10000;
+let SNAPSHOT = null;
+let PAGE = 0;
+
+function pages() {
+  if (!SNAPSHOT || !SNAPSHOT.athletes.length) return 1;
+  return Math.max(1, Math.ceil(SNAPSHOT.athletes.length / PAGE_SIZE));
+}
+
+function renderPage() {
+  const s = SNAPSHOT;
+  if (!s) return;
+  // Clamped rather than wrapped: people leaving the roster must not silently skip a page.
+  if (PAGE >= pages()) PAGE = 0;
+  const from = PAGE * PAGE_SIZE;
+  const shown = s.athletes.slice(from, from + PAGE_SIZE);
+  $("grid").innerHTML = s.course.length ? shown.map((a) => card(a, s.course)).join("") : "";
+
+  // The indicator is only drawn when there is something to page through. "1 / 1" on a
+  // twelve-person class is noise that makes an operator wonder what they are missing.
+  const label = $("page-indicator");
+  if (pages() > 1) {
+    label.textContent = `${PAGE + 1} / ${pages()}`;
+    label.classList.remove("hidden");
+  } else {
+    label.classList.add("hidden");
+  }
+}
+
+/// The rotation runs on its own timer rather than inside the snapshot loop: snapshots
+/// arrive four times a second, and a page that turned on data arriving would flicker.
+let pageTimer = setInterval(turnPage, PAGE_MS);
+
+function turnPage() {
+  if (pages() > 1) {
+    PAGE = (PAGE + 1) % pages();
+    renderPage();
+  }
+}
+
+/// Re-read the venue's setting periodically, so changing it on a tablet reaches the
+/// projector without anybody walking over to reload the screen.
+async function loadSettings() {
+  try {
+    const settings = await (await fetch("/api/settings")).json();
+    if (settings.live_page_ms && settings.live_page_ms !== PAGE_MS) {
+      PAGE_MS = settings.live_page_ms;
+      clearInterval(pageTimer);
+      pageTimer = setInterval(turnPage, PAGE_MS);
+    }
+    // The grid's shape comes from the same list the picker offers, so the projector can
+    // never be asked for a layout nobody chose the card proportions for.
+    const chosen = (settings.page_layouts || []).find((l) => l.size === settings.live_page_size);
+    if (chosen && chosen.size !== PAGE_SIZE) {
+      PAGE_SIZE = chosen.size;
+      LAYOUT = chosen;
+      const grid = $("grid");
+      grid.style.gridTemplateColumns = `repeat(${chosen.columns}, minmax(0, 1fr))`;
+      grid.style.gridTemplateRows = `repeat(${chosen.rows}, minmax(0, 1fr))`;
+      PAGE = 0;
+      renderPage();
+    }
+  } catch (e) {
+    // The screen keeps rotating on the value it already has. A settings read that fails is
+    // not a reason to stop showing the class.
+  }
+}
+loadSettings();
+setInterval(loadSettings, 30000);
+
+/// The venue's logo, if there is one. A 404 is an answer, not a failure: the header simply
+/// leads with the system name instead. Re-checked with the settings, so uploading one on a
+/// tablet reaches the projector without anybody reloading it.
+function loadLogo() {
+  const img = $("venue-logo");
+  const probe = new Image();
+  probe.onload = () => { img.src = probe.src; img.classList.remove("hidden"); };
+  probe.onerror = () => img.classList.add("hidden");
+  probe.src = "/api/logo?t=" + Date.now();
+}
+loadLogo();
+setInterval(loadLogo, 30000);
 
 function setLink(up) {
   $("live-dot").style.backgroundColor = up ? "#22DD66" : "#FF4A4A";
@@ -313,6 +435,21 @@ function connect() {
 // Labels first, then the socket: the screen must never flash English before it settles.
 // There is no language switcher here on purpose -- a projector is not an interactive screen.
 // Pin it with /live?lang=zh-Hans, which is remembered on that machine afterwards.
+// Fit the projector's fixed canvas into whatever is actually showing it. Five lines rather
+// than a responsive rewrite: this screen is one composition sized for a room, and scaling
+// keeps every proportion it depends on -- including the pictogram masks, which are sliced
+// at a fixed size and would misregister if the type reflowed.
+function fitScreen() {
+  const scale = Math.min(innerWidth / 2560, innerHeight / 1440);
+  // Centred both ways: a window that is not 16:9 gets even bars rather than one fat one
+  // at the bottom, which reads as a broken layout rather than a deliberate fit.
+  const left = Math.max(0, (innerWidth - 2560 * scale) / 2);
+  const top = Math.max(0, (innerHeight - 1440 * scale) / 2);
+  document.body.style.transform = `translate(${left}px, ${top}px) scale(${scale})`;
+}
+addEventListener("resize", fitScreen);
+fitScreen();
+
 I18N.apply();
 loadStationNames();
 connect();

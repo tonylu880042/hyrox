@@ -27,7 +27,7 @@ fn rid(id: &str) -> ReaderId {
 #[test]
 fn the_device_id_comes_from_the_configured_mac() {
     let d = two_reader_device();
-    assert_eq!(d.device_id().as_str(), "esp32-a4cf128b3d91");
+    assert_eq!(d.device_id().as_str(), "a4cf128b3d91");
 
     let other = SimDevice::boot(
         DeviceConfig::new("a4:cf:12:8b:3d:92").unwrap().with_reader(reader("rfid-01", 4_000)),
@@ -72,8 +72,8 @@ fn several_tags_can_be_in_front_of_one_reader() {
     d.rf_read(&rid("rfid-01"), TAG_B, T0 + 200).unwrap();
     assert_eq!(d.pending_count(), 2);
 
-    let tags: Vec<String> = d.pending().iter().map(|e| e.tag_id.clone()).collect();
-    assert_eq!(tags, [TAG_A, TAG_B]);
+    let tags: Vec<Vec<String>> = d.pending().iter().map(|e| e.tag_id.clone()).collect();
+    assert_eq!(tags, [[TAG_A], [TAG_B]]);
 }
 
 #[test]
@@ -200,4 +200,66 @@ fn a_full_journal_reports_an_error_and_warns_over_mqtt() {
     assert_eq!(status.warning, Some(DeviceWarning::JournalFull));
     assert_eq!(status.pending_events, 2);
     assert_eq!(status.device_id, *d.device_id());
+}
+
+const TAG_C: &str = "E28011700000ABCD";
+
+#[test]
+fn a_uhf_inventory_round_travels_as_one_event(){
+    // UHF anti-collision returns several tags from a single round. They travel in one
+    // message under one sequence, released by one ACK (ADR 0014): the round is what the
+    // idempotency key addresses.
+    let mut d = two_reader_device();
+    assert!(matches!(
+        d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B, TAG_C], T0),
+        Ok(RfOutcome::Emitted(_))
+    ));
+
+    let events = d.pending();
+    assert_eq!(events.len(), 1, "one round, one event");
+    assert_eq!(events[0].tag_id, [TAG_A, TAG_B, TAG_C]);
+    assert_eq!(events[0].sequence, 1, "one sequence for the round, not one per tag");
+    assert_eq!(events[0].detected_at, T0);
+}
+
+#[test]
+fn presence_is_per_tag_so_one_tag_leaving_a_crowd_re_arms_alone() {
+    // The failure this pins: presence kept per reader instead of per tag would let a
+    // still-present crowd hold a departed tag's suppression open for ever.
+    let mut d = two_reader_device();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0).unwrap();
+
+    // Round after round with both still in the field: nothing new to publish.
+    for step in 1..=10 {
+        assert!(matches!(
+            d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + step * 200),
+            Ok(RfOutcome::Suppressed)
+        ));
+    }
+    assert_eq!(d.pending_count(), 1);
+
+    // TAG_B walks away; TAG_A stays in every round, so it must never re-arm.
+    for step in 11..=40 {
+        d.rf_inventory(&rid("rfid-01"), &[TAG_A], T0 + step * 200).unwrap();
+    }
+    assert_eq!(d.pending_count(), 1);
+
+    // TAG_B comes back after more than absent_timeout away. A second event, carrying only
+    // the tag that was actually a new sighting -- TAG_A never left, so it is not in it.
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + 41 * 200).unwrap();
+    let events = d.pending();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].tag_id, [TAG_B]);
+}
+
+#[test]
+fn a_round_where_every_tag_is_suppressed_consumes_no_sequence_number() {
+    let mut d = two_reader_device();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0).unwrap();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + 100).unwrap();
+    // A gap in the sequence would look like a lost event to anyone auditing the log.
+    d.rf_read(&rid("rfid-01"), TAG_C, T0 + 200).unwrap();
+
+    let seqs: Vec<i64> = d.pending().iter().map(|e| e.sequence).collect();
+    assert_eq!(seqs, [1, 2]);
 }

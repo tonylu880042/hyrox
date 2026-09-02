@@ -91,6 +91,16 @@ pub struct StoredException {
     pub raw_event_id: Option<i64>,
 }
 
+/// A `(device_id, reader_id)` the hub has heard from, whether or not it is configured.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeenReader {
+    pub device_id: String,
+    pub reader_id: String,
+    /// Official timing, as everywhere else: when the reader saw a tag (CLAUDE.md 17).
+    pub last_seen: Instant,
+    pub reads: i64,
+}
+
 /// An audit record for anything an operator changed (CLAUDE.md 20; ADR 0001 D1).
 ///
 /// `operator` is the device name, not a person: there is no login, and D1 accepted that
@@ -219,6 +229,17 @@ pub trait HubStore {
         since: Instant,
     ) -> impl Future<Output = Result<Vec<String>, Self::Error>> + Send;
 
+    /// Every `(device_id, reader_id)` the hub has ever heard from, with when it was last
+    /// heard and how many reads it has produced.
+    ///
+    /// This is what makes installing a venue possible without anyone copying a MAC address
+    /// off a sticker: tap the antenna, and the reader that just appeared is the one to
+    /// assign. Derived from `raw_events` rather than remembered, because a read the hub
+    /// could not attribute is still stored (CLAUDE.md 31).
+    fn reader_keys_seen(
+        &self,
+    ) -> impl Future<Output = Result<Vec<SeenReader>, Self::Error>> + Send;
+
     /// Stored reads of one tag that no interpretation points at yet, oldest first
     /// (ADR 0001 D3, retroactive claim).
     ///
@@ -284,6 +305,60 @@ pub trait HubStore {
         operator: &str,
         reason: &str,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Copy the whole database to `path`, while the hub keeps running (ADR 0012).
+    ///
+    /// A port rather than a detail of the SQLite adapter, because the operator surface is
+    /// what decides *when* a backup is taken -- the nightly window asks the hub, and the
+    /// hub is the only process allowed to touch the file (ADR 0009). The implementation
+    /// must produce a consistent snapshot without anyone copying `-wal` by hand.
+    fn backup_to(
+        &self,
+        path: &std::path::Path,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Removes one reader's mapping. The reads it already produced are untouched: they
+    /// live in `raw_events`, which is immutable (CLAUDE.md 19).
+    fn delete_reader(
+        &self,
+        device_id: &str,
+        reader_id: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Every venue setting that has been chosen, as raw key/value pairs (M6 follow-up).
+    /// Parsing and defaulting belong above this: a store returns what is stored.
+    fn venue_settings(
+        &self,
+    ) -> impl Future<Output = Result<Vec<(String, String)>, Self::Error>> + Send;
+
+    /// Stores one, replacing any previous value for the same key.
+    fn save_venue_setting(
+        &self,
+        key: &str,
+        value: &str,
+        at: Instant,
+        by: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// One of the venue's images, or `None` if nobody uploaded it (M6 follow-up).
+    fn venue_asset(
+        &self,
+        key: &str,
+    ) -> impl Future<Output = Result<Option<crate::assets::VenueAsset>, Self::Error>> + Send;
+
+    fn save_venue_asset(
+        &self,
+        key: &str,
+        media_type: &str,
+        bytes: &[u8],
+        at: Instant,
+        by: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn delete_venue_asset(
+        &self,
+        key: &str,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     fn record_audit(
         &self,

@@ -407,10 +407,151 @@ pub struct EnteredResponse {
     pub athletes: Vec<CheckInAthlete>,
 }
 
+/// `POST /api/operator/backup` -- take a copy of the database now (ADR 0012).
+#[derive(Debug, Default, Deserialize)]
+pub struct BackupRequest {
+    pub reason: Option<String>,
+}
+
+/// Where the copy went, so the caller can rotate the directory without guessing the naming.
+#[derive(Debug, Serialize)]
+pub struct BackupResponse {
+    pub freshness: Freshness,
+    pub path: String,
+    pub at: i64,
+}
+
+/// `POST` / `DELETE /api/operator/demo` -- a venue's worth of invented data.
+#[derive(Debug, Serialize)]
+pub struct DemoResponse {
+    pub freshness: Freshness,
+    pub loaded: bool,
+}
+
+/// `DELETE /api/operator/readers/{device}/{reader}` -- why this antenna is going away.
+#[derive(Debug, Default, Deserialize)]
+pub struct ReaderRemovalRequest {
+    pub reason: Option<String>,
+}
+
+/// `POST` / `DELETE /api/operator/logo` -- what was stored, so the picker can show it.
+#[derive(Debug, Serialize)]
+pub struct LogoResponse {
+    pub freshness: Freshness,
+    pub media_type: String,
+    pub bytes: usize,
+}
+
+/// `GET /api/settings` / `PUT /api/operator/settings` -- the venue's own numbers.
+#[derive(Debug, Serialize)]
+pub struct SettingsResponse {
+    pub freshness: Freshness,
+    /// How long the live screen holds a page before rotating (M6 follow-up).
+    pub live_page_ms: i64,
+    /// How many athletes fit on one page.
+    pub live_page_size: i64,
+    /// Whether this machine offers demo data at all (M6 follow-up). The settings screen
+    /// draws nothing where it does not, rather than a button that answers 503.
+    pub demo_available: bool,
+    /// The layouts on offer, so the picker and the projector read the same list rather
+    /// than each carrying their own copy of it.
+    pub page_layouts: Vec<PageLayout>,
+}
+
+/// One offered way to split the screen. `size` is `columns * rows`, always.
+#[derive(Debug, Serialize)]
+pub struct PageLayout {
+    pub size: i64,
+    pub columns: i64,
+    pub rows: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SettingsRequest {
+    pub live_page_ms: Option<i64>,
+    pub live_page_size: Option<i64>,
+}
+
+/// `POST /api/operator/power` -- ask the machine to stop, restart, or restart the service.
+#[derive(Debug, Deserialize)]
+pub struct PowerRequest {
+    pub action: crate::state::PowerAction,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PowerResponse {
+    pub freshness: Freshness,
+    pub action: crate::state::PowerAction,
+    pub at: i64,
+}
+
+/// `GET /api/operator/readers/unregistered` -- antennas the hub has heard from and cannot
+/// resolve. The list a venue is installed from (M6).
+#[derive(Debug, Serialize)]
+pub struct UnregisteredReadersResponse {
+    pub freshness: Freshness,
+    pub readers: Vec<UnregisteredReader>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnregisteredReader {
+    pub device_id: String,
+    pub reader_id: String,
+    /// When it last saw a tag -- official timing, like everywhere else (CLAUDE.md 17).
+    pub last_seen: i64,
+    pub reads: i64,
+}
+
+/// `POST /api/checkin/signup` -- a name typed by the person it belongs to (ADR 0011).
+///
+/// One field. A bib or a member id here would be a claim nobody checked.
+#[derive(Debug, Deserialize)]
+pub struct SignupRequest {
+    pub display_name: String,
+}
+
+/// What the entrant is handed back: their code, their number, and their own name to check.
+#[derive(Debug, Serialize)]
+pub struct SignupResponse {
+    pub freshness: Freshness,
+    pub code: String,
+    pub display_name: String,
+    pub bib: Option<usize>,
+}
+
+/// `GET /api/entry/{code}` -- what one entrant sees about themselves on their own phone
+/// (ADR 0011): their row, and enough of the class around it to read the row honestly.
+///
+/// Deliberately not the whole leaderboard: this is the one surface an entrant opens, and
+/// handing every athlete's splits to anyone holding one code would publish the field.
+#[derive(Debug, Serialize)]
+pub struct EntryResponse {
+    pub freshness: Freshness,
+    pub code: String,
+    pub session_name: String,
+    pub session_status: String,
+    /// Whether the class is ranked at all, so a blank place reads as "this class has no
+    /// places" rather than "you came nowhere" (ADR 0010).
+    pub ordering: application::Ordering,
+    /// How many stations the class has. Without it "3 stations done" has no denominator,
+    /// and the entrant cannot tell a third of the way from nearly finished.
+    pub course_length: usize,
+    pub row: application::ResultRow,
+}
+
 /// `GET /api/leaderboard` -- the running session's results, ranked where the finish rule
 /// allows it (ADR 0010).
 #[derive(Debug, Serialize)]
 pub struct LeaderboardResponse {
     pub freshness: Freshness,
     pub results: SessionResults,
+}
+
+/// The offered layouts, from the one place that defines them.
+pub fn layouts() -> Vec<PageLayout> {
+    application::LIVE_PAGE_LAYOUTS
+        .iter()
+        .map(|(size, columns, rows)| PageLayout { size: *size, columns: *columns, rows: *rows })
+        .collect()
 }

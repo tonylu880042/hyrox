@@ -6,11 +6,12 @@ use domain::{ExceptionReason, Instant, Interpreted, Session, SessionMode};
 use contract::CommitOutcome;
 use storage::Store;
 
+
 const T0: i64 = 1_787_734_800_000;
 
 fn raw(seq: i64) -> RawRead {
     RawRead {
-        device_id: "esp32-a4cf128b3d91".into(),
+        device_id: "a4cf128b3d91".into(),
         reader_id: "rfid-02".into(),
         boot_id: 18,
         sequence: seq,

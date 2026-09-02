@@ -1,0 +1,27 @@
+# Twice a day, roughly twelve hours apart, so at most half a day's classes can be lost
+# (ADR 0012). The nightly window takes a third one immediately before it updates.
+#
+# Midday is a placeholder like every other schedule here -- it belongs to the venue's
+# opening hours. Override without touching this file:
+#
+#     systemctl edit hyrox-backup.timer
+#     # [Timer]
+#     # OnCalendar=
+#     # OnCalendar=*-*-* 06:00:00
+#     # OnCalendar=*-*-* 18:00:00
+#
+# The empty `OnCalendar=` first is required; systemd *adds* schedules otherwise.
+
+[Unit]
+Description=HYROX database backup, twice daily
+
+[Timer]
+OnCalendar=*-*-* 12:00:00
+OnCalendar=*-*-* 21:00:00
+# Unlike the nightly window, catching up on a missed run is safe here: this job copies a
+# file, it does not power the machine off. A venue that opened late still gets its backup.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

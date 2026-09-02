@@ -138,7 +138,76 @@ impl<E: Display> From<OperatorError<E>> for ApiError {
                 "UNKNOWN_EVENT",
                 format!("no interpreted event with id {id}"),
             ),
+            // A class on the floor outranks a button (M6). 409 rather than 403: the request
+            // is legitimate, this is just the wrong moment.
+            OperatorError::UnknownReader { device_id, reader_id } => ApiError::not_found(
+                "UNKNOWN_READER",
+                format!("no reader registered as {device_id} {reader_id}"),
+            ),
+            OperatorError::ClassInProgress => ApiError::new(
+                StatusCode::CONFLICT,
+                "CLASS_RUNNING",
+                "a class is on the floor; end it before switching the machine off",
+            ),
+            // 503, not 500: nothing is broken, this machine simply has no power control.
+            OperatorError::PowerUnavailable(why) => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "POWER_UNAVAILABLE",
+                format!("this hub cannot control the machine's power: {why}"),
+            ),
+            // 503: nothing is broken, this machine simply does not carry demo data.
+            OperatorError::DemoUnavailable => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DEMO_UNAVAILABLE",
+                "this hub does not carry demo data",
+            ),
+            OperatorError::DemoFailed(why) => ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DEMO_FAILED",
+                format!("demo data could not be loaded: {why}"),
+            ),
             OperatorError::Storage(e) => storage(e),
+        }
+    }
+}
+
+/// What the hub will accept as a venue image (M6 follow-up).
+impl<E: Display> From<application::AssetError<E>> for ApiError {
+    fn from(error: application::AssetError<E>) -> Self {
+        match error {
+            application::AssetError::TooLarge(size) => ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "IMAGE_TOO_LARGE",
+                format!(
+                    "{size} bytes; the limit is {}. A logo past that is a photograph by mistake.",
+                    application::MAX_ASSET_BYTES
+                ),
+            ),
+            // 415, not 400: the request was fine, the picture is the problem.
+            application::AssetError::Unsupported(why) => {
+                ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_IMAGE", why)
+            }
+            application::AssetError::Storage(e) => storage(e),
+        }
+    }
+}
+
+/// The venue settings' refusals (M6 follow-up). Same principle: a rule saying no is an
+/// answer, and only a failed store write is a 500.
+impl<E: Display> From<application::SettingError<E>> for ApiError {
+    fn from(error: application::SettingError<E>) -> Self {
+        match error {
+            // 404, not 400: the request was well formed, this build simply has no such
+            // setting. Naming it back makes a typo obvious.
+            application::SettingError::Unknown(key) => {
+                ApiError::not_found("UNKNOWN_SETTING", format!("no venue setting named {key:?}"))
+            }
+            application::SettingError::Invalid { key, message } => ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "INVALID_SETTING",
+                format!("{key}: {message}"),
+            ),
+            application::SettingError::Storage(e) => storage(e),
         }
     }
 }
