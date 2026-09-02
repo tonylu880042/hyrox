@@ -1,0 +1,16 @@
+-- A finish the clock decided, not a reader (CLAUDE.md 12, 13, 21).
+--
+-- Athlete state is rebuilt by replaying interpreted events, which works for every finish a
+-- read produced -- the exit of the course's last station is an event, and replay finds it.
+-- A ClassDuration finish is different: it is derived from the class clock and there is no
+-- event to replay, so a restart used to hand back a class of people still running, with
+-- times that kept growing hours after everyone had gone home.
+--
+-- Stored on the roster row rather than as an interpreted event: writing an event would
+-- invent a read no reader ever reported, and interpreted events are what the audit trail
+-- and the corrections path reason about (CLAUDE.md 19, 20). This is derived data, and
+-- derived data is stored as derived data.
+--
+-- NULL means "not finished by a rule" -- which is every athlete who finished by completing
+-- the course, and every athlete still running.
+ALTER TABLE session_athletes ADD COLUMN finished_at INTEGER;

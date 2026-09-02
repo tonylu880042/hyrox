@@ -70,6 +70,15 @@ impl HubStore for Store {
         Store::athlete_bibs(self, session_id).await
     }
 
+    async fn save_athlete_finish(
+        &self,
+        session_id: &str,
+        athlete_id: &str,
+        finished_at: Option<Instant>,
+    ) -> Result<(), StoreError> {
+        Store::save_athlete_finish(self, session_id, athlete_id, finished_at).await
+    }
+
     async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, StoreError> {
         Store::rebuild_athletes(self, session_id).await
     }

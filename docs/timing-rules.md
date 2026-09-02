@@ -75,17 +75,32 @@ pub enum FinishDecision { Finished, NotFinished, Undetermined }
   因此競賽不可能經由這條路徑被結束。
 - 人工修正（CLAUDE.md 20）。
 
-完成狀態**不寫入 interpreted_events**：它由班級時鐘與既有事件推導，重啟後下一個 tick
-會重新推導出相同結果（CLAUDE.md 21）。寫一筆 FINISHED 等於捏造沒有 reader 觀測到的事件。
-被時間結束時仍在站內的選手，該站保持未關閉——沒有人回報他離站。
+完成狀態**不寫入 interpreted_events**：寫一筆 FINISHED 等於捏造一個沒有 reader 觀測到的
+事件（CLAUDE.md 19）。被時間結束時仍在站內的選手，該站保持未關閉——沒有人回報他離站。
+
+但它**要存**，存在名單列上（`session_athletes.finished_at`，migration 0010，2026-09-02）。
+原本的理由是「重啟後下一個 tick 會重新推導出相同結果」——那句話只在課程還活著時成立。
+課結束以後沒有東西會再 tick 它，於是重播出來的是一班還在跑的人，時間還一直長大：
+`/leaderboard`（問記憶體裡的課）與 `/result/{id}`（從資料庫重建）會給出兩個答案。
+
+**為什麼不是事件而是欄位**：這是推導資料，而推導資料就以推導資料的形式儲存
+（CLAUDE.md 13）。因課表完賽的選手不需要這個欄位——那個完賽點是最後一站的離站事件，
+重播找得到；NULL 的意思是「不是被規則結束的」。
+
+`apply_finish_policy` 與 `end_class` 都會寫；只有真的剛完賽的人會被寫入，
+所以什麼都沒發生的那個 tick 一行也不寫。
 
 **策略本身則必須被儲存**（ADR 0004）。推導的前提是策略不變；若重啟後由啟動端重新提供，
 一堂課就可能以不同於開課時的規則結束。`SessionConfig` 連同課表存為
 `session_configs.config_json`，恢復時以儲存值為準，找不到時回報
 `Recovery::ResumedWithoutStoredConfig` 並警告，不靜默退回。
 
-測試：`crates/storage/tests/recovery.rs::resumed::a_resumed_class_finishes_on_the_limit_it_was_armed_with`
-（以 `ClassDuration` 開課、重啟時呼叫端改提供 `CoachDecides`，仍以原限制結束選手）。
+測試：
+- `crates/storage/tests/recovery.rs::resumed::a_resumed_class_finishes_on_the_limit_it_was_armed_with`
+  （以 `ClassDuration` 開課、重啟時呼叫端改提供 `CoachDecides`，仍以原限制結束選手）
+- `crates/storage/tests/recovery.rs::resumed::a_finish_the_clock_decided_survives_a_restart`
+  （重啟後選手仍是 FINISHED、完賽時刻是規則說的那一刻而不是主機起來的那一刻，
+  且 `results()` 這一列也一致）
 
 測試：
 - `crates/domain/tests/course.rs`：`the_finish_policy_defaults_to_not_configured`、

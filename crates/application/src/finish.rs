@@ -14,13 +14,20 @@ use crate::ports::{AuditEntry, HubStore};
 use crate::session::status_name;
 use domain::{AthleteStatus, FinishDecision, FinishPolicy, Instant};
 
-/// Marks everyone the policy says is finished, and returns their ids.
+/// Marks everyone the policy says is finished, stores it, and returns their ids.
 ///
-/// Deliberately not persisted. Being finished by a class-duration rule is *derived* from
-/// the class clock and the athlete's events, so a restart re-derives it from the replayed
-/// state at the next tick (CLAUDE.md 21). Writing a FINISHED row instead would invent an
-/// event no reader ever reported.
-pub fn apply_finish_policy(state: &mut LiveSession, now: Instant) -> Vec<String> {
+/// The finish is *stored*, on the roster row rather than as an interpreted event
+/// (migration 0010). It was not, once, on the reasoning that a class-duration finish is
+/// derived and gets re-derived after a restart -- which holds only while the class is still
+/// live. Once it is over nothing ticks it again, so the replay handed back a class of people
+/// still running, with times that kept growing. Writing an interpreted event instead would
+/// invent a read no reader ever reported (CLAUDE.md 19); this is derived data, stored as
+/// derived data (CLAUDE.md 13).
+pub async fn apply_finish_policy<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    now: Instant,
+) -> Result<Vec<String>, S::Error> {
     let policy = state.config.finish_policy;
     let course = state.config.course.clone();
     let clock = state.class_clock();
@@ -36,10 +43,15 @@ pub fn apply_finish_policy(state: &mut LiveSession, now: Instant) -> Vec<String>
             policy.evaluate(athlete, clock, now, course.as_ref())
         {
             domain::finish(athlete, at);
-            newly.push(athlete.athlete_id.clone());
+            newly.push((athlete.athlete_id.clone(), at));
         }
     }
-    newly
+
+    // Only for those who just finished: the common tick finishes nobody and writes nothing.
+    for (athlete_id, at) in &newly {
+        store.save_athlete_finish(&state.session.id, athlete_id, Some(*at)).await?;
+    }
+    Ok(newly.into_iter().map(|(id, _)| id).collect())
 }
 
 /// The coach ends the class by hand: everyone still running is finished, and the session
@@ -63,6 +75,14 @@ pub async fn end_class<S: HubStore>(
             domain::finish(athlete, cmd.at);
             finished.push(athlete.athlete_id.clone());
         }
+    }
+    // Same reason as the rule's own finishes: the coach's decision is not a read, so nothing
+    // replays it (migration 0010).
+    for athlete_id in &finished {
+        store
+            .save_athlete_finish(&state.session.id, athlete_id, Some(cmd.at))
+            .await
+            .map_err(OperatorError::Storage)?;
     }
 
     let before = status_name(state.session.status);

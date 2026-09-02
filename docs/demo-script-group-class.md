@@ -224,18 +224,13 @@ python3 design/demo/captions.py group-class --srt > design/demo/captions-group-c
 
 ## 4. 已知問題（展示前必讀）
 
-**不要在這場開 `/result`。** 實測（2026-09-01）：同一堂課、同一時刻，
+**`/result` 可以開了（2026-09-02 修好）。** 原本的缺陷是：同一堂課、同一時刻，
+`/api/leaderboard` 說 `FINISHED`、`/api/result/{id}` 說 `ACTIVE`，重開機之後連
+`/leaderboard` 也退回 `ACTIVE`——「時間到」的完成只活在記憶體裡。
 
-| 端點 | 陳怡君 |
-|---|---|
-| `/api/leaderboard` | `FINISHED`，1093212 ms |
-| `/api/result/{id}` | `ACTIVE`，80000 ms，`finished_at: null` |
-
-而且重開機之後 `/api/leaderboard` 也會變成 `ACTIVE`——「時間到」判定的完成只活在記憶體裡，
-沒有被寫成事件，所以重放看不到它。學員拿到的成績單會顯示他還在跑。
-
-這是真的缺陷，不是展示技巧問題。修法牽涉到「完成要不要記成一筆事件」，
-需要先決定再改（見 [docs/open-issues.md](open-issues.md)）。**在修好之前，成績一律用 `/leaderboard`。**
+現在完成時刻存在 `session_athletes.finished_at`（migration 0010），重建時在重播之後套用，
+兩個端點給同一個答案，重啟也不會把人放回場上。細節見
+[docs/timing-rules.md](timing-rules.md)。
 
 其他還沒做的（跟主劇本共用）：競賽站順序驗證、例外與讀卡機的操作介面、實機出貨驗證、
 健身管 API 合約。見 [demo-script.md §6](demo-script.md)。

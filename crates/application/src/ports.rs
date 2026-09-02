@@ -166,6 +166,18 @@ pub trait HubStore {
         member_id: Option<&str>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
+    /// Records a finish the finish rule decided, rather than a read (migration 0010).
+    ///
+    /// A ClassDuration finish has no event behind it, so replay cannot rebuild it: without
+    /// this the class comes back from a restart still running. `None` writes NULL -- nobody
+    /// was finished by a rule.
+    fn save_athlete_finish(
+        &self,
+        session_id: &str,
+        athlete_id: &str,
+        finished_at: Option<Instant>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
     /// The session to resume after a restart (CLAUDE.md 21).
     fn active_session(&self) -> impl Future<Output = Result<Option<Session>, Self::Error>> + Send;
 

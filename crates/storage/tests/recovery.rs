@@ -271,12 +271,67 @@ mod resumed {
         assert_eq!(resumed.config.course.as_ref(), Some(&course()));
 
         // And the rule is still enforced: nobody finishes before the limit...
-        assert!(apply_finish_policy(&mut resumed, at(LIMIT.millis() - 1)).is_empty());
+        assert!(apply_finish_policy(&mut resumed, &store, at(LIMIT.millis() - 1))
+            .await
+            .unwrap()
+            .is_empty());
         // ...and the athlete who was running finishes on it (CLAUDE.md 12, answered
         // 2026-08-27). Under the caller's CoachDecides nothing would have finished at all.
-        let finished = apply_finish_policy(&mut resumed, at(LIMIT.millis()));
+        let finished =
+            apply_finish_policy(&mut resumed, &store, at(LIMIT.millis())).await.unwrap();
         assert_eq!(finished, ["a1"]);
         assert_eq!(resumed.athlete("a1").unwrap().status, AthleteStatus::Finished);
+    }
+
+    /// A class-duration finish is decided by the clock, not by a read, so replaying the
+    /// events cannot bring it back. Without storing it, a restart un-finishes the whole
+    /// class: the result page shows people still running in a class that ended hours ago,
+    /// and their times keep growing (CLAUDE.md 13, 21).
+    #[tokio::test]
+    async fn a_finish_the_clock_decided_survives_a_restart() {
+        let store = Store::open_in_memory().await.unwrap();
+        let armed = plan(FinishPolicy::ClassDuration { limit: LIMIT }, Some(course()));
+        let (mut state, _) = resume_or_start(&store, armed).await.unwrap();
+        register_reader(
+            &mut state,
+            &store,
+            &skierg_entry(),
+            &OperatorCommand::new("OPERATOR TABLET", at(0)),
+        )
+        .await
+        .unwrap();
+        bind_tag(
+            &mut state,
+            &store,
+            &TagId::parse("TAG-A1").unwrap(),
+            "a1",
+            &OperatorCommand::new("CHECKIN TABLET", at(0)),
+        )
+        .await
+        .unwrap();
+        ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 60_000)).await.unwrap();
+
+        let finished = apply_finish_policy(&mut state, &store, at(LIMIT.millis())).await.unwrap();
+        assert_eq!(finished, ["a1"]);
+        drop(state);
+
+        let (resumed, _) = resume_or_start(&store, plan(FinishPolicy::CoachDecides, None))
+            .await
+            .unwrap();
+
+        let athlete = resumed.athlete("a1").unwrap();
+        assert_eq!(athlete.status, AthleteStatus::Finished, "the restart un-finished them");
+        // The moment the rule said they stopped, not the moment the hub came back up: a
+        // restart must never inflate a result (CLAUDE.md 11, 17).
+        assert_eq!(athlete.finished_at, Some(at(LIMIT.millis())));
+
+        // And the same on the page an athlete actually reads. This is where the defect
+        // showed: /result and /leaderboard disagreed, because one asked the live session and
+        // the other rebuilt from the store.
+        let results = application::results(&store, "s1").await.unwrap().expect("results");
+        let row = results.rows.iter().find(|r| r.athlete_id == "a1").unwrap();
+        assert_eq!(row.status, AthleteStatus::Finished);
+        assert_eq!(row.finished_at, Some(at(LIMIT.millis()).0));
     }
 
     #[tokio::test]

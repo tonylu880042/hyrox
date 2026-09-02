@@ -465,7 +465,11 @@ async fn tick_loop(hub: Hub<Store>) {
         let mut state = hub.lock().await;
 
         // A class ends when its time is up (CLAUDE.md 12, as configured on the session).
-        apply_finish_policy(&mut state, now);
+        // The finish is stored, so it is still there after a restart -- said out loud rather
+        // than swallowed, because a lost finish is a wrong result (migration 0010).
+        if let Err(e) = apply_finish_policy(&mut state, hub.store().as_ref(), now).await {
+            eprintln!("finish rule not stored: {e}");
+        }
 
         let payload =
             serde_json::to_string(&snapshot(&state, now)).expect("snapshot must serialise");

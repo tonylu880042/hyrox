@@ -353,12 +353,34 @@ impl Store {
     /// Rebuilds every athlete in the session by replaying the non-voided interpreted events
     /// in `detected_at` order (CLAUDE.md 21). Voided rows are excluded, which is how an
     /// operator correction reaches the derived values (CLAUDE.md 20).
+    /// Records a finish the finish rule decided (migration 0010).
+    ///
+    /// The column is nullable and `None` writes NULL: not finished by a rule, which is both
+    /// "still running" and "finished by completing the course", since that one replays.
+    pub async fn save_athlete_finish(
+        &self,
+        session_id: &str,
+        athlete_id: &str,
+        finished_at: Option<Instant>,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE session_athletes SET finished_at = ?3
+             WHERE session_id = ?1 AND athlete_id = ?2",
+        )
+        .bind(session_id)
+        .bind(athlete_id)
+        .bind(finished_at.map(|t| t.0))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn rebuild_athletes(
         &self,
         session_id: &str,
     ) -> Result<Vec<AthleteState>, StoreError> {
         let roster = sqlx::query(
-            "SELECT athlete_id, display_name FROM session_athletes
+            "SELECT athlete_id, display_name, finished_at FROM session_athletes
              WHERE session_id = ?1 ORDER BY bib",
         )
         .bind(session_id)
@@ -392,6 +414,16 @@ impl Store {
                 continue; // event for someone no longer on the roster
             };
             domain::apply(state, &row_to_interpreted(r)?);
+        }
+
+        // After the replay, not before: a finish the clock decided comes at the end of the
+        // class, so applying it first would let a later read reopen a closed result.
+        for r in &roster {
+            let Some(ms) = r.get::<Option<i64>, _>("finished_at") else { continue };
+            let aid: String = r.get("athlete_id");
+            if let Some(state) = out.iter_mut().find(|a| a.athlete_id == aid) {
+                domain::finish(state, Instant(ms));
+            }
         }
         Ok(out)
     }

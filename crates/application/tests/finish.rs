@@ -25,9 +25,13 @@ fn class(mode: SessionMode, policy: FinishPolicy) -> LiveSession {
 
 #[tokio::test]
 async fn a_class_ends_when_its_time_is_up() {
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Training, FinishPolicy::ClassDuration { limit: LIMIT });
 
-    let finished = apply_finish_policy(&mut state, Instant(START.0 + LIMIT.millis()));
+    let finished =
+        apply_finish_policy(&mut state, &store, Instant(START.0 + LIMIT.millis()))
+            .await
+            .unwrap();
 
     assert_eq!(finished, vec!["a1".to_string()]);
     assert_eq!(state.athlete("a1").unwrap().status, AthleteStatus::Finished);
@@ -35,9 +39,13 @@ async fn a_class_ends_when_its_time_is_up() {
 
 #[tokio::test]
 async fn before_the_limit_nobody_is_finished() {
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Training, FinishPolicy::ClassDuration { limit: LIMIT });
 
-    let finished = apply_finish_policy(&mut state, Instant(START.0 + LIMIT.millis() - 1));
+    let finished =
+        apply_finish_policy(&mut state, &store, Instant(START.0 + LIMIT.millis() - 1))
+            .await
+            .unwrap();
 
     assert!(finished.is_empty());
     assert_eq!(state.athlete("a1").unwrap().status, AthleteStatus::Active);
@@ -45,9 +53,10 @@ async fn before_the_limit_nobody_is_finished() {
 
 #[tokio::test]
 async fn an_athlete_who_never_scanned_in_does_not_finish() {
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Training, FinishPolicy::ClassDuration { limit: LIMIT });
 
-    apply_finish_policy(&mut state, Instant(START.0 + LIMIT.millis()));
+    apply_finish_policy(&mut state, &store, Instant(START.0 + LIMIT.millis())).await.unwrap();
 
     // The class ended; this one simply did not take part (docs/open-issues.md, 2026-08-27).
     assert_eq!(state.athlete("a2").unwrap().status, AthleteStatus::Ready);
@@ -55,11 +64,12 @@ async fn an_athlete_who_never_scanned_in_does_not_finish() {
 
 #[tokio::test]
 async fn applying_the_policy_twice_finishes_nobody_new() {
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Training, FinishPolicy::ClassDuration { limit: LIMIT });
     let at = Instant(START.0 + LIMIT.millis());
 
-    apply_finish_policy(&mut state, at);
-    let again = apply_finish_policy(&mut state, Instant(at.0 + 5_000));
+    apply_finish_policy(&mut state, &store, at).await.unwrap();
+    let again = apply_finish_policy(&mut state, &store, Instant(at.0 + 5_000)).await.unwrap();
 
     assert!(again.is_empty(), "a finish is derived once, not re-announced every tick");
 }
@@ -68,9 +78,13 @@ async fn applying_the_policy_twice_finishes_nobody_new() {
 async fn an_undecided_rule_finishes_nobody_ever() {
     // Competition's rule is NotConfigured, which evaluates to Undetermined. Treating that
     // as "not finished" or as "finished" would both be inventing it (CLAUDE.md 12, 28).
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Competition, FinishPolicy::NotConfigured);
 
-    let finished = apply_finish_policy(&mut state, Instant(START.0 + 10 * LIMIT.millis()));
+    let finished =
+        apply_finish_policy(&mut state, &store, Instant(START.0 + 10 * LIMIT.millis()))
+            .await
+            .unwrap();
 
     assert!(finished.is_empty());
     assert_eq!(state.athlete("a1").unwrap().status, AthleteStatus::Active);
@@ -78,9 +92,13 @@ async fn an_undecided_rule_finishes_nobody_ever() {
 
 #[tokio::test]
 async fn coach_decides_never_finishes_anyone_automatically() {
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Training, FinishPolicy::CoachDecides);
 
-    let finished = apply_finish_policy(&mut state, Instant(START.0 + 10 * LIMIT.millis()));
+    let finished =
+        apply_finish_policy(&mut state, &store, Instant(START.0 + 10 * LIMIT.millis()))
+            .await
+            .unwrap();
 
     assert!(finished.is_empty());
 }
@@ -113,6 +131,7 @@ async fn ending_a_class_by_hand_is_refused_when_no_finish_rule_exists() {
 
 #[tokio::test]
 async fn an_athlete_caught_inside_a_station_keeps_that_run_open() {
+    let store = FakeStore::new();
     let mut state = class(SessionMode::Training, FinishPolicy::ClassDuration { limit: LIMIT });
     {
         let a = state.athlete_mut("a1").unwrap();
@@ -127,7 +146,7 @@ async fn an_athlete_caught_inside_a_station_keeps_that_run_open() {
         );
     }
 
-    apply_finish_policy(&mut state, Instant(START.0 + LIMIT.millis()));
+    apply_finish_policy(&mut state, &store, Instant(START.0 + LIMIT.millis())).await.unwrap();
 
     let a = state.athlete("a1").unwrap();
     assert_eq!(a.status, AthleteStatus::Finished);

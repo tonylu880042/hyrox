@@ -216,6 +216,22 @@ impl HubStore for FakeStore {
         Ok(())
     }
 
+    async fn save_athlete_finish(
+        &self,
+        _session_id: &str,
+        athlete_id: &str,
+        finished_at: Option<domain::Instant>,
+    ) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(a) = inner.athletes.iter_mut().find(|a| a.athlete_id == athlete_id) {
+            match finished_at {
+                Some(at) => domain::finish(a, at),
+                None => a.finished_at = None,
+            }
+        }
+        Ok(())
+    }
+
     async fn active_session(&self) -> Result<Option<Session>, FakeError> {
         Ok(self.inner.lock().unwrap().sessions.first().cloned())
     }
