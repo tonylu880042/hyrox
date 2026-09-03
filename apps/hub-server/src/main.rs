@@ -20,19 +20,20 @@
 //! `HYROX_DB`, `HYROX_MQTT_HOST`, `HYROX_MQTT_PORT`, `HYROX_MQTT_CLIENT_ID` and `HYROX_DEMO`
 //! configure it; see `README.md`.
 
+#[cfg(feature = "dev-simulator")]
 mod feeder;
-mod power;
 mod fonts;
 mod mqtt;
+mod power;
 
+/// The demo venue behind the settings screen's button (M6 follow-up).
+#[cfg(feature = "dev-simulator")]
+mod demo;
 /// The emulated collector that keeps `/live` moving on a developer's machine, publishing
 /// over the real broker so nothing short-circuits ingestion (CLAUDE.md 25; ADR 0006).
 /// `--no-default-features` leaves it out of a venue build entirely.
 #[cfg(feature = "dev-simulator")]
 mod sim;
-/// The demo venue behind the settings screen's button (M6 follow-up).
-#[cfg(feature = "dev-simulator")]
-mod demo;
 
 /// Whether this machine offers demo data. A build without the emulated collector never does.
 fn demo_enabled() -> bool {
@@ -53,10 +54,7 @@ use axum::{
     routing::get,
     Router,
 };
-use domain::{
-    Duration, ExerciseLibrary, Instant, Session, SessionConfig, SessionMode,
-    WorkoutTemplate,
-};
+use domain::{ExerciseLibrary, Instant, Session, SessionConfig, SessionMode, WorkoutTemplate};
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -98,7 +96,8 @@ const DEFAULT_CLIENT_ID: &str = "hyrox-hub";
 /// The dev class runs for twenty (virtual) minutes. A session's finish rule is
 /// configuration, never code (CLAUDE.md 12): this is the value for the demo script, not a
 /// product decision.
-const DEV_CLASS_LENGTH: Duration = Duration(20 * 60 * 1000);
+#[cfg(feature = "dev-simulator")]
+const DEV_CLASS_LENGTH: domain::Duration = domain::Duration(20 * 60 * 1000);
 
 /// How often the read model is re-derived and pushed. Published to every screen in the
 /// freshness readout, so a client can tell "quiet" from "the socket died" without inventing
@@ -311,13 +310,28 @@ async fn main() {
         .route("/settings", get(|| async { Html(SETTINGS_HTML) }))
         .route("/leaderboard", get(|| async { Html(LEADERBOARD_HTML) }))
         .route("/result", get(|| async { Html(RESULT_HTML) }))
-        .route("/i18n.js", get(|| async { asset("text/javascript; charset=utf-8", I18N_JS) }))
-        .route("/app.css", get(|| async { asset("text/css; charset=utf-8", APP_CSS) }))
-        .route("/favicon.svg", get(|| async { asset("image/svg+xml; charset=utf-8", FAVICON) }))
+        .route(
+            "/i18n.js",
+            get(|| async { asset("text/javascript; charset=utf-8", I18N_JS) }),
+        )
+        .route(
+            "/app.css",
+            get(|| async { asset("text/css; charset=utf-8", APP_CSS) }),
+        )
+        .route(
+            "/favicon.svg",
+            get(|| async { asset("image/svg+xml; charset=utf-8", FAVICON) }),
+        )
         // Browsers ask for this by name before they have parsed any markup, so it answers
         // with the same drawing rather than a 404 in every venue's log.
-        .route("/favicon.ico", get(|| async { asset("image/svg+xml; charset=utf-8", FAVICON) }))
-        .route("/fonts.css", get(|| async { asset("text/css; charset=utf-8", FONTS_CSS) }))
+        .route(
+            "/favicon.ico",
+            get(|| async { asset("image/svg+xml; charset=utf-8", FAVICON) }),
+        )
+        .route(
+            "/fonts.css",
+            get(|| async { asset("text/css; charset=utf-8", FONTS_CSS) }),
+        )
         .route("/fonts/{file}", get(font))
         .merge(api::router(hub));
 
@@ -366,7 +380,9 @@ fn bind_address() -> SocketAddr {
 /// (ADR 0009 §6).
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c().await.expect("cannot listen for Ctrl-C");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("cannot listen for Ctrl-C");
     };
 
     #[cfg(unix)]
@@ -394,9 +410,7 @@ fn asset(content_type: &'static str, body: &'static str) -> impl axum::response:
 /// The web font files. Embedded like everything else, and looked up by name against a list
 /// generated at compile time -- so a request cannot reach outside the font directory,
 /// whatever it asks for.
-async fn font(
-    axum::extract::Path(file): axum::extract::Path<String>,
-) -> axum::response::Response {
+async fn font(axum::extract::Path(file): axum::extract::Path<String>) -> axum::response::Response {
     use axum::response::IntoResponse;
     match FONTS.iter().find(|(name, _)| *name == file) {
         Some((_, bytes)) => (
@@ -404,7 +418,10 @@ async fn font(
                 (axum::http::header::CONTENT_TYPE, "font/woff2"),
                 // The files are content-addressed by the generator; a venue browser should
                 // not re-fetch them every time the projector restarts.
-                (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable",
+                ),
             ],
             *bytes,
         )
@@ -444,7 +461,9 @@ fn broker_config() -> MqttConfig {
         config.host = host;
     }
     if let Ok(port) = std::env::var("HYROX_MQTT_PORT") {
-        config.port = port.parse().unwrap_or_else(|e| panic!("HYROX_MQTT_PORT: {e}"));
+        config.port = port
+            .parse()
+            .unwrap_or_else(|e| panic!("HYROX_MQTT_PORT: {e}"));
     }
     config
 }

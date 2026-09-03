@@ -38,7 +38,10 @@ async fn the_exercise_library_is_published_with_its_units() {
     assert_eq!(status, StatusCode::OK);
     let exercises = body["exercises"].as_array().expect("a list");
     assert_eq!(exercises.len(), 9);
-    let wall_ball = exercises.iter().find(|e| e["code"] == "WALL_BALL").expect("wall ball");
+    let wall_ball = exercises
+        .iter()
+        .find(|e| e["code"] == "WALL_BALL")
+        .expect("wall ball");
     assert_eq!(wall_ball["station_key"], "WALL BALLS");
     assert_eq!(wall_ball["supported_target_types"], json!(["REPS", "TIME"]));
     // Every read carries its freshness (ADR 0001 D5).
@@ -67,8 +70,7 @@ async fn a_template_that_does_not_exist_is_a_404() {
 async fn a_template_is_saved_and_then_readable() {
     let (router, store) = draft();
 
-    let (status, body) =
-        call(&router, post("/api/operator/templates", DESK, engine_800())).await;
+    let (status, body) = call(&router, post("/api/operator/templates", DESK, engine_800())).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["templates"].as_array().unwrap().len(), 1);
@@ -78,7 +80,10 @@ async fn a_template_is_saved_and_then_readable() {
     assert_eq!(body["template"]["name"], "HYROX Engine 800");
     assert_eq!(body["template"]["source"], "COACH");
     assert_eq!(body["template"]["version"], 1);
-    assert_eq!(store.audits().pop().expect("an audit").action, "TEMPLATE_CREATE");
+    assert_eq!(
+        store.audits().pop().expect("an audit").action,
+        "TEMPLATE_CREATE"
+    );
 }
 
 #[tokio::test]
@@ -97,7 +102,11 @@ async fn saving_over_a_template_advances_its_version() {
     let (router, _) = draft();
     call(&router, post("/api/operator/templates", DESK, engine_800())).await;
 
-    let (status, _) = call(&router, put("/api/operator/templates/t1", DESK, engine_800())).await;
+    let (status, _) = call(
+        &router,
+        put("/api/operator/templates/t1", DESK, engine_800()),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     let (_, body) = call(&router, get("/api/workout-templates/t1")).await;
@@ -110,7 +119,11 @@ async fn saving_over_a_template_advances_its_version() {
 async fn the_path_id_wins_over_the_body_id() {
     let (router, _) = draft();
 
-    call(&router, put("/api/operator/templates/from-path", DESK, engine_800())).await;
+    call(
+        &router,
+        put("/api/operator/templates/from-path", DESK, engine_800()),
+    )
+    .await;
 
     let (status, _) = call(&router, get("/api/workout-templates/from-path")).await;
     assert_eq!(status, StatusCode::OK);
@@ -151,8 +164,15 @@ async fn a_system_template_cannot_be_deleted() {
     let (router, store) = draft();
     store.seed_system_template("sys1", "HYROX Engine");
 
-    let (status, body) =
-        call(&router, del("/api/operator/templates/sys1", DESK, json!({ "reason": "不要了" }))).await;
+    let (status, body) = call(
+        &router,
+        del(
+            "/api/operator/templates/sys1",
+            DESK,
+            json!({ "reason": "不要了" }),
+        ),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "TEMPLATE_NOT_EDITABLE");
@@ -176,13 +196,24 @@ async fn a_coach_template_is_deleted_with_a_reason() {
     let (router, store) = draft();
     call(&router, post("/api/operator/templates", DESK, engine_800())).await;
 
-    let (status, _) =
-        call(&router, del("/api/operator/templates/t1", DESK, json!({ "reason": "重複" }))).await;
+    let (status, _) = call(
+        &router,
+        del(
+            "/api/operator/templates/t1",
+            DESK,
+            json!({ "reason": "重複" }),
+        ),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     let (status, _) = call(&router, get("/api/workout-templates/t1")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let audit = store.audits().into_iter().find(|a| a.action == "TEMPLATE_DELETE").expect("audited");
+    let audit = store
+        .audits()
+        .into_iter()
+        .find(|a| a.action == "TEMPLATE_DELETE")
+        .expect("audited");
     assert_eq!(audit.reason.as_deref(), Some("重複"));
 }
 
@@ -216,7 +247,11 @@ async fn duplicating_a_template_that_does_not_exist_is_a_404() {
     let (router, _) = draft();
     let (status, body) = call(
         &router,
-        post("/api/operator/templates/nope/duplicate", DESK, json!({ "new_id": "x", "name": "X" })),
+        post(
+            "/api/operator/templates/nope/duplicate",
+            DESK,
+            json!({ "new_id": "x", "name": "X" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -240,7 +275,11 @@ async fn a_class_is_created_from_a_template_and_comes_back_as_a_draft() {
     let (router, _) = draft();
     call(&router, post("/api/operator/templates", DESK, engine_800())).await;
 
-    let (status, body) = call(&router, post("/api/operator/class", DESK, create_class_body())).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/class", DESK, create_class_body()),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "DRAFT");
@@ -262,7 +301,11 @@ async fn creating_a_class_from_an_unrunnable_template_is_refused_by_name() {
     empty["blocks"] = json!([]);
     call(&router, post("/api/operator/templates", DESK, empty)).await;
 
-    let (status, body) = call(&router, post("/api/operator/class", DESK, create_class_body())).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/class", DESK, create_class_body()),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "TEMPLATE_NOT_RUNNABLE");
@@ -273,7 +316,11 @@ async fn creating_a_class_while_one_is_running_is_refused() {
     let (router, store) = running();
     store.seed_system_template("t1", "HYROX Engine 800");
 
-    let (status, body) = call(&router, post("/api/operator/class", DESK, create_class_body())).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/class", DESK, create_class_body()),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "CLASS_IN_PROGRESS");
@@ -282,7 +329,11 @@ async fn creating_a_class_while_one_is_running_is_refused() {
 #[tokio::test]
 async fn creating_a_class_from_a_template_that_does_not_exist_is_a_404() {
     let (router, _) = draft();
-    let (status, body) = call(&router, post("/api/operator/class", DESK, create_class_body())).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/class", DESK, create_class_body()),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "UNKNOWN_TEMPLATE");
 }
@@ -293,7 +344,11 @@ async fn creating_a_class_from_a_template_that_does_not_exist_is_a_404() {
 async fn the_stage_list_is_published_per_athlete() {
     let (router, _) = draft();
     call(&router, post("/api/operator/templates", DESK, engine_800())).await;
-    call(&router, post("/api/operator/class", DESK, create_class_body())).await;
+    call(
+        &router,
+        post("/api/operator/class", DESK, create_class_body()),
+    )
+    .await;
 
     let (status, body) = call(&router, get("/api/stages")).await;
 
@@ -307,7 +362,10 @@ async fn the_stage_list_is_published_per_athlete() {
     assert_eq!(stages[0]["status"], "READY");
     assert_eq!(stages[0]["station"], "RUN");
     assert_eq!(stages[1]["status"], "PENDING");
-    assert!(athletes[0]["expectation"].is_null(), "nobody is at a station yet");
+    assert!(
+        athletes[0]["expectation"].is_null(),
+        "nobody is at a station yet"
+    );
 }
 
 #[tokio::test]
@@ -353,11 +411,21 @@ async fn health_reports_a_draft_class_as_safe_to_stop() {
 #[tokio::test]
 async fn health_follows_the_session_rather_than_being_cached() {
     let (router, _) = draft();
-    assert_eq!(call(&router, get("/api/health")).await.1["safe_to_stop"], true);
+    assert_eq!(
+        call(&router, get("/api/health")).await.1["safe_to_stop"],
+        true
+    );
 
-    call(&router, post("/api/operator/session/ready", DESK, json!({}))).await;
+    call(
+        &router,
+        post("/api/operator/session/ready", DESK, json!({})),
+    )
+    .await;
 
     let (_, body) = call(&router, get("/api/health")).await;
-    assert_eq!(body["safe_to_stop"], false, "a READY class is a coach about to press start");
+    assert_eq!(
+        body["safe_to_stop"], false,
+        "a READY class is a coach about to press start"
+    );
     assert_eq!(body["session_status"], "READY");
 }

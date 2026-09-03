@@ -62,10 +62,15 @@ async fn a_draft_cannot_be_started_without_passing_through_ready() {
     let store = FakeStore::new();
     let mut state = draft();
 
-    let err = start(&mut state, &store, &tablet()).await.expect_err("DRAFT is not startable");
+    let err = start(&mut state, &store, &tablet())
+        .await
+        .expect_err("DRAFT is not startable");
 
     assert!(matches!(err, OperatorError::Session(_)));
-    assert!(store.saved_sessions().is_empty(), "a rejected transition writes nothing");
+    assert!(
+        store.saved_sessions().is_empty(),
+        "a rejected transition writes nothing"
+    );
 }
 
 #[tokio::test]
@@ -90,7 +95,9 @@ async fn completing_a_draft_is_rejected_by_the_domain() {
     let store = FakeStore::new();
     let mut state = draft();
 
-    let err = complete(&mut state, &store, &tablet()).await.expect_err("DRAFT cannot complete");
+    let err = complete(&mut state, &store, &tablet())
+        .await
+        .expect_err("DRAFT cannot complete");
 
     assert!(matches!(err, OperatorError::Session(_)));
     assert!(store.saved_sessions().is_empty());
@@ -101,9 +108,13 @@ async fn starting_a_completed_session_is_refused_because_it_is_a_correction() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    complete(&mut state, &store, &tablet()).await.expect("complete");
+    complete(&mut state, &store, &tablet())
+        .await
+        .expect("complete");
 
-    let err = start(&mut state, &store, &tablet()).await.expect_err("must go through reopen");
+    let err = start(&mut state, &store, &tablet())
+        .await
+        .expect_err("must go through reopen");
 
     assert!(matches!(err, OperatorError::ReasonRequired));
     assert_eq!(state.session.status, SessionStatus::Completed);
@@ -118,13 +129,23 @@ async fn pausing_stops_the_class_clock_and_resuming_restarts_it() {
     run_class(&mut state, &store).await;
 
     // 10s in, pause. 30s of wall time later, resume.
-    pause(&mut state, &store, &at(CLASS_START.0 + 10_000)).await.expect("pause");
+    pause(&mut state, &store, &at(CLASS_START.0 + 10_000))
+        .await
+        .expect("pause");
     assert_eq!(state.session.status, SessionStatus::Paused);
-    assert_eq!(state.class_elapsed(Instant(CLASS_START.0 + 25_000)), Duration(10_000));
+    assert_eq!(
+        state.class_elapsed(Instant(CLASS_START.0 + 25_000)),
+        Duration(10_000)
+    );
 
-    resume(&mut state, &store, &at(CLASS_START.0 + 40_000)).await.expect("resume");
+    resume(&mut state, &store, &at(CLASS_START.0 + 40_000))
+        .await
+        .expect("resume");
     assert_eq!(state.session.status, SessionStatus::Running);
-    assert_eq!(state.class_elapsed(Instant(CLASS_START.0 + 45_000)), Duration(15_000));
+    assert_eq!(
+        state.class_elapsed(Instant(CLASS_START.0 + 45_000)),
+        Duration(15_000)
+    );
 }
 
 #[tokio::test]
@@ -132,7 +153,9 @@ async fn a_pause_is_persisted_so_a_restart_comes_back_paused() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    pause(&mut state, &store, &at(CLASS_START.0 + 10_000)).await.expect("pause");
+    pause(&mut state, &store, &at(CLASS_START.0 + 10_000))
+        .await
+        .expect("pause");
 
     let saved = store.saved_sessions().pop().expect("a saved session");
     assert_eq!(saved.status, SessionStatus::Paused);
@@ -144,7 +167,9 @@ async fn a_paused_class_does_not_accept_reads() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    pause(&mut state, &store, &at(CLASS_START.0 + 10_000)).await.expect("pause");
+    pause(&mut state, &store, &at(CLASS_START.0 + 10_000))
+        .await
+        .expect("pause");
 
     assert!(!state.session.accepts_events());
 }
@@ -154,9 +179,13 @@ async fn a_paused_class_can_be_completed_without_resuming() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    pause(&mut state, &store, &at(CLASS_START.0 + 10_000)).await.expect("pause");
+    pause(&mut state, &store, &at(CLASS_START.0 + 10_000))
+        .await
+        .expect("pause");
 
-    complete(&mut state, &store, &tablet()).await.expect("complete");
+    complete(&mut state, &store, &tablet())
+        .await
+        .expect("complete");
 
     assert_eq!(state.session.status, SessionStatus::Completed);
 }
@@ -169,7 +198,9 @@ async fn cancelling_without_a_reason_is_refused() {
     let mut state = draft();
     run_class(&mut state, &store).await;
 
-    let err = cancel(&mut state, &store, &tablet()).await.expect_err("reason required");
+    let err = cancel(&mut state, &store, &tablet())
+        .await
+        .expect_err("reason required");
 
     assert!(matches!(err, OperatorError::ReasonRequired));
     assert_eq!(state.session.status, SessionStatus::Running);
@@ -196,7 +227,9 @@ async fn a_cancelled_class_is_not_reopened() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    cancel(&mut state, &store, &tablet().with_reason("停電")).await.expect("cancel");
+    cancel(&mut state, &store, &tablet().with_reason("停電"))
+        .await
+        .expect("cancel");
 
     let err = reopen(&mut state, &store, &tablet().with_reason("誤按"))
         .await
@@ -212,9 +245,13 @@ async fn reopening_without_a_reason_is_refused() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    complete(&mut state, &store, &tablet()).await.expect("complete");
+    complete(&mut state, &store, &tablet())
+        .await
+        .expect("complete");
 
-    let err = reopen(&mut state, &store, &tablet()).await.expect_err("reason required");
+    let err = reopen(&mut state, &store, &tablet())
+        .await
+        .expect_err("reason required");
 
     assert!(matches!(err, OperatorError::ReasonRequired));
 }
@@ -224,7 +261,9 @@ async fn a_blank_reason_is_not_a_reason() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    complete(&mut state, &store, &tablet()).await.expect("complete");
+    complete(&mut state, &store, &tablet())
+        .await
+        .expect("complete");
 
     let err = reopen(&mut state, &store, &tablet().with_reason("   "))
         .await
@@ -238,7 +277,9 @@ async fn reopening_with_a_reason_records_it() {
     let store = FakeStore::new();
     let mut state = draft();
     run_class(&mut state, &store).await;
-    complete(&mut state, &store, &tablet()).await.expect("complete");
+    complete(&mut state, &store, &tablet())
+        .await
+        .expect("complete");
 
     reopen(&mut state, &store, &tablet().with_reason("誤觸"))
         .await
@@ -259,7 +300,9 @@ async fn an_untouched_session_can_go_back_to_draft() {
     let mut state = draft();
     run_class(&mut state, &store).await;
 
-    return_to_draft(&mut state, &store, &tablet()).await.expect("back to draft");
+    return_to_draft(&mut state, &store, &tablet())
+        .await
+        .expect("back to draft");
 
     assert_eq!(state.session.status, SessionStatus::Draft);
 }
@@ -275,6 +318,30 @@ async fn a_session_that_has_interpreted_events_cannot_go_back_to_draft() {
         .await
         .expect_err("results exist");
 
-    assert!(matches!(err, OperatorError::Session(domain::SessionError::HasInterpretedEvents)));
+    assert!(matches!(
+        err,
+        OperatorError::Session(domain::SessionError::HasInterpretedEvents)
+    ));
     assert_eq!(state.session.status, SessionStatus::Running);
+}
+
+#[tokio::test]
+async fn a_storage_failure_during_pause_leaves_in_memory_session_status_running() {
+    let mut store = FakeStore::new();
+    let mut state = draft();
+    run_class(&mut state, &store).await;
+
+    assert_eq!(state.session.status, SessionStatus::Running);
+
+    store.fail_save_session = true;
+    let err = pause(&mut state, &store, &at(CLASS_START.0 + 10_000))
+        .await
+        .expect_err("pause fails when store fails");
+    assert!(matches!(err, OperatorError::Storage(_)));
+
+    assert_eq!(
+        state.session.status,
+        SessionStatus::Running,
+        "session status in memory must stay Running if persistence fails"
+    );
 }

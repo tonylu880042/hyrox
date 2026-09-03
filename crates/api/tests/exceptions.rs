@@ -37,10 +37,16 @@ async fn an_accepted_exception_leaves_the_inbox_without_being_erased() {
     let (status, body) = call(&router, post(&path, DESK, json!({}))).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body["exceptions"].as_array().expect("a list").is_empty(), "the inbox is clear");
+    assert!(
+        body["exceptions"].as_array().expect("a list").is_empty(),
+        "the inbox is clear"
+    );
     // Nothing was voided: the interpretation is still in the log, which is the whole
     // difference between this and the void button next to it.
-    assert!(store.voided().is_empty(), "accepting must not void anything");
+    assert!(
+        store.voided().is_empty(),
+        "accepting must not void anything"
+    );
     let audit = store
         .audits()
         .into_iter()
@@ -82,21 +88,30 @@ async fn the_badge_stops_counting_an_accepted_exception() {
     let id = an_exception(&store);
 
     let (_, before) = call(&router, get("/api/live")).await;
-    assert_eq!(before["snapshot"]["exceptions"], 1, "the screen shows the outstanding one");
+    assert_eq!(
+        before["snapshot"]["exceptions"], 1,
+        "the screen shows the outstanding one"
+    );
 
     let path = format!("/api/operator/exceptions/{id}/accept");
     call(&router, post(&path, DESK, json!({}))).await;
 
     let (_, after) = call(&router, get("/api/live")).await;
-    assert_eq!(after["snapshot"]["exceptions"], 0, "the badge follows the inbox");
+    assert_eq!(
+        after["snapshot"]["exceptions"], 0,
+        "the badge follows the inbox"
+    );
 }
 
 #[tokio::test]
 async fn accepting_something_that_is_not_there_is_a_404() {
     let (router, _store) = running();
 
-    let (status, body) =
-        call(&router, post("/api/operator/exceptions/999/accept", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/exceptions/999/accept", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "UNKNOWN_EVENT");

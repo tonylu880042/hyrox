@@ -36,7 +36,14 @@ impl MqttDevice {
     /// the returned event loop is polled.
     pub fn attach(device: SimDevice, config: &MqttConfig) -> (Self, EventLoop) {
         let (client, eventloop) = client::connect(config);
-        (Self { device, client, published: BTreeSet::new() }, eventloop)
+        (
+            Self {
+                device,
+                client,
+                published: BTreeSet::new(),
+            },
+            eventloop,
+        )
     }
 
     pub fn device(&self) -> &SimDevice {

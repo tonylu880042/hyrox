@@ -11,17 +11,17 @@
 
 use api::{Clock, Hub};
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, LiveSession, RawCommit, RawRead, StoredException,
-    StoredRawRead, SeenReader,
+    AuditEntry, HubStore, InterpretedWrite, LiveSession, RawCommit, RawRead, SeenReader,
+    StoredException, StoredRawRead,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use contract::CommitOutcome;
 use domain::{
-    AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, Interpreted,
-    PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
-    StationMap, TagBinding, WorkoutTemplate,
+    AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, Interpreted, PhysicalStation,
+    ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, StationMap,
+    TagBinding, WorkoutTemplate,
 };
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
@@ -107,7 +107,11 @@ impl FakeStore {
             .with_block(WorkoutBlock::sequential("Main").with_exercises(vec![
                 WorkoutExercise::new(
                     "RUN",
-                    Target { target_type: TargetType::Distance, value: 800, unit: Unit::Meter },
+                    Target {
+                        target_type: TargetType::Distance,
+                        value: 800,
+                        unit: Unit::Meter,
+                    },
                 ),
             ]));
         self.inner.lock().unwrap().templates.push(template);
@@ -117,8 +121,7 @@ impl FakeStore {
     /// because nothing can compile a template without it.
     pub fn new() -> Self {
         let store = Self::default();
-        store.inner.lock().unwrap().exercises =
-            ExerciseLibrary::preset().iter().cloned().collect();
+        store.inner.lock().unwrap().exercises = ExerciseLibrary::preset().iter().cloned().collect();
         store
     }
 
@@ -209,6 +212,14 @@ impl HubStore for FakeStore {
         Ok(inner.interpreted.len() as i64)
     }
 
+    async fn raw_event_has_interpretation(&self, raw_event_id: i64) -> Result<bool, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .interpreted
+            .iter()
+            .any(|(_, raw_id, _)| *raw_id == Some(raw_event_id)))
+    }
+
     async fn save_session(&self, session: &Session, _created_at: Instant) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
         match inner.sessions.iter_mut().find(|s| s.id == session.id) {
@@ -227,7 +238,9 @@ impl HubStore for FakeStore {
         member_id: Option<&str>,
     ) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
-        inner.athletes.push(AthleteState::ready(athlete_id, display_name));
+        inner
+            .athletes
+            .push(AthleteState::ready(athlete_id, display_name));
         inner.roster.push(SavedAthlete {
             athlete_id: athlete_id.to_string(),
             display_name: display_name.to_string(),
@@ -244,7 +257,11 @@ impl HubStore for FakeStore {
         finished_at: Option<domain::Instant>,
     ) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(a) = inner.athletes.iter_mut().find(|a| a.athlete_id == athlete_id) {
+        if let Some(a) = inner
+            .athletes
+            .iter_mut()
+            .find(|a| a.athlete_id == athlete_id)
+        {
             match finished_at {
                 Some(at) => domain::finish(a, at),
                 None => a.finished_at = None,
@@ -326,6 +343,10 @@ impl HubStore for FakeStore {
     }
 
     async fn reader_keys_seen(&self) -> Result<Vec<SeenReader>, FakeError> {
+        let parked = self.parked.lock().unwrap().clone();
+        if let Some(gate) = parked {
+            gate.notified().await;
+        }
         Ok(self.inner.lock().unwrap().seen_readers.clone())
     }
 
@@ -380,7 +401,11 @@ impl HubStore for FakeStore {
                 .map(|(i, a)| (a.athlete_id.clone(), i as i64 + 1))
                 .collect());
         }
-        Ok(inner.roster.iter().map(|a| (a.athlete_id.clone(), a.bib)).collect())
+        Ok(inner
+            .roster
+            .iter()
+            .map(|a| (a.athlete_id.clone(), a.bib))
+            .collect())
     }
 
     async fn rebuild_athletes(&self, _session_id: &str) -> Result<Vec<AthleteState>, FakeError> {
@@ -507,16 +532,19 @@ impl HubStore for FakeStore {
     ) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
         inner.venue_settings.retain(|(k, _)| k != key);
-        inner.venue_settings.push((key.to_string(), value.to_string()));
+        inner
+            .venue_settings
+            .push((key.to_string(), value.to_string()));
         Ok(())
     }
 
-    async fn venue_asset(
-        &self,
-        key: &str,
-    ) -> Result<Option<application::VenueAsset>, FakeError> {
+    async fn venue_asset(&self, key: &str) -> Result<Option<application::VenueAsset>, FakeError> {
         let inner = self.inner.lock().unwrap();
-        Ok(inner.venue_assets.iter().find(|(k, _)| k == key).map(|(_, a)| a.clone()))
+        Ok(inner
+            .venue_assets
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, a)| a.clone()))
     }
 
     async fn save_venue_asset(
@@ -531,13 +559,20 @@ impl HubStore for FakeStore {
         inner.venue_assets.retain(|(k, _)| k != key);
         inner.venue_assets.push((
             key.to_string(),
-            application::VenueAsset { media_type: media_type.to_string(), bytes: bytes.to_vec() },
+            application::VenueAsset {
+                media_type: media_type.to_string(),
+                bytes: bytes.to_vec(),
+            },
         ));
         Ok(())
     }
 
     async fn delete_venue_asset(&self, key: &str) -> Result<(), FakeError> {
-        self.inner.lock().unwrap().venue_assets.retain(|(k, _)| k != key);
+        self.inner
+            .lock()
+            .unwrap()
+            .venue_assets
+            .retain(|(k, _)| k != key);
         Ok(())
     }
 
@@ -588,7 +623,9 @@ impl HubStore for FakeStore {
     }
 
     async fn exercises(&self) -> Result<ExerciseLibrary, FakeError> {
-        Ok(ExerciseLibrary::new(self.inner.lock().unwrap().exercises.clone()))
+        Ok(ExerciseLibrary::new(
+            self.inner.lock().unwrap().exercises.clone(),
+        ))
     }
 
     async fn save_station(&self, station: &PhysicalStation) -> Result<(), FakeError> {
@@ -635,7 +672,11 @@ impl api::Power for FakeStore {
             api::PowerAction::Reboot => "REBOOT",
             api::PowerAction::RestartService => "RESTART_SERVICE",
         };
-        self.inner.lock().unwrap().power_actions.push(name.to_string());
+        self.inner
+            .lock()
+            .unwrap()
+            .power_actions
+            .push(name.to_string());
         Ok(())
     }
 }
@@ -668,7 +709,9 @@ impl api::Demo for FakeDemo {
 /// A hub set up the way a test machine is: demo data available.
 pub fn demo_hub(state: LiveSession) -> (Router, Arc<FakeDemo>) {
     let store = Arc::new(FakeStore::new());
-    let demo = Arc::new(FakeDemo { calls: std::sync::Mutex::new(Vec::new()) });
+    let demo = Arc::new(FakeDemo {
+        calls: std::sync::Mutex::new(Vec::new()),
+    });
     let hub = Hub::new(
         state,
         Arc::clone(&store),
@@ -738,7 +781,11 @@ pub async fn call(router: &Router, request: Request<Body>) -> (StatusCode, serde
 /// The same, when the answer is not JSON: status, content type, body as text.
 /// The entry QR is an SVG, and "the hub draws it itself" is the property under test.
 pub async fn raw(router: &Router, request: Request<Body>) -> (StatusCode, String, String) {
-    let response = router.clone().oneshot(request).await.expect("the router always answers");
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router always answers");
     let status = response.status();
     let content_type = response
         .headers()
@@ -749,14 +796,22 @@ pub async fn raw(router: &Router, request: Request<Body>) -> (StatusCode, String
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a readable body");
-    (status, content_type, String::from_utf8_lossy(&bytes).into_owned())
+    (
+        status,
+        content_type,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
 }
 
 /// The same again, without turning the body into text. `from_utf8_lossy` replaces every
 /// byte that is not valid UTF-8, so a PNG comes back a different length than it went in --
 /// which is exactly what an image assertion needs to compare.
 pub async fn raw_bytes(router: &Router, request: Request<Body>) -> (StatusCode, String, Vec<u8>) {
-    let response = router.clone().oneshot(request).await.expect("the router always answers");
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router always answers");
     let status = response.status();
     let content_type = response
         .headers()
@@ -816,12 +871,7 @@ pub fn upload_anonymous(path: &str, content_type: &str, bytes: Vec<u8>) -> Reque
         .expect("a valid request")
 }
 
-fn write(
-    method: &str,
-    path: &str,
-    device: Option<&str>,
-    body: serde_json::Value,
-) -> Request<Body> {
+fn write(method: &str, path: &str, device: Option<&str>, body: serde_json::Value) -> Request<Body> {
     let mut builder = Request::builder()
         .method(method)
         .uri(path)

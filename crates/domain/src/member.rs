@@ -66,5 +66,4 @@ impl MemberRef {
             weight_kg: None,
         }
     }
-
 }

@@ -39,7 +39,11 @@ fn session(status: SessionStatus) -> LiveSession {
 
 #[test]
 fn a_finished_class_is_safe_to_stop() {
-    for status in [SessionStatus::Draft, SessionStatus::Completed, SessionStatus::Cancelled] {
+    for status in [
+        SessionStatus::Draft,
+        SessionStatus::Completed,
+        SessionStatus::Cancelled,
+    ] {
         let view = health(&session(status), NOW);
         assert!(view.safe_to_stop, "{status:?} should be safe to stop");
         assert!(view.blocked_by.is_empty());
@@ -50,7 +54,11 @@ fn a_finished_class_is_safe_to_stop() {
 /// READY one is a coach about to press start.
 #[test]
 fn a_live_class_blocks_the_maintenance_window() {
-    for status in [SessionStatus::Ready, SessionStatus::Running, SessionStatus::Paused] {
+    for status in [
+        SessionStatus::Ready,
+        SessionStatus::Running,
+        SessionStatus::Paused,
+    ] {
         let view = health(&session(status), NOW);
         assert!(!view.safe_to_stop, "{status:?} must block");
         assert_eq!(view.blocked_by, vec![Blocker::ClassRunning]);
@@ -60,8 +68,14 @@ fn a_live_class_blocks_the_maintenance_window() {
 
 #[test]
 fn the_view_reports_the_session_status_by_name() {
-    assert_eq!(health(&session(SessionStatus::Running), NOW).session_status, "RUNNING");
-    assert_eq!(health(&session(SessionStatus::Paused), NOW).session_status, "PAUSED");
+    assert_eq!(
+        health(&session(SessionStatus::Running), NOW).session_status,
+        "RUNNING"
+    );
+    assert_eq!(
+        health(&session(SessionStatus::Paused), NOW).session_status,
+        "PAUSED"
+    );
 }
 
 /// A device still holding unacknowledged events in its journal (CLAUDE.md 18). Stopping is
@@ -101,5 +115,8 @@ fn both_blockers_are_reported_together_so_one_fix_does_not_hide_the_other() {
     let view = health(&state, NOW);
 
     assert!(!view.safe_to_stop);
-    assert_eq!(view.blocked_by, vec![Blocker::ClassRunning, Blocker::DeviceBacklog]);
+    assert_eq!(
+        view.blocked_by,
+        vec![Blocker::ClassRunning, Blocker::DeviceBacklog]
+    );
 }

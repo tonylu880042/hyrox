@@ -18,12 +18,10 @@
 use crate::error::{storage, ApiError};
 use crate::state::ReadOnly;
 use crate::wire::{
-    AthleteStages, CoachResponse, EntryResponse, ExercisesResponse, Freshness, LiveResponse,
-    SettingsResponse,
-    ResultResponse, LeaderboardResponse, SessionResponse, StagesResponse, TemplateResponse,
-    TemplatesResponse,
+    AthleteStages, CoachResponse, EntryResponse, ExercisesResponse, Freshness, LeaderboardResponse,
+    LiveResponse, ResultResponse, SessionResponse, SettingsResponse, StagesResponse,
+    TemplateResponse, TemplatesResponse,
 };
-use domain::EntryCode;
 use application::Health;
 use application::HubStore;
 use axum::extract::{
@@ -33,6 +31,7 @@ use axum::extract::{
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use domain::EntryCode;
 use std::fmt::Display;
 
 /// Where the live snapshot stream lives. One constant because it is both a route and a
@@ -147,7 +146,10 @@ where
         .ok_or_else(|| {
             ApiError::not_found("UNKNOWN_SESSION", format!("no session {session_id:?}"))
         })?;
-    Ok(Json(ResultResponse { freshness: freshness(&read).await, results }))
+    Ok(Json(ResultResponse {
+        freshness: freshness(&read).await,
+        results,
+    }))
 }
 
 /// The live snapshot stream every screen listens on.
@@ -196,7 +198,10 @@ where
     S::Error: Display,
 {
     let templates = read.templates().await.map_err(storage)?;
-    Ok(Json(TemplatesResponse { freshness: freshness(&read).await, templates }))
+    Ok(Json(TemplatesResponse {
+        freshness: freshness(&read).await,
+        templates,
+    }))
 }
 
 async fn template<S>(
@@ -212,9 +217,15 @@ where
         .await
         .map_err(storage)?
         .ok_or_else(|| {
-            ApiError::not_found("UNKNOWN_TEMPLATE", format!("no template with id {template_id:?}"))
+            ApiError::not_found(
+                "UNKNOWN_TEMPLATE",
+                format!("no template with id {template_id:?}"),
+            )
         })?;
-    Ok(Json(TemplateResponse { freshness: freshness(&read).await, template }))
+    Ok(Json(TemplateResponse {
+        freshness: freshness(&read).await,
+        template,
+    }))
 }
 
 /// Every athlete's progress through the class, stage by stage (workout brief §10).
@@ -237,7 +248,10 @@ where
             stages: p.stages,
         })
         .collect();
-    Json(StagesResponse { freshness: freshness(&read).await, athletes })
+    Json(StagesResponse {
+        freshness: freshness(&read).await,
+        athletes,
+    })
 }
 
 /// Whether this machine may be stopped right now (ADR 0009 §6).
@@ -324,7 +338,10 @@ async fn entry_qr(Path(code): Path<String>) -> Result<impl IntoResponse, ApiErro
         .build();
     Ok((
         [
-            (axum::http::header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "image/svg+xml; charset=utf-8",
+            ),
             (axum::http::header::CACHE_CONTROL, "no-store"),
         ],
         svg,
@@ -375,7 +392,10 @@ where
     Ok((
         [
             (axum::http::header::CONTENT_TYPE, asset.media_type),
-            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                "nosniff".to_string(),
+            ),
             // Re-read rather than cached: a logo changed on a tablet has to reach the
             // projector, and the file is tens of kilobytes on a local network.
             (axum::http::header::CACHE_CONTROL, "no-cache".to_string()),

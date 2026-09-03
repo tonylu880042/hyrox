@@ -17,9 +17,9 @@
 
 use contract::CommitOutcome;
 use domain::{
-    AthleteState, BindingLedger, ExceptionReason, ExerciseLibrary, Instant, Interpreted,
-    MemberRef, PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig,
-    StationMap, TagBinding, WorkoutTemplate,
+    AthleteState, BindingLedger, ExceptionReason, ExerciseLibrary, Instant, Interpreted, MemberRef,
+    PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig, StationMap,
+    TagBinding, WorkoutTemplate,
 };
 use std::future::Future;
 
@@ -146,6 +146,12 @@ pub trait HubStore {
         write: InterpretedWrite<'_>,
     ) -> impl Future<Output = Result<i64, Self::Error>> + Send;
 
+    /// Checks whether a raw event has already produced an interpreted event row (including voided ones).
+    fn raw_event_has_interpretation(
+        &self,
+        raw_event_id: i64,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
     fn save_session(
         &self,
         session: &Session,
@@ -248,9 +254,8 @@ pub trait HubStore {
     /// off a sticker: tap the antenna, and the reader that just appeared is the one to
     /// assign. Derived from `raw_events` rather than remembered, because a read the hub
     /// could not attribute is still stored (CLAUDE.md 31).
-    fn reader_keys_seen(
-        &self,
-    ) -> impl Future<Output = Result<Vec<SeenReader>, Self::Error>> + Send;
+    fn reader_keys_seen(&self)
+        -> impl Future<Output = Result<Vec<SeenReader>, Self::Error>> + Send;
 
     /// Stored reads of one tag that no interpretation points at yet, oldest first
     /// (ADR 0001 D3, retroactive claim).
@@ -379,10 +384,8 @@ pub trait HubStore {
         by: &str,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
-    fn delete_venue_asset(
-        &self,
-        key: &str,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn delete_venue_asset(&self, key: &str)
+        -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     fn record_audit(
         &self,

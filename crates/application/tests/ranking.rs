@@ -23,14 +23,21 @@ fn session_with(policy: FinishPolicy, finishes: &[(&str, Option<i64>)]) -> FakeS
 async fn course_completion_ranks_by_who_finished_first() {
     let store = session_with(
         FinishPolicy::CourseComplete,
-        &[("A", Some(3_600_000)), ("B", Some(3_100_000)), ("C", Some(3_400_000))],
+        &[
+            ("A", Some(3_600_000)),
+            ("B", Some(3_100_000)),
+            ("C", Some(3_400_000)),
+        ],
     );
 
     let r = results(&store, "s1").await.unwrap().expect("results");
 
     assert_eq!(r.ordering, Ordering::FinishTime);
-    let order: Vec<(&str, Option<usize>)> =
-        r.rows.iter().map(|row| (row.name.as_str(), row.place)).collect();
+    let order: Vec<(&str, Option<usize>)> = r
+        .rows
+        .iter()
+        .map(|row| (row.name.as_str(), row.place))
+        .collect();
     assert_eq!(order, [("B", Some(1)), ("C", Some(2)), ("A", Some(3))]);
 }
 
@@ -54,7 +61,11 @@ async fn an_unfinished_competitor_has_no_place_and_sorts_last() {
 async fn a_dead_heat_shares_a_place_and_the_next_one_skips() {
     let store = session_with(
         FinishPolicy::CourseComplete,
-        &[("A", Some(3_100_000)), ("B", Some(3_100_000)), ("C", Some(3_400_000))],
+        &[
+            ("A", Some(3_100_000)),
+            ("B", Some(3_100_000)),
+            ("C", Some(3_400_000)),
+        ],
     );
 
     let places: Vec<Option<usize>> = results(&store, "s1")
@@ -74,19 +85,31 @@ async fn a_dead_heat_shares_a_place_and_the_next_one_skips() {
 #[tokio::test]
 async fn a_class_that_ends_on_the_clock_is_not_ranked() {
     let store = session_with(
-        FinishPolicy::ClassDuration { limit: Duration(3_600_000) },
-        &[("A", Some(3_600_000)), ("B", Some(3_600_000)), ("C", Some(3_600_000))],
+        FinishPolicy::ClassDuration {
+            limit: Duration(3_600_000),
+        },
+        &[
+            ("A", Some(3_600_000)),
+            ("B", Some(3_600_000)),
+            ("C", Some(3_600_000)),
+        ],
     );
 
     let r = results(&store, "s1").await.unwrap().expect("results");
 
     assert_eq!(r.ordering, Ordering::Bib);
-    assert!(r.rows.iter().all(|row| row.place.is_none()), "a timed class has no placings");
+    assert!(
+        r.rows.iter().all(|row| row.place.is_none()),
+        "a timed class has no placings"
+    );
 }
 
 #[tokio::test]
 async fn a_session_with_no_finish_rule_is_not_ranked() {
-    let store = session_with(FinishPolicy::NotConfigured, &[("A", Some(1)), ("B", Some(2))]);
+    let store = session_with(
+        FinishPolicy::NotConfigured,
+        &[("A", Some(1)), ("B", Some(2))],
+    );
 
     let r = results(&store, "s1").await.unwrap().expect("results");
 

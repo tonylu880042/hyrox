@@ -32,8 +32,9 @@ fn intervals() -> Course {
             CourseStep::new("RUN").with_target(StationTarget::Distance { meters: 400 }),
             CourseStep::new("SKIERG").with_target(StationTarget::Distance { meters: 500 }),
             CourseStep::new("RUN").with_target(StationTarget::Distance { meters: 400 }),
-            CourseStep::new("SKIERG")
-                .with_target(StationTarget::Duration { duration: Duration(90_000) }),
+            CourseStep::new("SKIERG").with_target(StationTarget::Duration {
+                duration: Duration(90_000),
+            }),
         ],
     )
 }
@@ -43,9 +44,15 @@ async fn a_draft_session_can_be_given_a_course() {
     let store = FakeStore::new();
     let mut state = draft();
 
-    configure(&mut state, &store, Some(intervals()), FinishPolicy::CoachDecides, &tablet())
-        .await
-        .expect("configure");
+    configure(
+        &mut state,
+        &store,
+        Some(intervals()),
+        FinishPolicy::CoachDecides,
+        &tablet(),
+    )
+    .await
+    .expect("configure");
 
     let course = state.config.course.as_ref().expect("a course");
     assert_eq!(course.len(), 4);
@@ -58,9 +65,15 @@ async fn the_new_configuration_is_persisted_under_the_live_session_id() {
     let store = FakeStore::new();
     let mut state = draft();
 
-    configure(&mut state, &store, Some(intervals()), FinishPolicy::CoachDecides, &tablet())
-        .await
-        .expect("configure");
+    configure(
+        &mut state,
+        &store,
+        Some(intervals()),
+        FinishPolicy::CoachDecides,
+        &tablet(),
+    )
+    .await
+    .expect("configure");
 
     let stored = store.saved_configs();
     assert_eq!(stored.len(), 1);
@@ -73,16 +86,27 @@ async fn per_station_targets_survive_the_round_trip() {
     let store = FakeStore::new();
     let mut state = draft();
 
-    configure(&mut state, &store, Some(intervals()), FinishPolicy::CoachDecides, &tablet())
-        .await
-        .expect("configure");
+    configure(
+        &mut state,
+        &store,
+        Some(intervals()),
+        FinishPolicy::CoachDecides,
+        &tablet(),
+    )
+    .await
+    .expect("configure");
 
     let saved = store.saved_configs();
     let steps = &saved[0].course.as_ref().expect("course").steps;
-    assert_eq!(steps[1].target, Some(StationTarget::Distance { meters: 500 }));
+    assert_eq!(
+        steps[1].target,
+        Some(StationTarget::Distance { meters: 500 })
+    );
     assert_eq!(
         steps[3].target,
-        Some(StationTarget::Duration { duration: Duration(90_000) })
+        Some(StationTarget::Duration {
+            duration: Duration(90_000)
+        })
     );
 }
 
@@ -93,13 +117,21 @@ async fn an_armed_session_cannot_be_reconfigured() {
     state.session.mark_ready().expect("arm");
     state.session.start().expect("arm");
 
-    let err = configure(&mut state, &store, Some(intervals()), FinishPolicy::CoachDecides, &tablet())
-        .await
-        .expect_err("ARMED is not editable");
+    let err = configure(
+        &mut state,
+        &store,
+        Some(intervals()),
+        FinishPolicy::CoachDecides,
+        &tablet(),
+    )
+    .await
+    .expect_err("ARMED is not editable");
 
     assert!(matches!(
         err,
-        OperatorError::NotEditable { status: SessionStatus::Running }
+        OperatorError::NotEditable {
+            status: SessionStatus::Running
+        }
     ));
     // The class keeps the rule it was armed under (ADR 0004): nothing was written.
     assert!(store.saved_configs().is_empty());
@@ -114,13 +146,21 @@ async fn a_closed_session_cannot_be_reconfigured() {
     state.session.start().expect("arm");
     state.session.complete().expect("complete");
 
-    let err = configure(&mut state, &store, None, FinishPolicy::CoachDecides, &tablet())
-        .await
-        .expect_err("CLOSED is not editable");
+    let err = configure(
+        &mut state,
+        &store,
+        None,
+        FinishPolicy::CoachDecides,
+        &tablet(),
+    )
+    .await
+    .expect_err("CLOSED is not editable");
 
     assert!(matches!(
         err,
-        OperatorError::NotEditable { status: SessionStatus::Completed }
+        OperatorError::NotEditable {
+            status: SessionStatus::Completed
+        }
     ));
 }
 
@@ -133,7 +173,9 @@ async fn configuring_is_audited_with_the_operator_device() {
         &mut state,
         &store,
         Some(intervals()),
-        FinishPolicy::ClassDuration { limit: Duration(3_600_000) },
+        FinishPolicy::ClassDuration {
+            limit: Duration(3_600_000),
+        },
         &tablet(),
     )
     .await
@@ -144,5 +186,9 @@ async fn configuring_is_audited_with_the_operator_device() {
     assert_eq!(audit.operator, "FRONT DESK TABLET");
     assert_eq!(audit.subject, "s1");
     assert_eq!(audit.before.as_deref(), Some("NotConfigured, no course"));
-    assert!(audit.after.as_deref().expect("after").contains("4 x SKIERG"));
+    assert!(audit
+        .after
+        .as_deref()
+        .expect("after")
+        .contains("4 x SKIERG"));
 }

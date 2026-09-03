@@ -12,11 +12,11 @@ use application::{
     checkin::{bind_tag, rebind_tag},
     ingest_read, IngestOutcome, LiveSession, OperatorCommand, OperatorError,
 };
+use contract::{EdgeEvent, ReceivedEvent};
 use domain::{
     AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
     ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, TagId,
 };
-use contract::{EdgeEvent, ReceivedEvent};
 use support::FakeStore;
 
 /// A round of one tag yields one outcome. The unwrap is the assertion: anything else means
@@ -27,7 +27,6 @@ fn sole(ingested: &application::Ingested) -> application::IngestOutcome {
         other => panic!("one tag in, one outcome out; got {other:?}"),
     }
 }
-
 
 const DEVICE: &str = "a4:cf:12:8b:3d:91";
 const CLASS_START: Instant = Instant(1_000_000);
@@ -48,7 +47,10 @@ fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
 fn readers() -> ReaderRegistry {
     let device = DEVICE.replace(':', "");
     let mut registry = ReaderRegistry::new();
-    for (reader, mode) in [("rfid-01", ReaderMode::Entry), ("rfid-02", ReaderMode::Exit)] {
+    for (reader, mode) in [
+        ("rfid-01", ReaderMode::Entry),
+        ("rfid-02", ReaderMode::Exit),
+    ] {
         registry.register(ReaderRegistration::new(
             ReaderKey::parse(&device, reader).expect("key"),
             "SKIERG",
@@ -81,9 +83,11 @@ fn session(bound: bool) -> LiveSession {
 /// SKIERG in, SKIERG out, SKIERG in again: enough for a transition to be computed, which is
 /// the value most sensitive to replay order (CLAUDE.md 13).
 async fn run_the_class(state: &mut LiveSession, store: &FakeStore) {
-    for (reader, seq, at) in
-        [("rfid-01", 1, 1_010_000), ("rfid-02", 2, 1_070_000), ("rfid-01", 3, 1_090_000)]
-    {
+    for (reader, seq, at) in [
+        ("rfid-01", 1, 1_010_000),
+        ("rfid-02", 2, 1_070_000),
+        ("rfid-01", 3, 1_090_000),
+    ] {
         ingest_read(state, store, &read(reader, "TAG-A1", seq, at))
             .await
             .expect("ingest");
@@ -162,7 +166,10 @@ async fn a_late_binding_produces_exactly_what_an_early_one_would_have() {
         // the claim replayed in detected_at order (CLAUDE.md 13).
         assert_eq!(x.transition_from_prev, y.transition_from_prev);
     }
-    assert_eq!(early.session.interpreted_event_count, late.session.interpreted_event_count);
+    assert_eq!(
+        early.session.interpreted_event_count,
+        late.session.interpreted_event_count
+    );
 }
 
 #[tokio::test]
@@ -171,9 +178,15 @@ async fn claiming_twice_does_not_interpret_a_read_twice() {
     let mut state = session(false);
     run_the_class(&mut state, &store).await;
     let tag = TagId::parse("TAG-A1").unwrap();
-    bind_tag(&mut state, &store, &tag, "a1", &OperatorCommand::new("CHECKIN", Instant(1_100_000)))
-        .await
-        .expect("bind");
+    bind_tag(
+        &mut state,
+        &store,
+        &tag,
+        "a1",
+        &OperatorCommand::new("CHECKIN", Instant(1_100_000)),
+    )
+    .await
+    .expect("bind");
 
     // Re-running the claim, as a repeated tap on /checkin would.
     let again = rebind_tag(
@@ -213,10 +226,16 @@ async fn a_claimed_read_from_an_unregistered_reader_is_still_an_exception() {
 
     assert!(matches!(
         claimed[0],
-        Interpreted::Exception { reason: ExceptionReason::UnknownReader, .. }
+        Interpreted::Exception {
+            reason: ExceptionReason::UnknownReader,
+            ..
+        }
     ));
     assert_eq!(state.exception_count, 1);
-    assert_eq!(state.athlete("a1").unwrap().status, domain::AthleteStatus::Ready);
+    assert_eq!(
+        state.athlete("a1").unwrap().status,
+        domain::AthleteStatus::Ready
+    );
 }
 
 #[tokio::test]
@@ -302,7 +321,10 @@ async fn the_new_band_takes_over_from_the_swap_onwards() {
         .expect("ingest on the new band");
 
     match sole(&out) {
-        IngestOutcome::Interpreted { ref athlete_id, event: Interpreted::Exited { .. } } => {
+        IngestOutcome::Interpreted {
+            ref athlete_id,
+            event: Interpreted::Exited { .. },
+        } => {
             assert_eq!(athlete_id, "a1")
         }
         other => panic!("expected the new band to close the station run, got {other:?}"),

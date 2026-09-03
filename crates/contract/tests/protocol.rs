@@ -106,7 +106,11 @@ fn a_round_carries_every_tag_the_reader_saw() {
     v["tag_id"] = serde_json::json!(["E280117000001234", "E280117000005678"]);
     let e = EdgeEvent::decode(v.to_string().as_bytes()).unwrap();
     assert_eq!(e.tag_id, ["E280117000001234", "E280117000005678"]);
-    assert_eq!(EventId::of(&e).sequence(), 10382, "the round has one sequence, not one per tag");
+    assert_eq!(
+        EventId::of(&e).sequence(),
+        10382,
+        "the round has one sequence, not one per tag"
+    );
 }
 
 #[test]
@@ -164,7 +168,10 @@ fn device_id_parses_back_from_its_canonical_form() {
 fn reader_id_is_case_insensitive() {
     // Section 8 writes `RFID-02` in prose and `rfid-02` in the JSON example; folding case
     // stops the two spellings mapping to two different stations.
-    assert_eq!(ReaderId::parse("RFID-02").unwrap(), ReaderId::parse("rfid-02").unwrap());
+    assert_eq!(
+        ReaderId::parse("RFID-02").unwrap(),
+        ReaderId::parse("rfid-02").unwrap()
+    );
     assert!(ReaderId::parse("").is_err());
 }
 

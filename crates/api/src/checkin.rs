@@ -19,7 +19,7 @@ use crate::identity::{Body, OperatorDevice};
 use crate::read::freshness;
 use crate::state::CheckIn;
 use crate::wire::{
-    BindRequest, BindResponse, CheckInResponse, EnteredResponse, EnterRequest, SignupRequest,
+    BindRequest, BindResponse, CheckInResponse, EnterRequest, EnteredResponse, SignupRequest,
     SignupResponse,
 };
 use application::{Entrant, HubStore, OperatorCommand};
@@ -74,7 +74,10 @@ where
     let tag = parse_tag(&request.tag_id)?;
     let cmd = command(operator, now, request.reason);
     let claimed = checkin.bind(&tag, &request.athlete_id, &cmd).await?;
-    Ok(Json(BindResponse { freshness: freshness(checkin.read()).await, claimed }))
+    Ok(Json(BindResponse {
+        freshness: freshness(checkin.read()).await,
+        claimed,
+    }))
 }
 
 /// Moves an athlete onto a different band. Destructive, so the use case requires a reason
@@ -92,7 +95,10 @@ where
     let tag = parse_tag(&request.tag_id)?;
     let cmd = command(operator, now, request.reason);
     let claimed = checkin.rebind(&tag, &request.athlete_id, &cmd).await?;
-    Ok(Json(BindResponse { freshness: freshness(checkin.read()).await, claimed }))
+    Ok(Json(BindResponse {
+        freshness: freshness(checkin.read()).await,
+        claimed,
+    }))
 }
 
 fn parse_tag(raw: &str) -> Result<TagId, ApiError> {

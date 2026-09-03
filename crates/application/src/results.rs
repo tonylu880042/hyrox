@@ -117,7 +117,10 @@ pub async fn results<S: HubStore>(
     let policy = config.as_ref().map(|c| c.finish_policy).unwrap_or_default();
     let bibs = store.athlete_bibs(session_id).await?;
     let bib_of = |id: &str| {
-        bibs.iter().find(|(a, _)| a == id).map(|(_, b)| *b as usize).unwrap_or(0)
+        bibs.iter()
+            .find(|(a, _)| a == id)
+            .map(|(_, b)| *b as usize)
+            .unwrap_or(0)
     };
     let (ordering, rows) = rank(policy, &athletes, &bib_of);
 
@@ -143,7 +146,10 @@ fn rank(
     athletes: &[AthleteState],
     bib_of: &dyn Fn(&str) -> usize,
 ) -> (Ordering, Vec<ResultRow>) {
-    let mut rows: Vec<ResultRow> = athletes.iter().map(|a| row(bib_of(&a.athlete_id), a)).collect();
+    let mut rows: Vec<ResultRow> = athletes
+        .iter()
+        .map(|a| row(bib_of(&a.athlete_id), a))
+        .collect();
 
     if policy != FinishPolicy::CourseComplete {
         return (Ordering::Bib, rows);

@@ -13,9 +13,9 @@ use application::{
     StoredException,
 };
 use domain::{
-    Course, DeviceWarning, ExceptionReason, Exercise, FinishPolicy, Instant, Interpreted,
-    Expectation, ReaderMode, Session, SessionConfig, SessionMode, TemplateCategory,
-    WorkoutBlock, WorkoutTemplate,
+    Course, DeviceWarning, ExceptionReason, Exercise, Expectation, FinishPolicy, Instant,
+    Interpreted, ReaderMode, Session, SessionConfig, SessionMode, TemplateCategory, WorkoutBlock,
+    WorkoutTemplate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -552,6 +552,10 @@ pub struct LeaderboardResponse {
 pub fn layouts() -> Vec<PageLayout> {
     application::LIVE_PAGE_LAYOUTS
         .iter()
-        .map(|(size, columns, rows)| PageLayout { size: *size, columns: *columns, rows: *rows })
+        .map(|(size, columns, rows)| PageLayout {
+            size: *size,
+            columns: *columns,
+            rows: *rows,
+        })
         .collect()
 }

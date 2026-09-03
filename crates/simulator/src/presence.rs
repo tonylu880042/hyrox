@@ -82,7 +82,10 @@ pub struct TagPresence {
 
 impl TagPresence {
     pub fn new(timeout: AbsentTimeout) -> Self {
-        Self { timeout, last_seen: BTreeMap::new() }
+        Self {
+            timeout,
+            last_seen: BTreeMap::new(),
+        }
     }
 
     pub fn timeout(&self) -> AbsentTimeout {

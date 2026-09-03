@@ -181,7 +181,8 @@ const TEMPLATE_ALL: &str = "SELECT id, name, description, category, source, owne
      FROM workout_templates ORDER BY id";
 
 fn template_from_row(r: sqlx::sqlite::SqliteRow) -> Result<WorkoutTemplate, StoreError> {
-    let blocks: Vec<WorkoutBlock> = serde_json::from_str(r.get::<String, _>("blocks_json").as_str())?;
+    let blocks: Vec<WorkoutBlock> =
+        serde_json::from_str(r.get::<String, _>("blocks_json").as_str())?;
     Ok(WorkoutTemplate {
         id: r.get("id"),
         name: r.get("name"),

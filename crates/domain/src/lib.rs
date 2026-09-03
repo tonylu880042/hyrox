@@ -13,9 +13,8 @@ pub mod time;
 pub mod workout;
 
 pub use athlete::{
-    apply, decide, replay,
-    interpret, AthleteState, AthleteStatus, ExceptionReason, Interpreted, ReaderBinding,
-    ReaderMode, StationRun, StationState,
+    apply, decide, interpret, replay, AthleteState, AthleteStatus, ExceptionReason, Interpreted,
+    ReaderBinding, ReaderMode, StationRun, StationState,
 };
 pub use binding::{BindingError, BindingLedger, TagBinding, TagId, TagIdError};
 pub use config::SessionConfig;
@@ -26,7 +25,7 @@ pub use finish::{finish, FinishDecision, FinishPolicy};
 pub use member::{Gender, MemberRef, MembershipStatus};
 pub use reader::{ReaderKey, ReaderKeyError, ReaderRegistration, ReaderRegistry, UnknownReader};
 pub use session::{Session, SessionError, SessionMode, SessionStatus};
-pub use station::{Expectation, PhysicalStation, StationMap, expectation};
+pub use station::{expectation, Expectation, PhysicalStation, StationMap};
 pub use time::{ClassClock, Duration, Instant};
 pub use workout::{
     BlockType, CompileError, Exercise, ExerciseCategory, ExerciseLibrary, Target, TargetError,

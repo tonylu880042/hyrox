@@ -36,7 +36,11 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
-        Self { status, code, message: message.into() }
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
     }
 
     /// No operator device name on a write (ADR 0001 D1).
@@ -67,7 +71,10 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = ErrorBody { error: self.code, message: self.message };
+        let body = ErrorBody {
+            error: self.code,
+            message: self.message,
+        };
         (self.status, Json(body)).into_response()
     }
 }
@@ -140,7 +147,10 @@ impl<E: Display> From<OperatorError<E>> for ApiError {
             ),
             // A class on the floor outranks a button (M6). 409 rather than 403: the request
             // is legitimate, this is just the wrong moment.
-            OperatorError::UnknownReader { device_id, reader_id } => ApiError::not_found(
+            OperatorError::UnknownReader {
+                device_id,
+                reader_id,
+            } => ApiError::not_found(
                 "UNKNOWN_READER",
                 format!("no reader registered as {device_id} {reader_id}"),
             ),
@@ -269,7 +279,10 @@ fn compile_message(error: &domain::CompileError) -> String {
 
 fn binding(error: BindingError) -> ApiError {
     match error {
-        BindingError::TagAlreadyBound { session_id, athlete_id } => ApiError::new(
+        BindingError::TagAlreadyBound {
+            session_id,
+            athlete_id,
+        } => ApiError::new(
             StatusCode::CONFLICT,
             "TAG_ALREADY_BOUND",
             format!("that band is already on {athlete_id:?} in session {session_id:?}"),

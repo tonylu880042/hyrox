@@ -12,17 +12,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StationTarget {
-    Distance { meters: u32 },
-    Repetitions { count: u32 },
+    Distance {
+        meters: u32,
+    },
+    Repetitions {
+        count: u32,
+    },
     /// Ergs are commonly prescribed in calories rather than metres. Like every other
     /// target this is a label the hub displays, not a number it can verify: RFID reports
     /// entry and exit, nothing about what happened on the machine (ADR 0001).
-    Calories { count: u32 },
+    Calories {
+        count: u32,
+    },
     /// The hub only learns entry/exit times from RFID, so a duration target is a label to
     /// display, not something it can verify (ADR 0001, 2026-08-27 addendum).
     // A struct variant, not a newtype: an internally tagged enum cannot serialise a
     // newtype variant wrapping a scalar.
-    Duration { duration: Duration },
+    Duration {
+        duration: Duration,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +41,10 @@ pub struct CourseStep {
 
 impl CourseStep {
     pub fn new(station: impl Into<String>) -> Self {
-        Self { station: station.into(), target: None }
+        Self {
+            station: station.into(),
+            target: None,
+        }
     }
 
     pub fn with_target(mut self, target: StationTarget) -> Self {
@@ -52,7 +63,10 @@ pub struct Course {
 
 impl Course {
     pub fn new(name: impl Into<String>, steps: Vec<CourseStep>) -> Self {
-        Self { name: name.into(), steps }
+        Self {
+            name: name.into(),
+            steps,
+        }
     }
 
     pub fn len(&self) -> usize {

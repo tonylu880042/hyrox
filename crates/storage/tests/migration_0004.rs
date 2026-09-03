@@ -45,14 +45,20 @@ async fn legacy_db() -> SqlitePool {
 }
 
 async fn scalar(pool: &SqlitePool, sql: &str) -> i64 {
-    sqlx::query(sql).fetch_one(pool).await.expect("a row").get::<i64, _>(0)
+    sqlx::query(sql)
+        .fetch_one(pool)
+        .await
+        .expect("a row")
+        .get::<i64, _>(0)
 }
 
 #[tokio::test]
 async fn migration_0004_applies_to_a_database_that_already_holds_events() {
     let pool = legacy_db().await;
 
-    pool.execute(M4).await.expect("0004 must apply to a database with events in it");
+    pool.execute(M4)
+        .await
+        .expect("0004 must apply to a database with events in it");
 
     // The statuses were translated, not dropped.
     let statuses: Vec<(String, String)> =
@@ -73,19 +79,38 @@ async fn migration_0004_applies_to_a_database_that_already_holds_events() {
     );
 
     // Nothing was lost on the way through.
-    assert_eq!(scalar(&pool, "SELECT count(*) FROM interpreted_events").await, 2);
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM interpreted_events").await,
+        2
+    );
     assert_eq!(scalar(&pool, "SELECT count(*) FROM raw_events").await, 1);
-    assert_eq!(scalar(&pool, "SELECT count(*) FROM session_athletes").await, 1);
-    assert_eq!(scalar(&pool, "SELECT count(*) FROM session_configs").await, 1);
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM session_athletes").await,
+        1
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM session_configs").await,
+        1
+    );
 
     // Interpreted row ids are named by audit records and by the void use case, so they must
     // survive the rebuild unchanged.
-    assert_eq!(scalar(&pool, "SELECT min(id) FROM interpreted_events").await, 41);
-    assert_eq!(scalar(&pool, "SELECT max(id) FROM interpreted_events").await, 42);
+    assert_eq!(
+        scalar(&pool, "SELECT min(id) FROM interpreted_events").await,
+        41
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT max(id) FROM interpreted_events").await,
+        42
+    );
 
     // And the link back to the immutable raw row still resolves.
     assert_eq!(
-        scalar(&pool, "SELECT raw_event_id FROM interpreted_events WHERE id = 41").await,
+        scalar(
+            &pool,
+            "SELECT raw_event_id FROM interpreted_events WHERE id = 41"
+        )
+        .await,
         1
     );
 }
@@ -128,7 +153,11 @@ async fn every_child_row_still_resolves_to_its_session() {
         .await
         .expect("a check");
 
-    assert!(violations.is_empty(), "{} dangling references", violations.len());
+    assert!(
+        violations.is_empty(),
+        "{} dangling references",
+        violations.len()
+    );
 }
 
 /// The new vocabulary has to be *permitted*, not merely written: a CHECK constraint that
@@ -138,7 +167,14 @@ async fn the_widened_check_accepts_every_new_state() {
     let pool = legacy_db().await;
     pool.execute(M4).await.expect("applied");
 
-    for status in ["DRAFT", "READY", "RUNNING", "PAUSED", "COMPLETED", "CANCELLED"] {
+    for status in [
+        "DRAFT",
+        "READY",
+        "RUNNING",
+        "PAUSED",
+        "COMPLETED",
+        "CANCELLED",
+    ] {
         sqlx::query(
             "INSERT INTO sessions (id, name, mode, status, interpreted_event_count, created_at)
              VALUES (?1, 'x', 'TRAINING', ?2, 0, 0)",
@@ -156,5 +192,8 @@ async fn the_widened_check_accepts_every_new_state() {
     )
     .execute(&pool)
     .await;
-    assert!(refused.is_err(), "the retired vocabulary must not come back");
+    assert!(
+        refused.is_err(),
+        "the retired vocabulary must not come back"
+    );
 }

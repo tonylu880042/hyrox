@@ -185,7 +185,11 @@ async fn a_walk_in_is_entered_with_only_a_name() {
 
     let (status, body) = call(
         &router,
-        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "陳小明" })),
+        post(
+            "/api/checkin/entrants",
+            "DOOR TABLET",
+            json!({ "display_name": "陳小明" }),
+        ),
     )
     .await;
 
@@ -193,10 +197,16 @@ async fn a_walk_in_is_entered_with_only_a_name() {
     // A walk-in's id is their entry code: six characters they can carry on a QR and type
     // back afterwards (ADR 0011).
     let id = body["athlete_id"].as_str().expect("an id");
-    assert!(domain::EntryCode::parse(id).is_ok(), "{id:?} should be an entry code");
+    assert!(
+        domain::EntryCode::parse(id).is_ok(),
+        "{id:?} should be an entry code"
+    );
     let saved = store.saved_athletes().pop().expect("a roster row");
     assert_eq!(saved.display_name, "陳小明");
-    assert_eq!(saved.member_id, None, "no member reference is the record, not a gap");
+    assert_eq!(
+        saved.member_id, None,
+        "no member reference is the record, not a gap"
+    );
 }
 
 #[tokio::test]
@@ -205,7 +215,11 @@ async fn an_entrant_may_be_given_a_printed_bib() {
 
     let (status, _) = call(
         &router,
-        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "A", "bib": 42 })),
+        post(
+            "/api/checkin/entrants",
+            "DOOR TABLET",
+            json!({ "display_name": "A", "bib": 42 }),
+        ),
     )
     .await;
 
@@ -216,11 +230,23 @@ async fn an_entrant_may_be_given_a_printed_bib() {
 #[tokio::test]
 async fn a_bib_already_in_use_is_refused() {
     let (router, _) = running();
-    call(&router, post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "A", "bib": 7 }))).await;
+    call(
+        &router,
+        post(
+            "/api/checkin/entrants",
+            "DOOR TABLET",
+            json!({ "display_name": "A", "bib": 7 }),
+        ),
+    )
+    .await;
 
     let (status, body) = call(
         &router,
-        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "B", "bib": 7 })),
+        post(
+            "/api/checkin/entrants",
+            "DOOR TABLET",
+            json!({ "display_name": "B", "bib": 7 }),
+        ),
     )
     .await;
 
@@ -234,7 +260,11 @@ async fn an_entrant_with_a_blank_name_is_refused() {
 
     let (status, body) = call(
         &router,
-        post("/api/checkin/entrants", "DOOR TABLET", json!({ "display_name": "   " })),
+        post(
+            "/api/checkin/entrants",
+            "DOOR TABLET",
+            json!({ "display_name": "   " }),
+        ),
     )
     .await;
 
@@ -248,7 +278,10 @@ async fn an_entrant_with_a_blank_name_is_refused() {
 async fn the_door_tablet_still_cannot_touch_the_session() {
     let (router, _) = running();
 
-    for path in ["/api/checkin/session/start", "/api/checkin/session/complete"] {
+    for path in [
+        "/api/checkin/session/start",
+        "/api/checkin/session/complete",
+    ] {
         let (status, _) = call(&router, post(path, "DOOR TABLET", json!({}))).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path} must not exist");
     }

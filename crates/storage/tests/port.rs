@@ -2,10 +2,9 @@
 //! port added to this crate: the audit log (CLAUDE.md 20) and the roster exception reason.
 
 use application::{AuditEntry, HubStore, InterpretedWrite, RawRead};
-use domain::{ExceptionReason, Instant, Interpreted, Session, SessionMode};
 use contract::CommitOutcome;
+use domain::{ExceptionReason, Instant, Interpreted, Session, SessionMode};
 use storage::Store;
-
 
 const T0: i64 = 1_787_734_800_000;
 
@@ -26,8 +25,12 @@ async fn armed_store() -> (Store, Session) {
     let mut session = Session::new_draft("s1", "Thursday Class", SessionMode::Training);
     session.mark_ready().unwrap();
     session.start().unwrap();
-    HubStore::save_session(&store, &session, Instant(T0)).await.unwrap();
-    HubStore::save_athlete(&store, "s1", "a1", "CHEN YU-TING", 1, None).await.unwrap();
+    HubStore::save_session(&store, &session, Instant(T0))
+        .await
+        .unwrap();
+    HubStore::save_athlete(&store, "s1", "a1", "CHEN YU-TING", 1, None)
+        .await
+        .unwrap();
     (store, session)
 }
 
@@ -93,13 +96,25 @@ async fn an_accepted_exception_leaves_the_inbox_but_stays_in_the_log() {
     assert_eq!(HubStore::exception_count(&store, "s1").await.unwrap(), 1);
 
     let accepted = store
-        .acknowledge_interpreted(id, Instant(T0 + 60_000), "FRONT DESK TABLET", Some("重複靠卡"))
+        .acknowledge_interpreted(
+            id,
+            Instant(T0 + 60_000),
+            "FRONT DESK TABLET",
+            Some("重複靠卡"),
+        )
         .await
         .unwrap();
 
     assert!(accepted);
-    assert!(HubStore::exceptions(&store, "s1").await.unwrap().is_empty(), "out of the inbox");
-    assert_eq!(HubStore::exception_count(&store, "s1").await.unwrap(), 0, "and out of the badge");
+    assert!(
+        HubStore::exceptions(&store, "s1").await.unwrap().is_empty(),
+        "out of the inbox"
+    );
+    assert_eq!(
+        HubStore::exception_count(&store, "s1").await.unwrap(),
+        0,
+        "and out of the badge"
+    );
     // Still there, and still not voided: a correction that erased the evidence would be the
     // one thing CLAUDE.md 19 forbids.
     let row: (i64, Option<i64>, Option<String>) = sqlx::query_as(

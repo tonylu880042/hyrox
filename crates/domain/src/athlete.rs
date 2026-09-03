@@ -178,7 +178,10 @@ pub fn decide(
         if !inside_this {
             return exception(ExceptionReason::ImpossibleTransition);
         }
-        Interpreted::Exited { station: binding.station.clone(), at }
+        Interpreted::Exited {
+            station: binding.station.clone(),
+            at,
+        }
     };
 
     match binding.mode {
@@ -205,7 +208,12 @@ pub fn decide(
 /// live at the interpreted layer and re-deciding would silently discard them (CLAUDE.md 20).
 pub fn apply(state: &mut AthleteState, event: &Interpreted) {
     match event {
-        Interpreted::Entered { station, at, transition, started_timing } => {
+        Interpreted::Entered {
+            station,
+            at,
+            transition,
+            started_timing,
+        } => {
             if *started_timing {
                 state.status = AthleteStatus::Active;
                 state.started_at = Some(*at);

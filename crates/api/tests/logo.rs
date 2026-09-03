@@ -22,14 +22,22 @@ fn png() -> Vec<u8> {
 async fn a_venue_uploads_a_logo_and_the_screens_can_fetch_it() {
     let (router, _store) = running();
 
-    let (status, _body) = call(&router, upload("/api/operator/logo", DESK, "image/png", png())).await;
+    let (status, _body) = call(
+        &router,
+        upload("/api/operator/logo", DESK, "image/png", png()),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Read without an operator name: the projector is a screen on a wall, not an operator.
     let (code, content_type, body) = raw_bytes(&router, get("/api/logo")).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(content_type, "image/png");
-    assert_eq!(body, png(), "the bytes served are the bytes that were uploaded");
+    assert_eq!(
+        body,
+        png(),
+        "the bytes served are the bytes that were uploaded"
+    );
 }
 
 /// Before anybody uploads one there is no logo, and that is an answer rather than a fault:
@@ -51,7 +59,12 @@ async fn an_svg_is_refused_with_a_reason_that_explains_itself() {
 
     let (status, body) = call(
         &router,
-        upload("/api/operator/logo", DESK, "image/svg+xml", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec()),
+        upload(
+            "/api/operator/logo",
+            DESK,
+            "image/svg+xml",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec(),
+        ),
     )
     .await;
 
@@ -69,8 +82,16 @@ async fn an_svg_is_refused_with_a_reason_that_explains_itself() {
 async fn something_that_only_claims_to_be_a_png_is_refused() {
     let (router, _store) = running();
 
-    let (status, body) =
-        call(&router, upload("/api/operator/logo", DESK, "image/png", b"MZ not really".to_vec())).await;
+    let (status, body) = call(
+        &router,
+        upload(
+            "/api/operator/logo",
+            DESK,
+            "image/png",
+            b"MZ not really".to_vec(),
+        ),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(body["error"], "UNSUPPORTED_IMAGE");
@@ -80,9 +101,13 @@ async fn something_that_only_claims_to_be_a_png_is_refused() {
 async fn a_photograph_sized_file_is_refused() {
     let (router, _store) = running();
     let mut huge = png();
-    huge.extend(std::iter::repeat(0u8).take(application::MAX_ASSET_BYTES + 1));
+    huge.resize(huge.len() + application::MAX_ASSET_BYTES + 1, 0u8);
 
-    let (status, body) = call(&router, upload("/api/operator/logo", DESK, "image/png", huge)).await;
+    let (status, body) = call(
+        &router,
+        upload("/api/operator/logo", DESK, "image/png", huge),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(body["error"], "IMAGE_TOO_LARGE");
@@ -92,12 +117,19 @@ async fn a_photograph_sized_file_is_refused() {
 async fn uploading_a_logo_needs_an_operator_name_and_is_audited() {
     let (router, store) = running();
 
-    let (status, body) =
-        call(&router, support::upload_anonymous("/api/operator/logo", "image/png", png())).await;
+    let (status, body) = call(
+        &router,
+        support::upload_anonymous("/api/operator/logo", "image/png", png()),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "OPERATOR_REQUIRED");
 
-    call(&router, upload("/api/operator/logo", DESK, "image/png", png())).await;
+    call(
+        &router,
+        upload("/api/operator/logo", DESK, "image/png", png()),
+    )
+    .await;
     let audit = store.audits().pop().expect("an audit record");
     assert_eq!(audit.action, "VENUE_ASSET");
     assert_eq!(audit.operator, DESK);
@@ -106,9 +138,17 @@ async fn uploading_a_logo_needs_an_operator_name_and_is_audited() {
 #[tokio::test]
 async fn a_logo_can_be_removed_and_the_screens_go_back_to_having_none() {
     let (router, _store) = running();
-    call(&router, upload("/api/operator/logo", DESK, "image/png", png())).await;
+    call(
+        &router,
+        upload("/api/operator/logo", DESK, "image/png", png()),
+    )
+    .await;
 
-    let (status, _body) = call(&router, support::del("/api/operator/logo", DESK, serde_json::json!({}))).await;
+    let (status, _body) = call(
+        &router,
+        support::del("/api/operator/logo", DESK, serde_json::json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     let (code, _ct, _body) = raw_bytes(&router, get("/api/logo")).await;

@@ -36,7 +36,10 @@ pub enum IngestOutcome {
     Duplicate,
     /// Attributed to an athlete. `event` may be an `Exception`: those are interpretations
     /// too, and they belong to someone (ADR 0001 D4).
-    Interpreted { athlete_id: String, event: Interpreted },
+    Interpreted {
+        athlete_id: String,
+        event: Interpreted,
+    },
     /// The band belongs to nobody yet. Not an error: it goes to `/checkin`, and the raw
     /// read is kept so it can be claimed retroactively once the tag is bound (ADR 0001 D3).
     PendingBinding { tag_id: TagId },
@@ -80,18 +83,43 @@ pub async fn ingest_read<S: HubStore>(
     store: &S,
     received: &ReceivedEvent,
 ) -> Result<Ingested, IngestError<S::Error>> {
-    let sink = RawSink { store, raw_event_ids: Mutex::new(Vec::new()) };
+    let sink = RawSink {
+        store,
+        raw_event_ids: Mutex::new(Vec::new()),
+    };
     // Routed through `contract::ingest` on purpose: it is the only place an `Ack` can be
     // minted, and only on the line after a successful commit (ADR 0002). Doing the commit here
     // and building an ACK beside it would reopen exactly the hole that ADR closed.
-    let ack = contract::ingest(&sink, received).await.map_err(|e| match e {
-        contract::IngestError::Storage(e) => IngestError::Storage(e),
-        contract::IngestError::Malformed(w) => IngestError::Malformed(w),
-    })?;
+    let ack = contract::ingest(&sink, received)
+        .await
+        .map_err(|e| match e {
+            contract::IngestError::Storage(e) => IngestError::Storage(e),
+            contract::IngestError::Malformed(w) => IngestError::Malformed(w),
+        })?;
+    let raw_event_ids = sink
+        .raw_event_ids
+        .into_inner()
+        .expect("the sink is not poisoned");
+
     if ack.payload().status == AckStatus::Duplicate {
-        return Ok(Ingested { ack, outcomes: vec![IngestOutcome::Duplicate] });
+        let mut all_interpreted = true;
+        for &id in &raw_event_ids {
+            if !store
+                .raw_event_has_interpretation(id)
+                .await
+                .map_err(IngestError::Storage)?
+            {
+                all_interpreted = false;
+                break;
+            }
+        }
+        if all_interpreted {
+            return Ok(Ingested {
+                ack,
+                outcomes: vec![IngestOutcome::Duplicate],
+            });
+        }
     }
-    let raw_event_ids = sink.raw_event_ids.into_inner().expect("the sink is not poisoned");
 
     let edge = received.event();
     // Official timing, always (CLAUDE.md 11, 17). Every tag in a round was in the field at
@@ -103,6 +131,14 @@ pub async fn ingest_read<S: HubStore>(
     // committed, which is the order they arrived in.
     let mut outcomes = Vec::with_capacity(edge.tag_id.len());
     for (raw_tag, raw_event_id) in edge.tag_id.iter().zip(raw_event_ids) {
+        if store
+            .raw_event_has_interpretation(raw_event_id)
+            .await
+            .map_err(IngestError::Storage)?
+        {
+            outcomes.push(IngestOutcome::Duplicate);
+            continue;
+        }
         let Ok(tag) = TagId::parse(raw_tag) else {
             outcomes.push(IngestOutcome::Unattributable);
             continue;
@@ -125,12 +161,14 @@ pub async fn ingest_read<S: HubStore>(
         let event = match attribute_read(
             state,
             store,
-            &athlete_id,
-            on_roster,
-            edge.device_id.as_str(),
-            edge.reader_id.as_str(),
-            Some(raw_event_id),
-            at,
+            ReadContext {
+                athlete_id: &athlete_id,
+                on_roster,
+                device_id: edge.device_id.as_str(),
+                reader_id: edge.reader_id.as_str(),
+                raw_event_id: Some(raw_event_id),
+                at,
+            },
         )
         .await
         {
@@ -145,6 +183,16 @@ pub async fn ingest_read<S: HubStore>(
     }
 
     Ok(Ingested { ack, outcomes })
+}
+
+/// The context of a read ready to be attributed to an athlete.
+pub(crate) struct ReadContext<'a> {
+    pub athlete_id: &'a str,
+    pub on_roster: bool,
+    pub device_id: &'a str,
+    pub reader_id: &'a str,
+    pub raw_event_id: Option<i64>,
+    pub at: Instant,
 }
 
 /// Interprets one read for a known athlete and folds it in -- but only after the store has
@@ -162,36 +210,37 @@ pub async fn ingest_read<S: HubStore>(
 pub(crate) async fn attribute_read<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
-    athlete_id: &str,
-    on_roster: bool,
-    device_id: &str,
-    reader_id: &str,
-    raw_event_id: Option<i64>,
-    at: Instant,
+    ctx: ReadContext<'_>,
 ) -> Result<Interpreted, S::Error> {
     // Reader resolution (CLAUDE.md 8). A pair that parses but is not registered, and a pair
     // that does not even parse, are the same thing to an operator: hardware the hub has no
     // mapping for.
-    let reader = ReaderKey::parse(device_id, reader_id)
+    let reader = ReaderKey::parse(ctx.device_id, ctx.reader_id)
         .ok()
         .and_then(|key| state.readers.resolve(&key).ok().map(|r| r.binding()));
 
-    let event = match (on_roster, reader) {
-        (false, _) => Interpreted::Exception { reason: ExceptionReason::AthleteNotInSession, at },
+    let event = match (ctx.on_roster, reader) {
+        (false, _) => Interpreted::Exception {
+            reason: ExceptionReason::AthleteNotInSession,
+            at: ctx.at,
+        },
         // The reader is unknown but the athlete is not: attribute the exception to them, so
         // it shows up against the person the operator has to talk to.
-        (true, None) => Interpreted::Exception { reason: ExceptionReason::UnknownReader, at },
+        (true, None) => Interpreted::Exception {
+            reason: ExceptionReason::UnknownReader,
+            at: ctx.at,
+        },
         (true, Some(binding)) => {
-            let athlete = state.athlete(athlete_id).expect("checked by on_roster");
-            domain::decide(athlete, &binding, at, &state.session)
+            let athlete = state.athlete(ctx.athlete_id).expect("checked by on_roster");
+            domain::decide(athlete, &binding, ctx.at, &state.session)
         }
     };
 
     store
         .commit_interpreted(InterpretedWrite {
             session_id: &state.session.id,
-            athlete_id,
-            raw_event_id,
+            athlete_id: ctx.athlete_id,
+            raw_event_id: ctx.raw_event_id,
             event: &event,
         })
         .await?;
@@ -202,7 +251,7 @@ pub(crate) async fn attribute_read<S: HubStore>(
         Interpreted::Exception { .. } => state.exception_count += 1,
         _ => state.session.interpreted_event_count += 1,
     }
-    if let Some(athlete) = state.athlete_mut(athlete_id) {
+    if let Some(athlete) = state.athlete_mut(ctx.athlete_id) {
         domain::apply(athlete, &event);
     }
     Ok(event)

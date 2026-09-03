@@ -16,18 +16,35 @@ const DESK: &str = "FRONT DESK TABLET";
 async fn a_draft_session_is_made_ready_and_then_started() {
     let (router, store) = draft();
 
-    let (status, body) = call(&router, post("/api/operator/session/ready", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/ready", DESK, json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "READY");
-    assert_eq!(body["config_editable"], true, "today's tweaks happen in READY");
+    assert_eq!(
+        body["config_editable"], true,
+        "today's tweaks happen in READY"
+    );
 
-    let (status, body) = call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/start", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "RUNNING");
-    assert_eq!(body["config_editable"], false, "a running class keeps the plan it started on");
+    assert_eq!(
+        body["config_editable"], false,
+        "a running class keeps the plan it started on"
+    );
     // Persisted before it was claimed, and audited under the device that did it.
-    assert_eq!(store.saved_sessions()[0].status, domain::SessionStatus::Running);
+    assert_eq!(
+        store.saved_sessions()[0].status,
+        domain::SessionStatus::Running
+    );
     let audit = store.audits().pop().expect("an audit record");
     assert_eq!(audit.action, "SESSION_START");
     assert_eq!(audit.operator, DESK);
@@ -39,7 +56,11 @@ async fn a_draft_session_is_made_ready_and_then_started() {
 async fn a_draft_session_cannot_be_started_directly() {
     let (router, store) = draft();
 
-    let (status, body) = call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/start", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "ILLEGAL_TRANSITION");
@@ -50,11 +71,19 @@ async fn a_draft_session_cannot_be_started_directly() {
 async fn a_running_class_pauses_and_resumes() {
     let (router, store) = running();
 
-    let (status, body) = call(&router, post("/api/operator/session/pause", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/pause", DESK, json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "PAUSED");
 
-    let (status, body) = call(&router, post("/api/operator/session/resume", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/resume", DESK, json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "RUNNING");
 
@@ -69,7 +98,11 @@ async fn a_running_class_pauses_and_resumes() {
 async fn cancelling_needs_a_reason() {
     let (router, store) = running();
 
-    let (status, body) = call(&router, post("/api/operator/session/cancel", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/cancel", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "REASON_REQUIRED");
@@ -82,7 +115,11 @@ async fn cancelling_with_a_reason_ends_the_class() {
 
     let (status, body) = call(
         &router,
-        post("/api/operator/session/cancel", DESK, json!({ "reason": "停電" })),
+        post(
+            "/api/operator/session/cancel",
+            DESK,
+            json!({ "reason": "停電" }),
+        ),
     )
     .await;
 
@@ -97,11 +134,18 @@ async fn cancelling_with_a_reason_ends_the_class() {
 async fn a_running_session_completes() {
     let (router, store) = running();
 
-    let (status, body) = call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/complete", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "COMPLETED");
-    assert_eq!(store.audits().pop().expect("an audit").action, "SESSION_COMPLETE");
+    assert_eq!(
+        store.audits().pop().expect("an audit").action,
+        "SESSION_COMPLETE"
+    );
 }
 
 /// A DRAFT session was never accepting events, so there is nothing to close. 409, because
@@ -110,7 +154,11 @@ async fn a_running_session_completes() {
 async fn a_draft_session_cannot_be_completed() {
     let (router, store) = draft();
 
-    let (status, body) = call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/complete", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "ILLEGAL_TRANSITION");
@@ -122,9 +170,17 @@ async fn a_draft_session_cannot_be_completed() {
 #[tokio::test]
 async fn reopening_a_completed_session_needs_a_reason() {
     let (router, store) = running();
-    call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
+    call(
+        &router,
+        post("/api/operator/session/complete", DESK, json!({})),
+    )
+    .await;
 
-    let (status, body) = call(&router, post("/api/operator/session/reopen", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/reopen", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "REASON_REQUIRED");
@@ -134,11 +190,19 @@ async fn reopening_a_completed_session_needs_a_reason() {
 #[tokio::test]
 async fn a_completed_session_reopens_with_a_reason() {
     let (router, store) = running();
-    call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
+    call(
+        &router,
+        post("/api/operator/session/complete", DESK, json!({})),
+    )
+    .await;
 
     let (status, body) = call(
         &router,
-        post("/api/operator/session/reopen", DESK, json!({ "reason": "誤觸" })),
+        post(
+            "/api/operator/session/reopen",
+            DESK,
+            json!({ "reason": "誤觸" }),
+        ),
     )
     .await;
 
@@ -158,9 +222,17 @@ async fn a_completed_session_reopens_with_a_reason() {
 #[tokio::test]
 async fn start_does_not_double_as_reopen() {
     let (router, _) = running();
-    call(&router, post("/api/operator/session/complete", DESK, json!({}))).await;
+    call(
+        &router,
+        post("/api/operator/session/complete", DESK, json!({})),
+    )
+    .await;
 
-    let (status, body) = call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/start", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "REASON_REQUIRED");
@@ -170,7 +242,11 @@ async fn start_does_not_double_as_reopen() {
 async fn a_running_session_with_nothing_interpreted_returns_to_draft() {
     let (router, _) = running();
 
-    let (status, body) = call(&router, post("/api/operator/session/draft", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/draft", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session"]["status"], "DRAFT");
@@ -188,7 +264,11 @@ async fn an_running_session_that_has_interpreted_events_cannot_return_to_draft()
     state.session.interpreted_event_count = 1;
     let (router, _) = support::hub(state, store);
 
-    let (status, body) = call(&router, post("/api/operator/session/draft", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/session/draft", DESK, json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "HAS_INTERPRETED_EVENTS");
@@ -220,7 +300,13 @@ async fn a_draft_session_can_be_given_a_course_and_a_finish_rule() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["config"]["course"]["steps"].as_array().expect("steps").len(), 2);
+    assert_eq!(
+        body["config"]["course"]["steps"]
+            .as_array()
+            .expect("steps")
+            .len(),
+        2
+    );
     assert_eq!(body["config"]["finish_policy"]["kind"], "CLASS_DURATION");
     assert_eq!(store.saved_configs().len(), 1);
 }
@@ -292,8 +378,16 @@ async fn a_class_with_a_finish_rule_can_be_ended_by_hand() {
         ),
     )
     .await;
-    call(&router, post("/api/operator/session/ready", DESK, json!({}))).await;
-    call(&router, post("/api/operator/session/start", DESK, json!({}))).await;
+    call(
+        &router,
+        post("/api/operator/session/ready", DESK, json!({})),
+    )
+    .await;
+    call(
+        &router,
+        post("/api/operator/session/start", DESK, json!({})),
+    )
+    .await;
 
     let (status, body) = call(
         &router,
@@ -400,7 +494,11 @@ async fn voiding_an_exception_needs_a_reason_and_a_real_event() {
 
     let (status, body) = call(
         &router,
-        post("/api/operator/exceptions/999/void", DESK, json!({ "reason": "誤刷" })),
+        post(
+            "/api/operator/exceptions/999/void",
+            DESK,
+            json!({ "reason": "誤刷" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -430,7 +528,11 @@ async fn a_percent_encoded_device_name_is_read_back_as_itself() {
 
     let (status, _) = call(
         &router,
-        post("/api/operator/session/complete", "%E6%AB%83%E6%AA%AF%E5%B9%B3%E6%9D%BF", json!({})),
+        post(
+            "/api/operator/session/complete",
+            "%E6%AB%83%E6%AA%AF%E5%B9%B3%E6%9D%BF",
+            json!({}),
+        ),
     )
     .await;
 
@@ -447,12 +549,22 @@ async fn an_operator_device_may_be_named_in_chinese() {
     // into no operator at all -- the anonymous audit row D1 exists to prevent.
     let (router, store) = running();
 
-    let (status, _) =
-        call(&router, post("/api/operator/session/complete", "櫃檯平板", json!({}))).await;
+    let (status, _) = call(
+        &router,
+        post("/api/operator/session/complete", "櫃檯平板", json!({})),
+    )
+    .await;
 
-    assert_eq!(status, StatusCode::OK, "a Chinese device name must be accepted");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a Chinese device name must be accepted"
+    );
     let audit = store.audits().pop().expect("an audit record");
-    assert_eq!(audit.operator, "櫃檯平板", "the name must reach the audit trail verbatim");
+    assert_eq!(
+        audit.operator, "櫃檯平板",
+        "the name must reach the audit trail verbatim"
+    );
 }
 
 // --- backups (ADR 0012) ---------------------------------------------------------------
@@ -468,7 +580,10 @@ async fn the_operator_surface_takes_a_backup_and_says_where_it_went() {
 
     assert_eq!(status, StatusCode::OK);
     let path = body["path"].as_str().expect("the path it was written to");
-    assert!(path.ends_with(".db"), "{path:?} should name a database file");
+    assert!(
+        path.ends_with(".db"),
+        "{path:?} should name a database file"
+    );
     assert_eq!(store.backups().len(), 1, "one backup was taken");
     assert_eq!(store.backups()[0].display().to_string(), path);
 }
@@ -510,8 +625,11 @@ async fn taking_a_backup_is_audited() {
 async fn a_backup_needs_an_operator_name_like_any_other_write() {
     let (router, _store) = running();
 
-    let (status, body) =
-        call(&router, support::anonymous("POST", "/api/operator/backup", json!({}))).await;
+    let (status, body) = call(
+        &router,
+        support::anonymous("POST", "/api/operator/backup", json!({})),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "OPERATOR_REQUIRED");
@@ -541,7 +659,11 @@ async fn a_reader_can_be_registered_by_hand_and_then_removed() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body["readers"].as_array().expect("a list").iter().any(|r| r["reader_id"] == "rfid-07"),
+        body["readers"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|r| r["reader_id"] == "rfid-07"),
         "the new reader is on the map"
     );
 
@@ -557,10 +679,17 @@ async fn a_reader_can_be_registered_by_hand_and_then_removed() {
 
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !body["readers"].as_array().expect("a list").iter().any(|r| r["reader_id"] == "rfid-07"),
+        !body["readers"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|r| r["reader_id"] == "rfid-07"),
         "and off it again"
     );
-    assert_eq!(store.deleted_readers(), [("a4cf128b3d91".to_string(), "rfid-07".to_string())]);
+    assert_eq!(
+        store.deleted_readers(),
+        [("a4cf128b3d91".to_string(), "rfid-07".to_string())]
+    );
 }
 
 /// Reads from it stop being attributed from here on, so somebody has to say why
@@ -578,8 +707,15 @@ async fn removing_a_reader_needs_a_reason() {
     )
     .await;
 
-    let (status, body) =
-        call(&router, support::del("/api/operator/readers/a4cf128b3d91/rfid-07", DESK, json!({}))).await;
+    let (status, body) = call(
+        &router,
+        support::del(
+            "/api/operator/readers/a4cf128b3d91/rfid-07",
+            DESK,
+            json!({}),
+        ),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "REASON_REQUIRED");
@@ -591,7 +727,11 @@ async fn removing_a_reader_nobody_registered_is_a_clear_no() {
 
     let (status, body) = call(
         &router,
-        support::del("/api/operator/readers/a4cf128b3d91/rfid-99", DESK, json!({ "reason": "x" })),
+        support::del(
+            "/api/operator/readers/a4cf128b3d91/rfid-99",
+            DESK,
+            json!({ "reason": "x" }),
+        ),
     )
     .await;
 

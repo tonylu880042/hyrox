@@ -70,7 +70,9 @@ pub fn classify(topic_name: &str, payload: &[u8]) -> Inbound {
             Err(error) => undecodable(topic_name, error, payload),
         };
     }
-    Inbound::Foreign { topic: topic_name.to_string() }
+    Inbound::Foreign {
+        topic: topic_name.to_string(),
+    }
 }
 
 fn undecodable(topic_name: &str, error: WireError, payload: &[u8]) -> Inbound {

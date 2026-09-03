@@ -20,7 +20,10 @@ async fn a_hub_without_demo_data_says_so_and_refuses_to_load_any() {
 
     let (status, body) = call(&router, get("/api/settings")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["demo_available"], false, "the screen has nothing to draw");
+    assert_eq!(
+        body["demo_available"], false,
+        "the screen has nothing to draw"
+    );
 
     let (status, body) = call(&router, post("/api/operator/demo", DESK, json!({}))).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -57,8 +60,11 @@ async fn demo_data_is_refused_while_a_class_is_running() {
 async fn loading_demo_data_is_audited_and_needs_an_operator_name() {
     let (router, _demo) = demo_hub(completed_session());
 
-    let (status, body) =
-        call(&router, support::anonymous("POST", "/api/operator/demo", json!({}))).await;
+    let (status, body) = call(
+        &router,
+        support::anonymous("POST", "/api/operator/demo", json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "OPERATOR_REQUIRED");
 }

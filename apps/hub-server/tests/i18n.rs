@@ -57,7 +57,11 @@ fn keys_of(language: &str) -> Vec<String> {
 #[test]
 fn every_language_defines_exactly_the_same_keys() {
     let english = keys_of("en");
-    assert!(english.len() > 80, "the dictionary looks truncated: {} keys", english.len());
+    assert!(
+        english.len() > 80,
+        "the dictionary looks truncated: {} keys",
+        english.len()
+    );
 
     for language in ["zh-Hant", "zh-Hans"] {
         let mut theirs = keys_of(language);
@@ -68,7 +72,10 @@ fn every_language_defines_exactly_the_same_keys() {
         let missing: Vec<_> = ours.iter().filter(|k| !theirs.contains(k)).collect();
         let extra: Vec<_> = theirs.iter().filter(|k| !ours.contains(k)).collect();
         assert!(missing.is_empty(), "{language} is missing {missing:?}");
-        assert!(extra.is_empty(), "{language} has keys English does not: {extra:?}");
+        assert!(
+            extra.is_empty(),
+            "{language} has keys English does not: {extra:?}"
+        );
     }
 }
 
@@ -140,7 +147,13 @@ fn used_keys(source: &str) -> Vec<String> {
 #[test]
 fn the_dictionary_never_keys_anything_by_station_key() {
     let keys = keys_of("en");
-    for station in ["WALL BALLS", "SANDBAG LUNGES", "ROWING", "SLED PUSH", "BURPEE BROAD JUMP"] {
+    for station in [
+        "WALL BALLS",
+        "SANDBAG LUNGES",
+        "ROWING",
+        "SLED PUSH",
+        "BURPEE BROAD JUMP",
+    ] {
         assert!(
             !keys.iter().any(|k| k.contains(station)),
             "{station:?} is a station key and an identifier; it must not be a dictionary key"
@@ -148,8 +161,15 @@ fn the_dictionary_never_keys_anything_by_station_key() {
     }
     // The nine exercises are keyed by code, which is what stays stable.
     for code in [
-        "ex.RUN", "ex.SKIERG", "ex.ROWERG", "ex.SLED_PUSH", "ex.SLED_PULL",
-        "ex.BURPEE_BROAD_JUMP", "ex.FARMERS_CARRY", "ex.SANDBAG_LUNGE", "ex.WALL_BALL",
+        "ex.RUN",
+        "ex.SKIERG",
+        "ex.ROWERG",
+        "ex.SLED_PUSH",
+        "ex.SLED_PULL",
+        "ex.BURPEE_BROAD_JUMP",
+        "ex.FARMERS_CARRY",
+        "ex.SANDBAG_LUNGE",
+        "ex.WALL_BALL",
     ] {
         assert!(keys.iter().any(|k| k == code), "{code} is missing");
     }
@@ -163,20 +183,46 @@ fn the_dictionary_never_keys_anything_by_station_key() {
 fn every_enum_value_has_a_translation() {
     let keys = keys_of("en");
     let families: [(&str, &[&str]); 5] = [
-        ("st", &["DRAFT", "READY", "RUNNING", "PAUSED", "COMPLETED", "CANCELLED"]),
-        ("stage", &["PENDING", "READY", "ACTIVE", "COMPLETED", "SKIPPED", "DNF"]),
-        ("blk", &["SEQUENTIAL", "ROUNDS", "AMRAP", "INTERVAL", "ZONE_ROTATION"]),
+        (
+            "st",
+            &[
+                "DRAFT",
+                "READY",
+                "RUNNING",
+                "PAUSED",
+                "COMPLETED",
+                "CANCELLED",
+            ],
+        ),
+        (
+            "stage",
+            &["PENDING", "READY", "ACTIVE", "COMPLETED", "SKIPPED", "DNF"],
+        ),
+        (
+            "blk",
+            &["SEQUENTIAL", "ROUNDS", "AMRAP", "INTERVAL", "ZONE_ROTATION"],
+        ),
         (
             "cat",
-            &["FOUNDATIONAL", "ENGINE", "POWER", "COMPLETE", "RACE_SIMULATION", "CUSTOM"],
+            &[
+                "FOUNDATIONAL",
+                "ENGINE",
+                "POWER",
+                "COMPLETE",
+                "RACE_SIMULATION",
+                "CUSTOM",
+            ],
         ),
-        ("unit", &["METER", "KILOMETER", "REPS", "SECOND", "MINUTE", "CALORIE"]),
+        (
+            "unit",
+            &["METER", "KILOMETER", "REPS", "SECOND", "MINUTE", "CALORIE"],
+        ),
         // `finish.*` is covered by the markup, which names all three statically.
     ];
     for (prefix, values) in families {
         for value in values {
             let key = format!("{prefix}.{value}");
-            assert!(keys.iter().any(|k| *k == key), "{key} is missing from the dictionary");
+            assert!(keys.contains(&key), "{key} is missing from the dictionary");
         }
     }
 }
@@ -188,14 +234,27 @@ fn every_enum_value_has_a_translation() {
 fn every_api_error_code_has_a_translation() {
     let keys = keys_of("en");
     for code in [
-        "OPERATOR_REQUIRED", "INVALID_BODY", "UNKNOWN_SESSION", "UNKNOWN_ATHLETE",
-        "UNKNOWN_EVENT", "UNKNOWN_TEMPLATE", "ILLEGAL_TRANSITION", "HAS_INTERPRETED_EVENTS",
-        "SESSION_NOT_EDITABLE", "NO_FINISH_RULE", "TAG_ALREADY_BOUND",
-        "ATHLETE_ALREADY_BOUND", "NOT_BOUND", "REASON_REQUIRED", "TEMPLATE_NOT_EDITABLE",
-        "TEMPLATE_NOT_RUNNABLE", "CLASS_IN_PROGRESS", "STORAGE_FAILED",
+        "OPERATOR_REQUIRED",
+        "INVALID_BODY",
+        "UNKNOWN_SESSION",
+        "UNKNOWN_ATHLETE",
+        "UNKNOWN_EVENT",
+        "UNKNOWN_TEMPLATE",
+        "ILLEGAL_TRANSITION",
+        "HAS_INTERPRETED_EVENTS",
+        "SESSION_NOT_EDITABLE",
+        "NO_FINISH_RULE",
+        "TAG_ALREADY_BOUND",
+        "ATHLETE_ALREADY_BOUND",
+        "NOT_BOUND",
+        "REASON_REQUIRED",
+        "TEMPLATE_NOT_EDITABLE",
+        "TEMPLATE_NOT_RUNNABLE",
+        "CLASS_IN_PROGRESS",
+        "STORAGE_FAILED",
     ] {
         let key = format!("err.{code}");
-        assert!(keys.iter().any(|k| *k == key), "{key} is missing from the dictionary");
+        assert!(keys.contains(&key), "{key} is missing from the dictionary");
     }
 }
 
@@ -211,7 +270,10 @@ fn no_screen_invents_an_arbitrary_tailwind_class_the_stylesheet_does_not_have() 
     let css = include_str!("../static/app.css");
     let screens: [(&str, &str); 7] = [
         ("training.html", include_str!("../static/training.html")),
-        ("leaderboard.html", include_str!("../static/leaderboard.html")),
+        (
+            "leaderboard.html",
+            include_str!("../static/leaderboard.html"),
+        ),
         ("checkin.html", include_str!("../static/checkin.html")),
         ("workout.html", include_str!("../static/workout.html")),
         ("signup.html", include_str!("../static/signup.html")),
@@ -256,10 +318,14 @@ fn arbitrary_classes(html: &str) -> Vec<String> {
         rest.find('"').map(|end| (i, &rest[..end]))
     }) {
         for token in attribute.split_whitespace() {
-            let Some(open) = token.find('[') else { continue };
+            let Some(open) = token.find('[') else {
+                continue;
+            };
             if token.ends_with(']')
                 && open > 0
-                && token[..open].chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                && token[..open]
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '-')
             {
                 found.push(token.to_string());
             }

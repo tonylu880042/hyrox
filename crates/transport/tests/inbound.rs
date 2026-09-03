@@ -75,7 +75,11 @@ fn rubbish_on_one_of_our_topics_is_reported_whole_and_never_fails() {
         vec![0xff, 0xfe, 0x00, 0x01],
     ] {
         match classify(&topic::events(&device()), &payload) {
-            Inbound::Undecodable { topic, payload: kept, .. } => {
+            Inbound::Undecodable {
+                topic,
+                payload: kept,
+                ..
+            } => {
                 assert_eq!(topic, "hyrox/v1/edge/a4cf128b3d91/events");
                 // Kept whole: it is the only evidence of what the device actually sent.
                 assert_eq!(kept, payload);

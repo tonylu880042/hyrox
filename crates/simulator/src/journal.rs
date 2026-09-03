@@ -14,8 +14,8 @@
 
 use crate::{ConfigError, JournalError};
 use contract::{EdgeEvent, EventId};
-use transport::DeviceWarning;
 use std::collections::VecDeque;
+use transport::DeviceWarning;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JournalConfig {
@@ -49,7 +49,11 @@ impl JournalConfig {
         if reclaim_batch == 0 {
             return Err(ConfigError::ZeroReclaimBatch);
         }
-        Ok(Self { capacity, warn_at_percent, reclaim_batch })
+        Ok(Self {
+            capacity,
+            warn_at_percent,
+            reclaim_batch,
+        })
     }
 }
 
@@ -86,7 +90,10 @@ pub struct Journal {
 
 impl Journal {
     pub fn new(config: JournalConfig) -> Self {
-        Self { config, entries: VecDeque::new() }
+        Self {
+            config,
+            entries: VecDeque::new(),
+        }
     }
 
     pub fn config(&self) -> JournalConfig {
@@ -134,7 +141,10 @@ impl Journal {
                 capacity: self.config.capacity,
             });
         }
-        self.entries.push_back(Entry { event, acked: false });
+        self.entries.push_back(Entry {
+            event,
+            acked: false,
+        });
         Ok(())
     }
 

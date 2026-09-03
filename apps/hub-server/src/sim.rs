@@ -104,14 +104,17 @@ async fn publish_class(
             // Stamped with the scripted detection time, not with "now": that is what makes a
             // resumed run republish byte-identical events, which the hub then deduplicates
             // on device + boot + sequence instead of timing the class twice (CLAUDE.md 16).
-            match guard.device_mut().rf_read(&read.reader_id, &read.tag_id, read.at.0) {
+            match guard
+                .device_mut()
+                .rf_read(&read.reader_id, &read.tag_id, read.at.0)
+            {
                 Ok(RfOutcome::Emitted(_)) | Ok(RfOutcome::Suppressed) => {}
                 Err(e) => eprintln!("dev simulator: RF read rejected: {e}"),
             }
         }
 
-        let due_for_resend = last_resend.elapsed() >= RESEND_AFTER
-            && guard.device().pending_count() > 0;
+        let due_for_resend =
+            last_resend.elapsed() >= RESEND_AFTER && guard.device().pending_count() > 0;
         let published = if due_for_resend {
             last_resend = tokio::time::Instant::now();
             guard.resend_pending().await

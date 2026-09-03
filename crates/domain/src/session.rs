@@ -105,7 +105,11 @@ impl Session {
     /// session, the pause accounting belongs to the lifecycle, and keeping them apart means
     /// `new_draft` does not have to invent a time it does not know yet.
     pub fn clock(&self, started_at: Instant) -> ClassClock {
-        ClassClock { started_at, paused_total: self.paused_total, paused_since: self.paused_since }
+        ClassClock {
+            started_at,
+            paused_total: self.paused_total,
+            paused_since: self.paused_since,
+        }
     }
 
     /// Only RUNNING. A paused class is not timing anybody, so a read arriving during a pause

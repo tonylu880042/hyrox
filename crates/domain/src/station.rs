@@ -62,12 +62,19 @@ impl StationMap {
     }
 
     pub fn get(&self, station_id: &str) -> Option<&PhysicalStation> {
-        self.stations.iter().find(|s| s.id.eq_ignore_ascii_case(station_id))
+        self.stations
+            .iter()
+            .find(|s| s.id.eq_ignore_ascii_case(station_id))
     }
 
     /// Every machine that can serve one exercise, in venue order.
-    pub fn serving<'a>(&'a self, exercise_code: &'a str) -> impl Iterator<Item = &'a PhysicalStation> {
-        self.stations.iter().filter(move |s| s.exercise_code.eq_ignore_ascii_case(exercise_code))
+    pub fn serving<'a>(
+        &'a self,
+        exercise_code: &'a str,
+    ) -> impl Iterator<Item = &'a PhysicalStation> {
+        self.stations
+            .iter()
+            .filter(move |s| s.exercise_code.eq_ignore_ascii_case(exercise_code))
     }
 
     pub fn can_serve(&self, station_id: &str, exercise_code: &str) -> bool {
@@ -96,7 +103,11 @@ impl StationMap {
 
     /// Register or replace one machine, keyed on its id.
     pub fn register(&mut self, station: PhysicalStation) -> Option<PhysicalStation> {
-        match self.stations.iter_mut().find(|s| s.id.eq_ignore_ascii_case(&station.id)) {
+        match self
+            .stations
+            .iter_mut()
+            .find(|s| s.id.eq_ignore_ascii_case(&station.id))
+        {
             Some(existing) => Some(std::mem::replace(existing, station)),
             None => {
                 self.stations.push(station);

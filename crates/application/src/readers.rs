@@ -65,12 +65,12 @@ fn describe(r: &ReaderRegistration) -> String {
 /// just jumped to the top, tap the next one. Registering one removes it from here, because
 /// "unregistered" is derived from the registry rather than from a list somebody maintains.
 pub async fn unregistered_readers<S: HubStore>(
-    state: &LiveSession,
+    readers: &domain::ReaderRegistry,
     store: &S,
 ) -> Result<Vec<SeenReader>, S::Error> {
     let mut seen = store.reader_keys_seen().await?;
     seen.retain(|r| match ReaderKey::parse(&r.device_id, &r.reader_id) {
-        Ok(key) => state.readers.resolve(&key).is_err(),
+        Ok(key) => readers.resolve(&key).is_err(),
         // A key the domain will not even parse can never be registered, so it stays on the
         // list: somebody has to see it to know their firmware is sending something odd.
         Err(_) => true,

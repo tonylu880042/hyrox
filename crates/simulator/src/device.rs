@@ -10,8 +10,8 @@ use crate::{
     ReaderConfig, TagPresence,
 };
 use contract::{AckPayload, AckStatus, DeviceId, EdgeEvent, EventId, ReaderId};
-use transport::DeviceStatus;
 use std::collections::BTreeMap;
+use transport::DeviceStatus;
 
 #[derive(Clone, Debug)]
 pub struct DeviceConfig {

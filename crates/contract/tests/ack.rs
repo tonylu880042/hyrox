@@ -81,7 +81,10 @@ async fn a_committed_event_is_acked() {
 async fn a_failed_commit_produces_no_ack() {
     // The whole point: a storage failure must leave the edge holding the event
     // (CLAUDE.md 15, 18, 31).
-    let store = FakeStore { fail: true, ..Default::default() };
+    let store = FakeStore {
+        fail: true,
+        ..Default::default()
+    };
     let err = ingest(&store, &received(event())).await.unwrap_err();
     assert!(matches!(err, IngestError::Storage(DiskFull)));
     assert_eq!(store.stored(), 0);
@@ -98,7 +101,11 @@ async fn duplicate_delivery_is_acked_but_committed_once() {
     let third = ingest(&store, &ev).await.unwrap();
 
     assert_eq!(store.stored(), 1, "one event, one row");
-    assert_eq!(store.calls(), 3, "every delivery reaches the store, which decides");
+    assert_eq!(
+        store.calls(),
+        3,
+        "every delivery reaches the store, which decides"
+    );
     assert_eq!(first.payload().status, AckStatus::Stored);
     assert_eq!(second.payload().status, AckStatus::Duplicate);
     assert_eq!(third.payload().status, AckStatus::Duplicate);
@@ -133,7 +140,10 @@ async fn a_malformed_payload_is_rejected_before_it_reaches_storage() {
     let err = ingest_payload(&store, b"{\"device_id\":\"nope\"}", 1)
         .await
         .unwrap_err();
-    assert!(matches!(err, IngestError::Malformed(WireError::Malformed(_))));
+    assert!(matches!(
+        err,
+        IngestError::Malformed(WireError::Malformed(_))
+    ));
     assert_eq!(store.calls(), 0);
 }
 
@@ -159,5 +169,8 @@ fn the_ack_wire_form_round_trips_for_the_edge_to_read() {
     assert_eq!(AckPayload::decode(&p.encode()).unwrap(), p);
 
     let dup = r#"{"device_id":"a4cf128b3d91","boot_id":18,"sequence":1,"status":"DUPLICATE"}"#;
-    assert_eq!(AckPayload::decode(dup.as_bytes()).unwrap().status, AckStatus::Duplicate);
+    assert_eq!(
+        AckPayload::decode(dup.as_bytes()).unwrap().status,
+        AckStatus::Duplicate
+    );
 }

@@ -11,8 +11,8 @@
 use crate::live_session::LiveSession;
 use crate::session::status_name;
 use domain::{
-    AthleteState, AthleteStatus, Course, DeviceWarning, Instant, ReaderMode, Session,
-    StationRun, StationState, StationTarget,
+    AthleteState, AthleteStatus, Course, DeviceWarning, Instant, ReaderMode, Session, StationRun,
+    StationState, StationTarget,
 };
 use serde::Serialize;
 
@@ -291,7 +291,14 @@ pub fn snapshot(state: &LiveSession, now: Instant) -> Snapshot {
             .athletes
             .iter()
             .enumerate()
-            .map(|(i, a)| view(state.bib_of(&a.athlete_id).unwrap_or(i as i64 + 1) as usize, a, &course, now))
+            .map(|(i, a)| {
+                view(
+                    state.bib_of(&a.athlete_id).unwrap_or(i as i64 + 1) as usize,
+                    a,
+                    &course,
+                    now,
+                )
+            })
             .collect(),
         in_class: state.athletes.len(),
         finished: state
@@ -317,7 +324,13 @@ fn mode_name(session: &Session) -> &'static str {
 fn slug(station: &str) -> String {
     station
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

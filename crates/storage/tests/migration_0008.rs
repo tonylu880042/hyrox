@@ -39,7 +39,11 @@ async fn prefixed_db() -> SqlitePool {
 }
 
 async fn one_string(pool: &SqlitePool, sql: &str) -> String {
-    sqlx::query(sql).fetch_one(pool).await.expect("a row").get::<String, _>(0)
+    sqlx::query(sql)
+        .fetch_one(pool)
+        .await
+        .expect("a row")
+        .get::<String, _>(0)
 }
 
 #[tokio::test]
@@ -48,8 +52,14 @@ async fn migration_0008_strips_the_prefix_from_stored_ids() {
 
     pool.execute(M8).await.expect("0008 applies");
 
-    assert_eq!(one_string(&pool, "SELECT device_id FROM raw_events WHERE id = 7").await, "a4cf128b3d91");
-    assert_eq!(one_string(&pool, "SELECT device_id FROM readers").await, "a4cf128b3d91");
+    assert_eq!(
+        one_string(&pool, "SELECT device_id FROM raw_events WHERE id = 7").await,
+        "a4cf128b3d91"
+    );
+    assert_eq!(
+        one_string(&pool, "SELECT device_id FROM readers").await,
+        "a4cf128b3d91"
+    );
 }
 
 #[tokio::test]
@@ -59,6 +69,12 @@ async fn migration_0008_leaves_an_already_migrated_database_alone() {
     // Running it twice must not eat six more characters off an already-bare id.
     pool.execute(M8).await.expect("0008 is idempotent");
 
-    assert_eq!(one_string(&pool, "SELECT device_id FROM raw_events WHERE id = 7").await, "a4cf128b3d91");
-    assert_eq!(one_string(&pool, "SELECT device_id FROM readers").await, "a4cf128b3d91");
+    assert_eq!(
+        one_string(&pool, "SELECT device_id FROM raw_events WHERE id = 7").await,
+        "a4cf128b3d91"
+    );
+    assert_eq!(
+        one_string(&pool, "SELECT device_id FROM readers").await,
+        "a4cf128b3d91"
+    );
 }

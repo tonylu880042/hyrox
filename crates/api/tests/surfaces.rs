@@ -166,7 +166,11 @@ async fn results_are_published_without_a_ranking() {
     let (router, _) = running();
     // `/result/{id}` reads from the store, not from memory, so the session has to have
     // reached it: closing the class is what puts it there.
-    let (status, _) = call(&router, post("/api/operator/session/complete", "DESK", json!({}))).await;
+    let (status, _) = call(
+        &router,
+        post("/api/operator/session/complete", "DESK", json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = call(&router, get("/api/result/s1")).await;

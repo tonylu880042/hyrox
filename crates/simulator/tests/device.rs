@@ -1,8 +1,10 @@
 //! A single emulated ESP32: identity, readers, counters and reboot (CLAUDE.md 16, 18, 25).
 
 use contract::{AckStatus, ReaderId};
+use simulator::{
+    AbsentTimeout, DeviceConfig, DeviceError, JournalConfig, ReaderConfig, RfOutcome, SimDevice,
+};
 use transport::DeviceWarning;
-use simulator::{AbsentTimeout, DeviceConfig, DeviceError, JournalConfig, ReaderConfig, RfOutcome, SimDevice};
 
 const TAG_A: &str = "E280117000001234";
 const TAG_B: &str = "E280117000005678";
@@ -30,7 +32,9 @@ fn the_device_id_comes_from_the_configured_mac() {
     assert_eq!(d.device_id().as_str(), "a4cf128b3d91");
 
     let other = SimDevice::boot(
-        DeviceConfig::new("a4:cf:12:8b:3d:92").unwrap().with_reader(reader("rfid-01", 4_000)),
+        DeviceConfig::new("a4:cf:12:8b:3d:92")
+            .unwrap()
+            .with_reader(reader("rfid-01", 4_000)),
         T0,
     )
     .unwrap();
@@ -49,10 +53,20 @@ fn one_device_serves_several_readers() {
     // CLAUDE.md 7.3: one ESP32 may support more than one Reader, and `reader_id` stays
     // separate from `device_id`.
     let mut d = two_reader_device();
-    assert!(matches!(d.rf_read(&rid("rfid-01"), TAG_A, T0), Ok(RfOutcome::Emitted(_))));
-    assert!(matches!(d.rf_read(&rid("rfid-02"), TAG_A, T0 + 10), Ok(RfOutcome::Emitted(_))));
+    assert!(matches!(
+        d.rf_read(&rid("rfid-01"), TAG_A, T0),
+        Ok(RfOutcome::Emitted(_))
+    ));
+    assert!(matches!(
+        d.rf_read(&rid("rfid-02"), TAG_A, T0 + 10),
+        Ok(RfOutcome::Emitted(_))
+    ));
 
-    let readers: Vec<String> = d.pending().iter().map(|e| e.reader_id.to_string()).collect();
+    let readers: Vec<String> = d
+        .pending()
+        .iter()
+        .map(|e| e.reader_id.to_string())
+        .collect();
     assert_eq!(readers, ["rfid-01", "rfid-02"]);
 }
 
@@ -61,8 +75,14 @@ fn each_reader_suppresses_on_its_own_presence_state() {
     let mut d = two_reader_device();
     d.rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
     // The same tag at the same instant on the other antenna is a separate observation.
-    assert!(matches!(d.rf_read(&rid("rfid-02"), TAG_A, T0), Ok(RfOutcome::Emitted(_))));
-    assert!(matches!(d.rf_read(&rid("rfid-01"), TAG_A, T0 + 500), Ok(RfOutcome::Suppressed)));
+    assert!(matches!(
+        d.rf_read(&rid("rfid-02"), TAG_A, T0),
+        Ok(RfOutcome::Emitted(_))
+    ));
+    assert!(matches!(
+        d.rf_read(&rid("rfid-01"), TAG_A, T0 + 500),
+        Ok(RfOutcome::Suppressed)
+    ));
 }
 
 #[test]
@@ -104,7 +124,11 @@ fn detected_at_is_the_moment_of_the_read_and_uptime_is_measured_from_boot() {
     let mut d = two_reader_device();
     d.rf_read(&rid("rfid-01"), TAG_A, T0 + 7_500).unwrap();
     let e = &d.pending()[0];
-    assert_eq!(e.detected_at, T0 + 7_500, "official timing (CLAUDE.md 11, 17)");
+    assert_eq!(
+        e.detected_at,
+        T0 + 7_500,
+        "official timing (CLAUDE.md 11, 17)"
+    );
     assert_eq!(e.uptime_ms, 7_500);
 }
 
@@ -142,7 +166,10 @@ fn a_reboot_makes_the_next_read_a_first_sight() {
     let mut d = two_reader_device();
     d.rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
     d.reboot(T0 + 500);
-    assert!(matches!(d.rf_read(&rid("rfid-01"), TAG_A, T0 + 600), Ok(RfOutcome::Emitted(_))));
+    assert!(matches!(
+        d.rf_read(&rid("rfid-01"), TAG_A, T0 + 600),
+        Ok(RfOutcome::Emitted(_))
+    ));
 }
 
 #[test]
@@ -151,7 +178,10 @@ fn an_offline_device_keeps_recording() {
     let mut d = two_reader_device();
     d.disconnect();
     d.rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
-    assert!(d.publish_batch().is_empty(), "nothing goes out while offline");
+    assert!(
+        d.publish_batch().is_empty(),
+        "nothing goes out while offline"
+    );
     assert_eq!(d.pending_count(), 1);
 
     d.reconnect();
@@ -205,7 +235,7 @@ fn a_full_journal_reports_an_error_and_warns_over_mqtt() {
 const TAG_C: &str = "E28011700000ABCD";
 
 #[test]
-fn a_uhf_inventory_round_travels_as_one_event(){
+fn a_uhf_inventory_round_travels_as_one_event() {
     // UHF anti-collision returns several tags from a single round. They travel in one
     // message under one sequence, released by one ACK (ADR 0014): the round is what the
     // idempotency key addresses.
@@ -218,7 +248,10 @@ fn a_uhf_inventory_round_travels_as_one_event(){
     let events = d.pending();
     assert_eq!(events.len(), 1, "one round, one event");
     assert_eq!(events[0].tag_id, [TAG_A, TAG_B, TAG_C]);
-    assert_eq!(events[0].sequence, 1, "one sequence for the round, not one per tag");
+    assert_eq!(
+        events[0].sequence, 1,
+        "one sequence for the round, not one per tag"
+    );
     assert_eq!(events[0].detected_at, T0);
 }
 
@@ -227,7 +260,8 @@ fn presence_is_per_tag_so_one_tag_leaving_a_crowd_re_arms_alone() {
     // The failure this pins: presence kept per reader instead of per tag would let a
     // still-present crowd hold a departed tag's suppression open for ever.
     let mut d = two_reader_device();
-    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0).unwrap();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0)
+        .unwrap();
 
     // Round after round with both still in the field: nothing new to publish.
     for step in 1..=10 {
@@ -240,13 +274,15 @@ fn presence_is_per_tag_so_one_tag_leaving_a_crowd_re_arms_alone() {
 
     // TAG_B walks away; TAG_A stays in every round, so it must never re-arm.
     for step in 11..=40 {
-        d.rf_inventory(&rid("rfid-01"), &[TAG_A], T0 + step * 200).unwrap();
+        d.rf_inventory(&rid("rfid-01"), &[TAG_A], T0 + step * 200)
+            .unwrap();
     }
     assert_eq!(d.pending_count(), 1);
 
     // TAG_B comes back after more than absent_timeout away. A second event, carrying only
     // the tag that was actually a new sighting -- TAG_A never left, so it is not in it.
-    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + 41 * 200).unwrap();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + 41 * 200)
+        .unwrap();
     let events = d.pending();
     assert_eq!(events.len(), 2);
     assert_eq!(events[1].tag_id, [TAG_B]);
@@ -255,8 +291,10 @@ fn presence_is_per_tag_so_one_tag_leaving_a_crowd_re_arms_alone() {
 #[test]
 fn a_round_where_every_tag_is_suppressed_consumes_no_sequence_number() {
     let mut d = two_reader_device();
-    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0).unwrap();
-    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + 100).unwrap();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0)
+        .unwrap();
+    d.rf_inventory(&rid("rfid-01"), &[TAG_A, TAG_B], T0 + 100)
+        .unwrap();
     // A gap in the sequence would look like a lost event to anyone auditing the log.
     d.rf_read(&rid("rfid-01"), TAG_C, T0 + 200).unwrap();
 

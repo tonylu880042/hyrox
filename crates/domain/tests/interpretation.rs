@@ -13,7 +13,10 @@ fn armed(mode: SessionMode) -> Session {
 }
 
 fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
-    ReaderBinding { station: station.into(), mode }
+    ReaderBinding {
+        station: station.into(),
+        mode,
+    }
 }
 
 fn at(offset_ms: i64) -> Instant {
@@ -41,7 +44,11 @@ fn armed_can_return_to_draft_only_while_nothing_has_been_interpreted() {
     let mut s = armed(SessionMode::Training);
     s.interpreted_event_count = 1;
     assert_eq!(s.back_to_draft(), Err(SessionError::HasInterpretedEvents));
-    assert_eq!(s.status, SessionStatus::Running, "a rejected transition must not mutate");
+    assert_eq!(
+        s.status,
+        SessionStatus::Running,
+        "a rejected transition must not mutate"
+    );
 }
 
 #[test]
@@ -57,7 +64,10 @@ fn completed_session_can_be_reopened() {
 #[test]
 fn draft_cannot_be_completed_directly() {
     let mut s = Session::new_draft("s1", "Test", SessionMode::Training);
-    assert!(matches!(s.complete(), Err(SessionError::IllegalTransition { .. })));
+    assert!(matches!(
+        s.complete(),
+        Err(SessionError::IllegalTransition { .. })
+    ));
 }
 
 // --- start rule (CLAUDE.md 11) -------------------------------------------------------
@@ -69,9 +79,19 @@ fn first_valid_event_after_arming_starts_timing_at_detected_at() {
     assert_eq!(a.status, AthleteStatus::Ready);
 
     let r = interpret(&mut a, &reader("SKIERG", ReaderMode::Entry), at(0), &s);
-    assert!(matches!(r, Interpreted::Entered { started_timing: true, .. }));
+    assert!(matches!(
+        r,
+        Interpreted::Entered {
+            started_timing: true,
+            ..
+        }
+    ));
     assert_eq!(a.status, AthleteStatus::Active);
-    assert_eq!(a.started_at, Some(at(0)), "started_at must be detected_at, not arrival time");
+    assert_eq!(
+        a.started_at,
+        Some(at(0)),
+        "started_at must be detected_at, not arrival time"
+    );
 }
 
 #[test]
@@ -91,9 +111,16 @@ fn events_before_arming_are_recorded_as_exceptions_not_dropped() {
     let r = interpret(&mut a, &reader("SKIERG", ReaderMode::Entry), at(0), &s);
     assert_eq!(
         r,
-        Interpreted::Exception { reason: ExceptionReason::SessionNotArmed, at: at(0) }
+        Interpreted::Exception {
+            reason: ExceptionReason::SessionNotArmed,
+            at: at(0)
+        }
     );
-    assert_eq!(a.status, AthleteStatus::Ready, "a rejected read must not mutate state");
+    assert_eq!(
+        a.status,
+        AthleteStatus::Ready,
+        "a rejected read must not mutate state"
+    );
 }
 
 // --- dedicated ENTRY / EXIT readers (CLAUDE.md 10.1) ---------------------------------
@@ -122,7 +149,10 @@ fn entry_while_already_inside_is_an_exception() {
     let r = interpret(&mut a, &reader("SKIERG", ReaderMode::Entry), at(1_000), &s);
     assert_eq!(
         r,
-        Interpreted::Exception { reason: ExceptionReason::ImpossibleTransition, at: at(1_000) }
+        Interpreted::Exception {
+            reason: ExceptionReason::ImpossibleTransition,
+            at: at(1_000)
+        }
     );
     assert_eq!(a.runs.len(), 1, "an exception must not open a second run");
 }
@@ -135,9 +165,16 @@ fn exit_from_a_station_the_athlete_is_not_inside_is_an_exception() {
     let r = interpret(&mut a, &reader("ROWING", ReaderMode::Exit), at(1_000), &s);
     assert_eq!(
         r,
-        Interpreted::Exception { reason: ExceptionReason::ImpossibleTransition, at: at(1_000) }
+        Interpreted::Exception {
+            reason: ExceptionReason::ImpossibleTransition,
+            at: at(1_000)
+        }
     );
-    assert_eq!(a.station_state, StationState::Inside, "state must be unchanged");
+    assert_eq!(
+        a.station_state,
+        StationState::Inside,
+        "state must be unchanged"
+    );
 }
 
 // --- shared TOGGLE reader (CLAUDE.md 10.2) -------------------------------------------
@@ -150,11 +187,24 @@ fn toggle_uses_athlete_state_not_scan_parity() {
     let r1 = interpret(&mut a, &reader("SLED PUSH", ReaderMode::Toggle), at(0), &s);
     assert!(matches!(r1, Interpreted::Entered { .. }));
 
-    let r2 = interpret(&mut a, &reader("SLED PUSH", ReaderMode::Toggle), at(45_000), &s);
+    let r2 = interpret(
+        &mut a,
+        &reader("SLED PUSH", ReaderMode::Toggle),
+        at(45_000),
+        &s,
+    );
     assert!(matches!(r2, Interpreted::Exited { .. }));
 
-    let r3 = interpret(&mut a, &reader("SLED PUSH", ReaderMode::Toggle), at(80_000), &s);
-    assert!(matches!(r3, Interpreted::Entered { .. }), "third scan re-enters");
+    let r3 = interpret(
+        &mut a,
+        &reader("SLED PUSH", ReaderMode::Toggle),
+        at(80_000),
+        &s,
+    );
+    assert!(
+        matches!(r3, Interpreted::Entered { .. }),
+        "third scan re-enters"
+    );
 }
 
 #[test]
@@ -162,10 +212,18 @@ fn toggle_for_a_different_station_while_inside_is_an_exception() {
     let s = armed(SessionMode::Training);
     let mut a = AthleteState::ready("a1", "Chen");
     interpret(&mut a, &reader("SLED PUSH", ReaderMode::Toggle), at(0), &s);
-    let r = interpret(&mut a, &reader("ROWING", ReaderMode::Toggle), at(10_000), &s);
+    let r = interpret(
+        &mut a,
+        &reader("ROWING", ReaderMode::Toggle),
+        at(10_000),
+        &s,
+    );
     assert_eq!(
         r,
-        Interpreted::Exception { reason: ExceptionReason::ImpossibleTransition, at: at(10_000) }
+        Interpreted::Exception {
+            reason: ExceptionReason::ImpossibleTransition,
+            at: at(10_000)
+        }
     );
 }
 
@@ -178,11 +236,20 @@ fn transition_is_next_entry_minus_previous_exit() {
 
     interpret(&mut a, &reader("RUN", ReaderMode::Entry), at(0), &s);
     interpret(&mut a, &reader("RUN", ReaderMode::Exit), at(920_500), &s); // 10:15:20.500
-    let r = interpret(&mut a, &reader("SKIERG", ReaderMode::Entry), at(936_800), &s); // +16.300s
+    let r = interpret(
+        &mut a,
+        &reader("SKIERG", ReaderMode::Entry),
+        at(936_800),
+        &s,
+    ); // +16.300s
 
     match r {
         Interpreted::Entered { transition, .. } => {
-            assert_eq!(transition, Some(Duration(16_300)), "CLAUDE.md 13 worked example");
+            assert_eq!(
+                transition,
+                Some(Duration(16_300)),
+                "CLAUDE.md 13 worked example"
+            );
         }
         other => panic!("expected Entered, got {other:?}"),
     }
@@ -210,7 +277,10 @@ fn training_accepts_stations_in_any_order() {
     for (i, st) in ["WALL BALLS", "SKIERG", "ROWING"].iter().enumerate() {
         let t = (i as i64) * 100_000;
         let r = interpret(&mut a, &reader(st, ReaderMode::Entry), at(t), &s);
-        assert!(matches!(r, Interpreted::Entered { .. }), "{st} should be accepted as-is");
+        assert!(
+            matches!(r, Interpreted::Entered { .. }),
+            "{st} should be accepted as-is"
+        );
         interpret(&mut a, &reader(st, ReaderMode::Exit), at(t + 50_000), &s);
     }
     assert_eq!(a.runs.len(), 3);
@@ -225,10 +295,18 @@ fn elapsed_and_current_leg_track_the_athlete() {
     interpret(&mut a, &reader("ROWING", ReaderMode::Entry), at(0), &s);
 
     assert_eq!(a.elapsed(at(30_000)), Some(Duration(30_000)));
-    assert_eq!(a.current_leg(at(30_000)), Some(Duration(30_000)), "inside: time in station");
+    assert_eq!(
+        a.current_leg(at(30_000)),
+        Some(Duration(30_000)),
+        "inside: time in station"
+    );
 
     interpret(&mut a, &reader("ROWING", ReaderMode::Exit), at(60_000), &s);
-    assert_eq!(a.current_leg(at(75_000)), Some(Duration(15_000)), "outside: time in transition");
+    assert_eq!(
+        a.current_leg(at(75_000)),
+        Some(Duration(15_000)),
+        "outside: time in transition"
+    );
 }
 
 // --- replay (CLAUDE.md 21, 24) --------------------------------------------------------
@@ -284,7 +362,10 @@ fn exceptions_in_the_log_do_not_advance_state_on_replay() {
     let (_, mut log) = run_two_stations();
     log.insert(
         2,
-        Interpreted::Exception { reason: ExceptionReason::ImpossibleTransition, at: at(115_000) },
+        Interpreted::Exception {
+            reason: ExceptionReason::ImpossibleTransition,
+            at: at(115_000),
+        },
     );
     let rebuilt = replay("a1", "Chen", &log);
     assert_eq!(rebuilt.runs.len(), 2, "an exception must not open a run");

@@ -5,8 +5,8 @@
 //! rather than erased on every ACK.
 
 use contract::{DeviceId, EdgeEvent, EventId, ReaderId};
-use transport::DeviceWarning;
 use simulator::{AckResult, Journal, JournalConfig, JournalError};
+use transport::DeviceWarning;
 
 fn event(boot_id: i64, sequence: i64) -> EdgeEvent {
     EdgeEvent {
@@ -59,7 +59,11 @@ fn an_acknowledged_event_is_not_resent() {
     j.ack(&EventId::of(&event(1, 2)));
 
     let seqs: Vec<i64> = j.pending().iter().map(|e| e.sequence).collect();
-    assert_eq!(seqs, [1, 3], "only the gap is closed, the rest still owes an ACK");
+    assert_eq!(
+        seqs,
+        [1, 3],
+        "only the gap is closed, the rest still owes an ACK"
+    );
 }
 
 #[test]
@@ -69,7 +73,10 @@ fn a_repeated_ack_is_safe() {
     let mut j = journal(16);
     j.append(event(1, 1)).unwrap();
     assert_eq!(j.ack(&EventId::of(&event(1, 1))), AckResult::Released);
-    assert_eq!(j.ack(&EventId::of(&event(1, 1))), AckResult::AlreadyReleased);
+    assert_eq!(
+        j.ack(&EventId::of(&event(1, 1))),
+        AckResult::AlreadyReleased
+    );
     assert_eq!(j.pending_count(), 0);
 }
 
@@ -97,7 +104,10 @@ fn unacknowledged_events_are_never_dropped_to_make_room() {
     for seq in 1..=3 {
         j.append(event(1, seq)).unwrap();
     }
-    assert!(matches!(j.append(event(1, 4)), Err(JournalError::Full { .. })));
+    assert!(matches!(
+        j.append(event(1, 4)),
+        Err(JournalError::Full { .. })
+    ));
 
     let seqs: Vec<i64> = j.pending().iter().map(|e| e.sequence).collect();
     assert_eq!(seqs, [1, 2, 3], "nothing was sacrificed");
@@ -147,7 +157,10 @@ fn a_journal_near_the_threshold_warns_without_being_full() {
 #[test]
 fn a_journal_config_must_be_usable() {
     assert!(JournalConfig::new(0, 80, 4).is_err(), "zero capacity");
-    assert!(JournalConfig::new(10, 0, 4).is_err(), "warn threshold out of range");
+    assert!(
+        JournalConfig::new(10, 0, 4).is_err(),
+        "warn threshold out of range"
+    );
     assert!(JournalConfig::new(10, 101, 4).is_err());
     assert!(JournalConfig::new(10, 80, 0).is_err(), "zero reclaim batch");
 }

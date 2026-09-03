@@ -41,10 +41,15 @@ async fn a_walk_in_is_recorded_as_having_no_member_reference() {
     let store = FakeStore::new();
     let mut state = session();
 
-    enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk()).await.unwrap();
+    enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk())
+        .await
+        .unwrap();
 
     let saved = store.saved_athletes().pop().expect("a stored row");
-    assert_eq!(saved.member_id, None, "a walk-in has no member id, and that is the record");
+    assert_eq!(
+        saved.member_id, None,
+        "a walk-in has no member id, and that is the record"
+    );
 }
 
 #[tokio::test]
@@ -62,9 +67,14 @@ async fn a_member_keeps_their_member_id_as_their_athlete_id() {
         weight_kg: None,
     };
 
-    let id = enter(&mut state, &store, Entrant::member(&member), &desk()).await.unwrap();
+    let id = enter(&mut state, &store, Entrant::member(&member), &desk())
+        .await
+        .unwrap();
 
-    assert_eq!(id, "M-4417", "an existing member is still keyed by their member id");
+    assert_eq!(
+        id, "M-4417",
+        "an existing member is still keyed by their member id"
+    );
     let saved = store.saved_athletes().pop().expect("a stored row");
     assert_eq!(saved.member_id.as_deref(), Some("M-4417"));
 }
@@ -75,7 +85,9 @@ async fn bibs_are_handed_out_in_order_when_nobody_asks_for_one() {
     let mut state = session();
 
     for name in ["A", "B", "C"] {
-        enter(&mut state, &store, Entrant::walk_in(name), &desk()).await.unwrap();
+        enter(&mut state, &store, Entrant::walk_in(name), &desk())
+            .await
+            .unwrap();
     }
 
     let bibs: Vec<i64> = store.saved_athletes().into_iter().map(|a| a.bib).collect();
@@ -88,7 +100,14 @@ async fn a_requested_bib_is_honoured() {
     let store = FakeStore::new();
     let mut state = session();
 
-    enter(&mut state, &store, Entrant::walk_in("A").with_bib(42), &desk()).await.unwrap();
+    enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("A").with_bib(42),
+        &desk(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(store.saved_athletes()[0].bib, 42);
 }
@@ -97,11 +116,23 @@ async fn a_requested_bib_is_honoured() {
 async fn a_bib_already_on_somebody_else_is_refused() {
     let store = FakeStore::new();
     let mut state = session();
-    enter(&mut state, &store, Entrant::walk_in("A").with_bib(7), &desk()).await.unwrap();
+    enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("A").with_bib(7),
+        &desk(),
+    )
+    .await
+    .unwrap();
 
-    let err = enter(&mut state, &store, Entrant::walk_in("B").with_bib(7), &desk())
-        .await
-        .expect_err("two vests with the same number is a timing error waiting to happen");
+    let err = enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("B").with_bib(7),
+        &desk(),
+    )
+    .await
+    .expect_err("two vests with the same number is a timing error waiting to happen");
 
     assert!(matches!(err, OperatorError::BibTaken(7)));
     assert_eq!(state.athletes.len(), 1);
@@ -112,10 +143,26 @@ async fn a_bib_already_on_somebody_else_is_refused() {
 async fn automatic_bibs_step_over_the_ones_already_taken() {
     let store = FakeStore::new();
     let mut state = session();
-    enter(&mut state, &store, Entrant::walk_in("A").with_bib(1), &desk()).await.unwrap();
-    enter(&mut state, &store, Entrant::walk_in("B").with_bib(2), &desk()).await.unwrap();
+    enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("A").with_bib(1),
+        &desk(),
+    )
+    .await
+    .unwrap();
+    enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("B").with_bib(2),
+        &desk(),
+    )
+    .await
+    .unwrap();
 
-    enter(&mut state, &store, Entrant::walk_in("C"), &desk()).await.unwrap();
+    enter(&mut state, &store, Entrant::walk_in("C"), &desk())
+        .await
+        .unwrap();
 
     assert_eq!(store.saved_athletes()[2].bib, 3);
 }
@@ -149,8 +196,12 @@ async fn admitting_the_same_member_twice_is_idempotent() {
         weight_kg: None,
     };
 
-    let first = enter(&mut state, &store, Entrant::member(&member), &desk()).await.unwrap();
-    let again = enter(&mut state, &store, Entrant::member(&member), &desk()).await.unwrap();
+    let first = enter(&mut state, &store, Entrant::member(&member), &desk())
+        .await
+        .unwrap();
+    let again = enter(&mut state, &store, Entrant::member(&member), &desk())
+        .await
+        .unwrap();
 
     assert_eq!(first, again);
     assert_eq!(state.athletes.len(), 1);
@@ -173,7 +224,9 @@ async fn an_expired_membership_does_not_stop_somebody_entering() {
         weight_kg: None,
     };
 
-    enter(&mut state, &store, Entrant::member(&member), &desk()).await.expect("entered");
+    enter(&mut state, &store, Entrant::member(&member), &desk())
+        .await
+        .expect("entered");
 
     assert_eq!(state.athletes.len(), 1);
 }
@@ -183,7 +236,9 @@ async fn entering_somebody_is_audited() {
     let store = FakeStore::new();
     let mut state = session();
 
-    enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk()).await.unwrap();
+    enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk())
+        .await
+        .unwrap();
 
     let audit = store.audits().pop().expect("an audit record");
     assert_eq!(audit.action, "ATHLETE_ENTER");
@@ -197,15 +252,27 @@ async fn entering_somebody_is_audited() {
 async fn the_read_models_show_the_bib_that_was_assigned() {
     let store = FakeStore::new();
     let mut state = session();
-    enter(&mut state, &store, Entrant::walk_in("A"), &desk()).await.unwrap();
-    enter(&mut state, &store, Entrant::walk_in("B").with_bib(7), &desk()).await.unwrap();
+    enter(&mut state, &store, Entrant::walk_in("A"), &desk())
+        .await
+        .unwrap();
+    enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("B").with_bib(7),
+        &desk(),
+    )
+    .await
+    .unwrap();
 
     let view = application::checkin_view(&state);
     let bibs: Vec<usize> = view.athletes.iter().map(|a| a.bib).collect();
     assert_eq!(bibs, [1, 7]);
 
     let results = application::live_results(&state);
-    assert_eq!(results.rows.iter().map(|r| r.bib).collect::<Vec<_>>(), [1, 7]);
+    assert_eq!(
+        results.rows.iter().map(|r| r.bib).collect::<Vec<_>>(),
+        [1, 7]
+    );
 }
 
 // --- the entry code (ADR 0011) --------------------------------------------------------
@@ -218,7 +285,9 @@ async fn a_walk_in_is_issued_a_six_character_entry_code() {
     let store = FakeStore::new();
     let mut state = session();
 
-    let id = enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk()).await.unwrap();
+    let id = enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk())
+        .await
+        .unwrap();
 
     let code = domain::EntryCode::parse(&id).expect("the id is an entry code");
     assert_eq!(code.as_str(), id);
@@ -229,8 +298,12 @@ async fn two_walk_ins_are_issued_different_codes() {
     let store = FakeStore::new();
     let mut state = session();
 
-    let a = enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk()).await.unwrap();
-    let b = enter(&mut state, &store, Entrant::walk_in("林大華"), &desk()).await.unwrap();
+    let a = enter(&mut state, &store, Entrant::walk_in("陳小明"), &desk())
+        .await
+        .unwrap();
+    let b = enter(&mut state, &store, Entrant::walk_in("林大華"), &desk())
+        .await
+        .unwrap();
 
     assert_ne!(a, b);
 }
@@ -243,7 +316,9 @@ async fn a_member_keeps_their_member_id_and_gets_no_code() {
     let mut state = session();
     let member = MemberRef::new("M-1042", "王淑芬", MembershipStatus::Active);
 
-    let id = enter(&mut state, &store, Entrant::member(&member), &desk()).await.unwrap();
+    let id = enter(&mut state, &store, Entrant::member(&member), &desk())
+        .await
+        .unwrap();
 
     assert_eq!(id, "M-1042");
 }
@@ -256,9 +331,14 @@ async fn a_self_registration_is_recorded_as_such() {
     let store = FakeStore::new();
     let mut state = session();
 
-    enter(&mut state, &store, Entrant::walk_in("陳小明"), &OperatorCommand::new("SELF SIGN-UP", NOW))
-        .await
-        .unwrap();
+    enter(
+        &mut state,
+        &store,
+        Entrant::walk_in("陳小明"),
+        &OperatorCommand::new("SELF SIGN-UP", NOW),
+    )
+    .await
+    .unwrap();
 
     let entry = store.audits().pop().expect("an audit row");
     assert_eq!(entry.operator, "SELF SIGN-UP");

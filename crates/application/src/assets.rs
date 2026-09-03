@@ -73,15 +73,17 @@ pub async fn save_venue_asset<S: HubStore>(
         return Err(AssetError::TooLarge(bytes.len()));
     }
     let media_type = sniff(&bytes).ok_or_else(|| {
-        AssetError::Unsupported(if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
-            // Worth naming: SVG is the format somebody will reach for first, and refusing
-            // it silently looks like a bug rather than a decision.
-            "SVG is not accepted: it can carry script, and the hub would serve it from its \
+        AssetError::Unsupported(
+            if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
+                // Worth naming: SVG is the format somebody will reach for first, and refusing
+                // it silently looks like a bug rather than a decision.
+                "SVG is not accepted: it can carry script, and the hub would serve it from its \
              own origin. Export the logo as PNG."
-                .to_string()
-        } else {
-            "not a PNG or JPEG image".to_string()
-        })
+                    .to_string()
+            } else {
+                "not a PNG or JPEG image".to_string()
+            },
+        )
     })?;
 
     store
@@ -100,7 +102,10 @@ pub async fn save_venue_asset<S: HubStore>(
         })
         .await
         .map_err(AssetError::Storage)?;
-    Ok(VenueAsset { media_type: media_type.to_string(), bytes })
+    Ok(VenueAsset {
+        media_type: media_type.to_string(),
+        bytes,
+    })
 }
 
 /// Removes it. The screens fall back to showing no logo, which is what they did before one
@@ -110,7 +115,10 @@ pub async fn delete_venue_asset<S: HubStore>(
     key: &str,
     cmd: &OperatorCommand,
 ) -> Result<(), AssetError<S::Error>> {
-    store.delete_venue_asset(key).await.map_err(AssetError::Storage)?;
+    store
+        .delete_venue_asset(key)
+        .await
+        .map_err(AssetError::Storage)?;
     store
         .record_audit(&AuditEntry {
             at: cmd.at,

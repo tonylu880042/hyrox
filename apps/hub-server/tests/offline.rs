@@ -52,7 +52,10 @@ fn the_stylesheets_reference_only_local_files() {
         for host in OFF_SITE {
             assert!(!css.contains(host), "{name} still points at {host}");
         }
-        assert!(!css.contains("url(http"), "{name} loads something over the network");
+        assert!(
+            !css.contains("url(http"),
+            "{name} loads something over the network"
+        );
     }
 }
 
@@ -64,7 +67,10 @@ fn every_font_the_stylesheet_asks_for_is_embedded() {
     let mut asked = 0;
     for chunk in FONTS_CSS.split("url(fonts/").skip(1) {
         let file = chunk.split(')').next().expect("a closing paren");
-        assert!(embedded.contains(&file), "fonts.css asks for {file}, which is not embedded");
+        assert!(
+            embedded.contains(&file),
+            "fonts.css asks for {file}, which is not embedded"
+        );
         asked += 1;
     }
     assert!(asked > 0, "fonts.css declares no local font at all");
@@ -73,8 +79,7 @@ fn every_font_the_stylesheet_asks_for_is_embedded() {
 /// The binary's font table, read from the generated module rather than duplicated here.
 fn hub_server_fonts() -> Vec<&'static str> {
     include_str!("../src/fonts.rs")
-        .split("(\"")
-        .skip(1)
-        .filter_map(|c| c.split('"').next())
+        .split('"')
+        .filter(|s| s.ends_with(".woff2") && !s.contains('/'))
         .collect()
 }

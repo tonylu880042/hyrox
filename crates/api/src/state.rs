@@ -27,8 +27,8 @@ use application::{
     StoredException, TemplateError,
 };
 use domain::{
-    Course, ExerciseLibrary, Expectation, FinishPolicy, Instant, Interpreted,
-    ReaderRegistration, Session, SessionConfig, StationMap, TagId, WorkoutTemplate,
+    Course, ExerciseLibrary, Expectation, FinishPolicy, Instant, Interpreted, ReaderRegistration,
+    Session, SessionConfig, StationMap, TagId, WorkoutTemplate,
 };
 
 /// One athlete's progress through the class, as `/api/stages` reports it.
@@ -362,10 +362,7 @@ impl<S: HubStore> ReadOnly<S> {
     }
 
     /// One of the venue's images (M6 follow-up).
-    pub async fn venue_asset(
-        &self,
-        key: &str,
-    ) -> Result<Option<application::VenueAsset>, S::Error>
+    pub async fn venue_asset(&self, key: &str) -> Result<Option<application::VenueAsset>, S::Error>
     where
         S: HubStore,
     {
@@ -438,13 +435,19 @@ pub struct CheckIn<S> {
 
 impl<S> Clone for CheckIn<S> {
     fn clone(&self) -> Self {
-        Self { read: self.read.clone(), hub: self.hub.clone() }
+        Self {
+            read: self.read.clone(),
+            hub: self.hub.clone(),
+        }
     }
 }
 
 impl<S> CheckIn<S> {
     pub fn new(hub: Hub<S>) -> Self {
-        Self { read: ReadOnly::new(hub.clone()), hub }
+        Self {
+            read: ReadOnly::new(hub.clone()),
+            hub,
+        }
     }
 
     pub fn read(&self) -> &ReadOnly<S> {
@@ -499,13 +502,19 @@ pub struct Operator<S> {
 
 impl<S> Clone for Operator<S> {
     fn clone(&self) -> Self {
-        Self { read: self.read.clone(), hub: self.hub.clone() }
+        Self {
+            read: self.read.clone(),
+            hub: self.hub.clone(),
+        }
     }
 }
 
 impl<S> Operator<S> {
     pub fn new(hub: Hub<S>) -> Self {
-        Self { read: ReadOnly::new(hub.clone()), hub }
+        Self {
+            read: ReadOnly::new(hub.clone()),
+            hub,
+        }
     }
 
     pub fn read(&self) -> &ReadOnly<S> {
@@ -625,7 +634,12 @@ impl<S: HubStore> Operator<S> {
             .await
             .map_err(TemplateError::Storage)?
             .ok_or_else(|| TemplateError::UnknownTemplate(template_id.to_string()))?;
-        let library = self.hub.store.exercises().await.map_err(TemplateError::Storage)?;
+        let library = self
+            .hub
+            .store
+            .exercises()
+            .await
+            .map_err(TemplateError::Storage)?;
         let mut state = self.hub.lock().await;
         templates::create_class(&mut state, &*self.hub.store, &template, &library, new, cmd).await
     }
@@ -682,7 +696,11 @@ impl<S: HubStore> Operator<S> {
         // Creating the directory is the adapter's job, not this layer's: filesystem
         // concerns live where the file does.
         let path = self.hub.backup_dir().join(format!("hyrox-{}.db", now.0));
-        self.hub.store.backup_to(&path).await.map_err(OperatorError::Storage)?;
+        self.hub
+            .store
+            .backup_to(&path)
+            .await
+            .map_err(OperatorError::Storage)?;
         // A copy of every event in the venue's history just left the database. Who asked
         // for it belongs in the trail, even though nothing recorded was changed
         // (CLAUDE.md 20).
@@ -739,15 +757,15 @@ impl<S: HubStore> Operator<S> {
             .map_err(OperatorError::Storage)?;
         // Audited first: if the machine goes down a moment later, the record of who asked
         // is already durable. The other order loses the row exactly when it matters.
-        self.hub.power.request(action).map_err(OperatorError::PowerUnavailable)
+        self.hub
+            .power
+            .request(action)
+            .map_err(OperatorError::PowerUnavailable)
     }
 
     /// Load a venue's worth of demo data (M6 follow-up), with the guard that makes it safe
     /// to offer at all: a class on the floor refuses.
-    pub async fn load_demo(
-        &self,
-        cmd: &OperatorCommand,
-    ) -> Result<(), OperatorError<S::Error>>
+    pub async fn load_demo(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>>
     where
         S: HubStore,
     {
@@ -766,10 +784,7 @@ impl<S: HubStore> Operator<S> {
 
     /// Stop it. No class guard: stopping invented reads cannot hurt a real class, and the
     /// moment somebody wants the off switch is the moment something has gone wrong.
-    pub async fn clear_demo(
-        &self,
-        cmd: &OperatorCommand,
-    ) -> Result<(), OperatorError<S::Error>>
+    pub async fn clear_demo(&self, cmd: &OperatorCommand) -> Result<(), OperatorError<S::Error>>
     where
         S: HubStore,
     {
@@ -823,8 +838,11 @@ impl<S: HubStore> Operator<S> {
     where
         S: HubStore,
     {
-        let state = self.hub.lock().await;
-        application::unregistered_readers(&state, &*self.hub.store)
+        let readers = {
+            let state = self.hub.lock().await;
+            state.readers.clone()
+        };
+        application::unregistered_readers(&readers, &*self.hub.store)
             .await
             .map_err(OperatorError::Storage)
     }

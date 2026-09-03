@@ -26,7 +26,10 @@ pub async fn list<S: HubStore>(
     session_id: &str,
     store: &S,
 ) -> Result<Vec<StoredException>, OperatorError<S::Error>> {
-    store.exceptions(session_id).await.map_err(OperatorError::Storage)
+    store
+        .exceptions(session_id)
+        .await
+        .map_err(OperatorError::Storage)
 }
 
 /// Accepts one exception as it stands: it leaves the inbox, and nothing else changes.

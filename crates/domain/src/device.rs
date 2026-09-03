@@ -46,7 +46,9 @@ impl DeviceId {
     pub fn parse(raw: &str) -> Result<Self, DeviceIdError> {
         let lowered = raw.to_ascii_lowercase();
         if lowered.len() != MAC_HEX_LEN {
-            return Err(DeviceIdError::WrongLength { found: lowered.len() });
+            return Err(DeviceIdError::WrongLength {
+                found: lowered.len(),
+            });
         }
         if !lowered.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(DeviceIdError::NotHex);
@@ -105,7 +107,11 @@ impl<'de> Deserialize<'de> for DeviceId {
 }
 
 fn hex_digit(nibble: u8) -> char {
-    char::from(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 })
+    char::from(if nibble < 10 {
+        b'0' + nibble
+    } else {
+        b'a' + nibble - 10
+    })
 }
 
 /// What an edge device says about its own journal (CLAUDE.md 18).
@@ -143,7 +149,10 @@ impl fmt::Display for ReaderIdError {
         match self {
             Self::Empty => f.write_str("reader id must not be empty"),
             Self::InvalidCharacter { found } => {
-                write!(f, "reader id must be alphanumeric, '-' or '_' (found {found:?})")
+                write!(
+                    f,
+                    "reader id must be alphanumeric, '-' or '_' (found {found:?})"
+                )
             }
         }
     }

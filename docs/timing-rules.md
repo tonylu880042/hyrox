@@ -40,9 +40,9 @@ Transition = 下一個 Entry 的 detected_at - 前一個 Exit 的 detected_at
 
 測試：`transition_is_next_entry_minus_previous_exit`、`first_station_has_no_transition`。
 
-## Finish Rule — 訓練已決議，**競賽仍未決議（OPEN）**
+## Finish Rule — 訓練與競賽均已決議
 
-> CLAUDE.md 12 與 28 列為未決的是**競賽**的完成規則。訓練已於 2026-08-27 與使用者確認。
+> 訓練模式已於 2026-08-27 確認（時間到即結束，容許未完成課表）；競賽模式已於 2026-08-28 定案為 `CourseComplete`（依最後站點 EXIT 時刻結算成績）。
 
 ### 現況實作
 
@@ -51,16 +51,21 @@ Transition = 下一個 Entry 的 detected_at - 前一個 Exit 的 detected_at
 ```rust
 pub enum FinishPolicy {
     #[default]
-    NotConfigured,                       // 競賽仍在這裡
-    ClassDuration { limit: Duration },   // 團課時間到就結束
+    NotConfigured,                       // 尚未選擇規則
+    ClassDuration { limit: Duration },   // 團課時間到就結束（訓練模式）
     CoachDecides,                        // 沒有自動觸發，教練手動結束
+    CourseComplete,                      // 完成所有站點最後一站離站（EXIT）即完賽（競賽模式）
 }
 ```
 
 `FinishPolicy::evaluate()` 回傳三值的 `FinishDecision`：
 
 ```rust
-pub enum FinishDecision { Finished, NotFinished, Undetermined }
+pub enum FinishDecision {
+    Finished { at: Instant },
+    NotFinished,
+    Undetermined,
+}
 ```
 
 `NotConfigured` 一律回傳 `Undetermined`。刻意不用 `bool`：

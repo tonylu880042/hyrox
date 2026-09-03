@@ -41,7 +41,9 @@ impl Power for SystemdPower {
         // authorisation as the real call but changes nothing.
         let mut check = Command::new("systemctl");
         check.arg("--dry-run").args(args);
-        let allowed = check.output().map_err(|e| format!("cannot run systemctl: {e}"))?;
+        let allowed = check
+            .output()
+            .map_err(|e| format!("cannot run systemctl: {e}"))?;
         if !allowed.status.success() {
             return Err(format!(
                 "systemd refused: {}",

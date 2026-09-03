@@ -32,10 +32,10 @@ pub const LIVE_PAGE_SIZE: &str = "live.page_size";
 /// the set is defined once rather than in both the picker and the projector.
 pub const LIVE_PAGE_LAYOUTS: [(i64, i64, i64); 4] = [
     // Card sizes on the projector, for the record: 840x615, 620x405, 495x300, 410x240.
-    (6, 3, 2),   // a small class in a big room
-    (12, 4, 3),  // the default the screen was designed around
+    (6, 3, 2),  // a small class in a big room
+    (12, 4, 3), // the default the screen was designed around
     (20, 5, 4),
-    (30, 6, 5),  // as dense as stays legible at ten metres
+    (30, 6, 5), // as dense as stays legible at ten metres
 ];
 
 pub const DEFAULT_LIVE_PAGE_SIZE: i64 = 12;
@@ -48,7 +48,10 @@ pub struct VenueSettings {
 
 impl Default for VenueSettings {
     fn default() -> Self {
-        Self { live_page_ms: DEFAULT_LIVE_PAGE_MS, live_page_size: DEFAULT_LIVE_PAGE_SIZE }
+        Self {
+            live_page_ms: DEFAULT_LIVE_PAGE_MS,
+            live_page_size: DEFAULT_LIVE_PAGE_SIZE,
+        }
     }
 }
 

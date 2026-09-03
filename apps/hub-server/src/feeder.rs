@@ -50,9 +50,18 @@ pub fn course() -> Course {
 
 pub fn athletes() -> Vec<&'static str> {
     vec![
-        "CHEN YU-TING", "LIN CHIA-HAO", "WANG SHU-FEN", "HUANG PEI-CHI",
-        "TSAI MING-JU", "LEE KUAN-LIN", "WU YA-WEN", "CHANG WEI",
-        "HSU MEI-LING", "KUO CHIH-HUNG", "YEH HSIAO-CHUN", "PAN JUN-HAO",
+        "CHEN YU-TING",
+        "LIN CHIA-HAO",
+        "WANG SHU-FEN",
+        "HUANG PEI-CHI",
+        "TSAI MING-JU",
+        "LEE KUAN-LIN",
+        "WU YA-WEN",
+        "CHANG WEI",
+        "HSU MEI-LING",
+        "KUO CHIH-HUNG",
+        "YEH HSIAO-CHUN",
+        "PAN JUN-HAO",
     ]
 }
 
@@ -69,7 +78,13 @@ fn tag_for(athlete_id: &str) -> String {
 fn reader_id(station: &str, mode: ReaderMode) -> String {
     let slug: String = station
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     let role = match mode {
         ReaderMode::Entry => "entry",

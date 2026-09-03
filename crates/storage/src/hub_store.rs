@@ -6,14 +6,15 @@
 
 use crate::{RawEvent, Store, StoreError};
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead, SeenReader, VenueAsset,
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, SeenReader, StoredException,
+    StoredRawRead, VenueAsset,
 };
+use contract::CommitOutcome;
 use domain::{
     AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, PhysicalStation,
     ReaderRegistration, ReaderRegistry, Session, SessionConfig, StationMap, TagBinding,
     WorkoutTemplate,
 };
-use contract::CommitOutcome;
 
 impl HubStore for Store {
     type Error = StoreError;
@@ -34,13 +35,21 @@ impl HubStore for Store {
             .await?;
         Ok(RawCommit {
             raw_event_id: id,
-            outcome: if inserted { CommitOutcome::Stored } else { CommitOutcome::AlreadyStored },
+            outcome: if inserted {
+                CommitOutcome::Stored
+            } else {
+                CommitOutcome::AlreadyStored
+            },
         })
     }
 
     async fn commit_interpreted(&self, w: InterpretedWrite<'_>) -> Result<i64, StoreError> {
         self.save_interpreted(w.session_id, w.athlete_id, w.raw_event_id, w.event)
             .await
+    }
+
+    async fn raw_event_has_interpretation(&self, raw_event_id: i64) -> Result<bool, StoreError> {
+        Store::raw_event_has_interpretation(self, raw_event_id).await
     }
 
     async fn save_session(&self, session: &Session, created_at: Instant) -> Result<(), StoreError> {

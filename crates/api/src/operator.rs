@@ -65,8 +65,14 @@ where
         // The workout library's writes. Reads of the same resources live on the read-only
         // surface at /api/workout-templates (ADR 0007 §5).
         .route("/templates", post(save_template))
-        .route("/templates/{template_id}", put(save_template_at).delete(delete_template))
-        .route("/templates/{template_id}/duplicate", post(duplicate_template))
+        .route(
+            "/templates/{template_id}",
+            put(save_template_at).delete(delete_template),
+        )
+        .route(
+            "/templates/{template_id}/duplicate",
+            post(duplicate_template),
+        )
         .route("/class", post(create_class))
         .with_state(state)
 }
@@ -215,7 +221,9 @@ where
 {
     let now = operator.read().now();
     let cmd = command(device, now, request.reason);
-    operator.accept_exception(interpreted_event_id, &cmd).await?;
+    operator
+        .accept_exception(interpreted_event_id, &cmd)
+        .await?;
     exceptions(State(operator)).await
 }
 
@@ -328,7 +336,9 @@ where
     S::Error: Display,
 {
     let cmd = command(device, operator.read().now(), request.reason.clone());
-    operator.save_template(WorkoutTemplate::from(request), &cmd).await?;
+    operator
+        .save_template(WorkoutTemplate::from(request), &cmd)
+        .await?;
     templates_response(operator).await
 }
 
@@ -424,7 +434,9 @@ where
             .collect(),
         created_at: operator.read().now(),
     };
-    operator.create_class(&request.template_id, new, &cmd).await?;
+    operator
+        .create_class(&request.template_id, new, &cmd)
+        .await?;
     session_response(operator).await
 }
 
@@ -435,7 +447,10 @@ where
 {
     let read = operator.read();
     let templates = read.templates().await.map_err(crate::error::storage)?;
-    Ok(Json(TemplatesResponse { freshness: freshness(read).await, templates }))
+    Ok(Json(TemplatesResponse {
+        freshness: freshness(read).await,
+        templates,
+    }))
 }
 
 /// Takes a backup of the whole database and says where it went (ADR 0012).
@@ -542,12 +557,20 @@ where
 {
     let cmd = command(device, operator.read().now(), None);
     if let Some(ms) = request.live_page_ms {
-        operator.save_setting(application::LIVE_PAGE_MS, &ms.to_string(), &cmd).await?;
+        operator
+            .save_setting(application::LIVE_PAGE_MS, &ms.to_string(), &cmd)
+            .await?;
     }
     if let Some(size) = request.live_page_size {
-        operator.save_setting(application::LIVE_PAGE_SIZE, &size.to_string(), &cmd).await?;
+        operator
+            .save_setting(application::LIVE_PAGE_SIZE, &size.to_string(), &cmd)
+            .await?;
     }
-    let settings = operator.read().venue_settings().await.map_err(crate::error::storage)?;
+    let settings = operator
+        .read()
+        .venue_settings()
+        .await
+        .map_err(crate::error::storage)?;
     Ok(Json(crate::wire::SettingsResponse {
         freshness: crate::read::freshness(operator.read()).await,
         live_page_ms: settings.live_page_ms,

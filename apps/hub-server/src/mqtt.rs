@@ -69,7 +69,11 @@ pub async fn run(hub: Hub<Store>, config: MqttConfig) {
             }
             Ok(Some(Inbound::Event(event))) => ingest(&hub, &client, *event).await,
             Ok(Some(Inbound::Status(status))) => report_status(&hub, &status).await,
-            Ok(Some(Inbound::Undecodable { topic, error, payload })) => {
+            Ok(Some(Inbound::Undecodable {
+                topic,
+                error,
+                payload,
+            })) => {
                 undecodable_total += 1;
                 // The record for an undecodable payload is this line, and only this line.
                 // It cannot go in the raw event store: that table is keyed by
@@ -111,12 +115,12 @@ async fn ingest(hub: &Hub<Store>, client: &AsyncClient, event: contract::EdgeEve
         note_device_seen(&mut state, &received.event().device_id, hub.now());
         match ingest_read(&mut state, &**hub.store(), &received).await {
             Ok(ingested) => Some(ingested.ack),
-            // The raw read IS durable, so the ACK is earned and the edge may release its
-            // copy; the interpretation is missing and an operator has to add it
-            // (CLAUDE.md 20).
-            Err(IngestError::Interpretation { ack, source }) => {
-                eprintln!("{key}: raw read stored but not interpreted: {source}");
-                Some(ack)
+            // Raw read is durable, but interpretation failed. We do NOT acknowledge to the edge
+            // so the edge resends. When it resends, the duplicate handler will detect that this
+            // raw read lacks an interpretation and retry interpreting it.
+            Err(IngestError::Interpretation { ack: _, source }) => {
+                eprintln!("{key}: raw read stored but not interpreted: {source} -- will not ACK so edge resends");
+                None
             }
             Err(e) => {
                 eprintln!("{key}: not durable, so not acknowledged -- the edge will resend: {e}");

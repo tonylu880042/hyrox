@@ -19,7 +19,11 @@ pub struct OperatorCommand {
 
 impl OperatorCommand {
     pub fn new(operator: impl Into<String>, at: Instant) -> Self {
-        Self { operator: operator.into(), reason: None, at }
+        Self {
+            operator: operator.into(),
+            reason: None,
+            at,
+        }
     }
 
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
@@ -30,7 +34,10 @@ impl OperatorCommand {
     /// A reason that is present and not just whitespace. A blank string would satisfy the
     /// type and tell a later reader nothing.
     pub(crate) fn stated_reason(&self) -> Option<&str> {
-        self.reason.as_deref().map(str::trim).filter(|r| !r.is_empty())
+        self.reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
     }
 }
 
@@ -51,7 +58,10 @@ pub enum OperatorError<E> {
     /// No such reader on the map. Reported rather than silently succeeding: an operator who
     /// removed nothing must not be told they removed something.
     #[error("no reader registered as {device_id} {reader_id}")]
-    UnknownReader { device_id: String, reader_id: String },
+    UnknownReader {
+        device_id: String,
+        reader_id: String,
+    },
     #[error("athlete {0:?} is not in this session")]
     UnknownAthlete(String),
     /// Two vests with the same number in one session is a timing error waiting to happen

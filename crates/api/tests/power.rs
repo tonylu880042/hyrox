@@ -19,13 +19,20 @@ async fn powering_off_is_refused_while_a_class_is_running() {
 
     let (status, body) = call(
         &router,
-        post("/api/operator/power", DESK, json!({ "action": "POWEROFF", "reason": "打烊" })),
+        post(
+            "/api/operator/power",
+            DESK,
+            json!({ "action": "POWEROFF", "reason": "打烊" }),
+        ),
     )
     .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "CLASS_RUNNING");
-    assert!(store.power_actions().is_empty(), "nothing was asked of the machine");
+    assert!(
+        store.power_actions().is_empty(),
+        "nothing was asked of the machine"
+    );
 }
 
 #[tokio::test]
@@ -34,7 +41,11 @@ async fn powering_off_is_allowed_once_the_class_is_over() {
 
     let (status, body) = call(
         &router,
-        post("/api/operator/power", DESK, json!({ "action": "POWEROFF", "reason": "打烊" })),
+        post(
+            "/api/operator/power",
+            DESK,
+            json!({ "action": "POWEROFF", "reason": "打烊" }),
+        ),
     )
     .await;
 
@@ -49,14 +60,21 @@ async fn powering_off_is_allowed_once_the_class_is_over() {
 async fn powering_off_needs_a_reason_and_is_audited() {
     let (router, store) = completed();
 
-    let (status, body) =
-        call(&router, post("/api/operator/power", DESK, json!({ "action": "POWEROFF" }))).await;
+    let (status, body) = call(
+        &router,
+        post("/api/operator/power", DESK, json!({ "action": "POWEROFF" })),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "REASON_REQUIRED");
 
     call(
         &router,
-        post("/api/operator/power", DESK, json!({ "action": "REBOOT", "reason": "更新後重開" })),
+        post(
+            "/api/operator/power",
+            DESK,
+            json!({ "action": "REBOOT", "reason": "更新後重開" }),
+        ),
     )
     .await;
     let audit = store.audits().pop().expect("an audit record");
@@ -71,7 +89,11 @@ async fn a_power_action_needs_an_operator_name() {
 
     let (status, body) = call(
         &router,
-        anonymous("POST", "/api/operator/power", json!({ "action": "POWEROFF", "reason": "x" })),
+        anonymous(
+            "POST",
+            "/api/operator/power",
+            json!({ "action": "POWEROFF", "reason": "x" }),
+        ),
     )
     .await;
 
@@ -85,7 +107,11 @@ async fn something_that_is_not_a_power_action_is_refused() {
 
     let (status, body) = call(
         &router,
-        post("/api/operator/power", DESK, json!({ "action": "FORMAT", "reason": "x" })),
+        post(
+            "/api/operator/power",
+            DESK,
+            json!({ "action": "FORMAT", "reason": "x" }),
+        ),
     )
     .await;
 
@@ -132,8 +158,15 @@ async fn the_venue_settings_are_readable_without_an_operator_name() {
 async fn a_venue_sets_its_own_rotation_and_reads_it_back() {
     let (router, _store) = running();
 
-    let (status, body) =
-        call(&router, support::put("/api/operator/settings", DESK, json!({ "live_page_ms": 20000 }))).await;
+    let (status, body) = call(
+        &router,
+        support::put(
+            "/api/operator/settings",
+            DESK,
+            json!({ "live_page_ms": 20000 }),
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["live_page_ms"], 20_000);
 
@@ -145,8 +178,15 @@ async fn a_venue_sets_its_own_rotation_and_reads_it_back() {
 async fn an_unreadable_rotation_is_refused() {
     let (router, _store) = running();
 
-    let (status, body) =
-        call(&router, support::put("/api/operator/settings", DESK, json!({ "live_page_ms": 200 }))).await;
+    let (status, body) = call(
+        &router,
+        support::put(
+            "/api/operator/settings",
+            DESK,
+            json!({ "live_page_ms": 200 }),
+        ),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "INVALID_SETTING");
@@ -158,7 +198,11 @@ async fn changing_a_setting_needs_an_operator_name() {
 
     let (status, body) = call(
         &router,
-        support::anonymous("PUT", "/api/operator/settings", json!({ "live_page_ms": 20000 })),
+        support::anonymous(
+            "PUT",
+            "/api/operator/settings",
+            json!({ "live_page_ms": 20000 }),
+        ),
     )
     .await;
 

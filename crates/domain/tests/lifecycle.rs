@@ -62,15 +62,20 @@ fn a_paused_session_completes_without_being_resumed_first() {
 
 #[test]
 fn every_live_state_can_be_cancelled() {
-    for mut s in [draft(), {
-        let mut r = draft();
-        r.mark_ready().unwrap();
-        r
-    }, running(), {
-        let mut p = running();
-        p.pause(Instant(1)).unwrap();
-        p
-    }] {
+    for mut s in [
+        draft(),
+        {
+            let mut r = draft();
+            r.mark_ready().unwrap();
+            r
+        },
+        running(),
+        {
+            let mut p = running();
+            p.pause(Instant(1)).unwrap();
+            p
+        },
+    ] {
         s.cancel().unwrap();
         assert_eq!(s.status, SessionStatus::Cancelled);
     }
@@ -100,10 +105,13 @@ fn a_cancelled_session_cannot_be_restarted() {
             to: SessionStatus::Running
         })
     );
-    assert_eq!(s.reopen(), Err(SessionError::IllegalTransition {
-        from: SessionStatus::Cancelled,
-        to: SessionStatus::Running
-    }));
+    assert_eq!(
+        s.reopen(),
+        Err(SessionError::IllegalTransition {
+            from: SessionStatus::Cancelled,
+            to: SessionStatus::Running
+        })
+    );
 }
 
 /// ADR 0001 D2 kept: a mis-tap on a busy floor must not force a new session. It is a
@@ -137,7 +145,10 @@ fn configuration_is_editable_before_the_class_starts_and_not_after() {
     let mut s = draft();
     assert!(s.accepts_config_edits());
     s.mark_ready().unwrap();
-    assert!(s.accepts_config_edits(), "session-specific tweaks happen in READY");
+    assert!(
+        s.accepts_config_edits(),
+        "session-specific tweaks happen in READY"
+    );
     s.start().unwrap();
     assert!(!s.accepts_config_edits());
 }

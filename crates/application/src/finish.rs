@@ -32,7 +32,7 @@ pub async fn apply_finish_policy<S: HubStore>(
     let course = state.config.course.clone();
     let clock = state.class_clock();
     let mut newly = Vec::new();
-    for athlete in &mut state.athletes {
+    for athlete in &state.athletes {
         if athlete.status == AthleteStatus::Finished {
             continue;
         }
@@ -42,14 +42,23 @@ pub async fn apply_finish_policy<S: HubStore>(
         if let FinishDecision::Finished { at } =
             policy.evaluate(athlete, clock, now, course.as_ref())
         {
-            domain::finish(athlete, at);
             newly.push((athlete.athlete_id.clone(), at));
         }
     }
 
-    // Only for those who just finished: the common tick finishes nobody and writes nothing.
+    // Persist finishes FIRST. If saving fails, the athletes remain unfinished in memory,
+    // and the next tick will safely retry saving them.
     for (athlete_id, at) in &newly {
-        store.save_athlete_finish(&state.session.id, athlete_id, Some(*at)).await?;
+        store
+            .save_athlete_finish(&state.session.id, athlete_id, Some(*at))
+            .await?;
+    }
+
+    // Only after durable persistence succeeds do we fold the finish into memory.
+    for (athlete_id, at) in &newly {
+        if let Some(athlete) = state.athlete_mut(athlete_id) {
+            domain::finish(athlete, *at);
+        }
     }
     Ok(newly.into_iter().map(|(id, _)| id).collect())
 }
@@ -69,15 +78,14 @@ pub async fn end_class<S: HubStore>(
         return Err(OperatorError::NoFinishRule);
     }
 
-    let mut finished = Vec::new();
-    for athlete in &mut state.athletes {
-        if athlete.status == AthleteStatus::Active {
-            domain::finish(athlete, cmd.at);
-            finished.push(athlete.athlete_id.clone());
-        }
-    }
-    // Same reason as the rule's own finishes: the coach's decision is not a read, so nothing
-    // replays it (migration 0010).
+    let finished: Vec<String> = state
+        .athletes
+        .iter()
+        .filter(|a| a.status == AthleteStatus::Active)
+        .map(|a| a.athlete_id.clone())
+        .collect();
+
+    // Persist finishes FIRST before modifying in-memory state.
     for athlete_id in &finished {
         store
             .save_athlete_finish(&state.session.id, athlete_id, Some(cmd.at))
@@ -86,9 +94,10 @@ pub async fn end_class<S: HubStore>(
     }
 
     let before = status_name(state.session.status);
-    state.session.complete().map_err(OperatorError::Session)?;
+    let mut candidate = state.session.clone();
+    candidate.complete().map_err(OperatorError::Session)?;
     store
-        .save_session(&state.session, state.class_start)
+        .save_session(&candidate, state.class_start)
         .await
         .map_err(OperatorError::Storage)?;
     store
@@ -103,5 +112,13 @@ pub async fn end_class<S: HubStore>(
         })
         .await
         .map_err(OperatorError::Storage)?;
+
+    // All persistence succeeded: commit to in-memory session and athletes.
+    state.session = candidate;
+    for athlete_id in &finished {
+        if let Some(athlete) = state.athlete_mut(athlete_id) {
+            domain::finish(athlete, cmd.at);
+        }
+    }
     Ok(finished)
 }

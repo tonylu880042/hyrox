@@ -84,7 +84,11 @@ fn there_is_no_sixty_second_window() {
         }
     }
     assert_eq!(emits, 1, "continuous presence must emit exactly once");
-    assert_eq!(p.observe(TAG, 125_000), PresenceDecision::Emit, "5 s gap re-arms");
+    assert_eq!(
+        p.observe(TAG, 125_000),
+        PresenceDecision::Emit,
+        "5 s gap re-arms"
+    );
 }
 
 #[test]
@@ -101,7 +105,11 @@ fn each_tag_is_tracked_independently() {
     let mut p = presence(4_000);
     let other = "E280117000009999";
     assert_eq!(p.observe(TAG, 0), PresenceDecision::Emit);
-    assert_eq!(p.observe(other, 100), PresenceDecision::Emit, "a different athlete");
+    assert_eq!(
+        p.observe(other, 100),
+        PresenceDecision::Emit,
+        "a different athlete"
+    );
     assert_eq!(p.observe(TAG, 200), PresenceDecision::Suppressed);
     assert_eq!(p.observe(other, 300), PresenceDecision::Suppressed);
 }

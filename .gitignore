@@ -5,3 +5,5 @@ target/
 *.db-shm
 design/live/icon-sheet.html
 design/demo/out/
+__pycache__/
+*.pyc

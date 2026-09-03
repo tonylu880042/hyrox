@@ -13,7 +13,11 @@ use serde_json::json;
 use support::{anonymous, call, get, running};
 
 fn sign_up(name: &str) -> axum::http::Request<axum::body::Body> {
-    anonymous("POST", "/api/checkin/signup", json!({ "display_name": name }))
+    anonymous(
+        "POST",
+        "/api/checkin/signup",
+        json!({ "display_name": name }),
+    )
 }
 
 #[tokio::test]
@@ -24,12 +28,21 @@ async fn an_entrant_registers_themselves_and_is_handed_a_code() {
 
     assert_eq!(status, StatusCode::OK);
     let code = body["code"].as_str().expect("a code");
-    assert!(domain::EntryCode::parse(code).is_ok(), "{code:?} should be an entry code");
+    assert!(
+        domain::EntryCode::parse(code).is_ok(),
+        "{code:?} should be an entry code"
+    );
     assert_eq!(body["display_name"], "陳小明");
-    assert!(body["bib"].as_i64().is_some(), "an entrant is given a number to wear");
+    assert!(
+        body["bib"].as_i64().is_some(),
+        "an entrant is given a number to wear"
+    );
 
     let saved = store.saved_athletes().pop().expect("a roster row");
-    assert_eq!(saved.athlete_id, code, "the code is the athlete id, not a second number");
+    assert_eq!(
+        saved.athlete_id, code,
+        "the code is the athlete id, not a second number"
+    );
     assert_eq!(saved.member_id, None);
 }
 
@@ -83,9 +96,16 @@ async fn signing_up_cannot_claim_a_bib_or_a_membership() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "the extra fields are ignored, not an error");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the extra fields are ignored, not an error"
+    );
     let saved = store.saved_athletes().pop().expect("a roster row");
-    assert_eq!(saved.member_id, None, "an unauthenticated route cannot claim a membership");
+    assert_eq!(
+        saved.member_id, None,
+        "an unauthenticated route cannot claim a membership"
+    );
     assert_ne!(saved.bib, 77, "77 belongs to whoever the desk gave it to");
 }
 
@@ -170,6 +190,9 @@ async fn the_hub_draws_the_entry_qr_itself() {
     let response = support::raw(&router, get(&format!("/api/entry/{code}/qr.svg"))).await;
 
     assert_eq!(response.0, StatusCode::OK);
-    assert_eq!(response.1, "image/svg+xml; charset=utf-8", "served by the hub, not a CDN");
+    assert_eq!(
+        response.1, "image/svg+xml; charset=utf-8",
+        "served by the hub, not a CDN"
+    );
     assert!(response.2.starts_with("<?xml") || response.2.starts_with("<svg"));
 }

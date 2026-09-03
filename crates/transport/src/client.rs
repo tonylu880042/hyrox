@@ -95,9 +95,10 @@ pub async fn subscribe_acks(client: &AsyncClient, device: &DeviceId) -> Result<(
 /// retrying is normally the right answer.
 pub async fn next_inbound(eventloop: &mut EventLoop) -> Result<Option<Inbound>, ConnectionError> {
     match eventloop.poll().await? {
-        Event::Incoming(Packet::Publish(publish)) => {
-            Ok(Some(crate::inbound::classify(&publish.topic, &publish.payload)))
-        }
+        Event::Incoming(Packet::Publish(publish)) => Ok(Some(crate::inbound::classify(
+            &publish.topic,
+            &publish.payload,
+        ))),
         Event::Incoming(Packet::ConnAck(ack)) => Ok(Some(Inbound::Connected {
             session_present: ack.session_present,
         })),

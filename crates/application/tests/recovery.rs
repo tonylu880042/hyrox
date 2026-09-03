@@ -4,9 +4,8 @@ mod support;
 
 use application::{
     checkin::{bind_tag, enter, rebind_tag},
-    Entrant,
-    register_reader, resume_or_start, HubStore, LiveSession, OperatorCommand, OperatorError,
-    Recovery, RosterEntry, SessionPlan,
+    register_reader, resume_or_start, Entrant, HubStore, LiveSession, OperatorCommand,
+    OperatorError, Recovery, RosterEntry, SessionPlan,
 };
 use domain::{
     AthleteState, Duration, FinishPolicy, Instant, MemberRef, MembershipStatus, ReaderKey,
@@ -109,7 +108,14 @@ async fn a_member_with_a_lapsed_membership_is_still_admitted() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     let member = MemberRef::new("m-9", "WANG SHU-FEN", MembershipStatus::Expired);
 
-    enter(&mut state, &store, Entrant::member(&member), &OperatorCommand::new("CHECKIN TABLET", START)).await.expect("enter");
+    enter(
+        &mut state,
+        &store,
+        Entrant::member(&member),
+        &OperatorCommand::new("CHECKIN TABLET", START),
+    )
+    .await
+    .expect("enter");
 
     assert!(state.athlete("m-9").is_some());
 }
@@ -120,8 +126,22 @@ async fn admitting_the_same_member_twice_adds_one_roster_line() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     let member = MemberRef::new("m-9", "WANG SHU-FEN", MembershipStatus::Active);
 
-    enter(&mut state, &store, Entrant::member(&member), &OperatorCommand::new("CHECKIN TABLET", START)).await.expect("enter");
-    enter(&mut state, &store, Entrant::member(&member), &OperatorCommand::new("CHECKIN TABLET", START)).await.expect("enter again");
+    enter(
+        &mut state,
+        &store,
+        Entrant::member(&member),
+        &OperatorCommand::new("CHECKIN TABLET", START),
+    )
+    .await
+    .expect("enter");
+    enter(
+        &mut state,
+        &store,
+        Entrant::member(&member),
+        &OperatorCommand::new("CHECKIN TABLET", START),
+    )
+    .await
+    .expect("enter again");
 
     assert_eq!(state.athletes.len(), 2);
 }
@@ -133,9 +153,15 @@ async fn binding_a_pending_tag_clears_it_from_the_checkin_list() {
     let tag = TagId::parse("TAG-A1").unwrap();
     state.note_pending_tag(tag.clone());
 
-    bind_tag(&mut state, &store, &tag, "a1", &OperatorCommand::new("CHECKIN TABLET", START))
-        .await
-        .expect("bind");
+    bind_tag(
+        &mut state,
+        &store,
+        &tag,
+        "a1",
+        &OperatorCommand::new("CHECKIN TABLET", START),
+    )
+    .await
+    .expect("bind");
 
     assert!(state.pending_tags().is_empty());
     assert_eq!(state.bindings.athlete_for_tag("s-new", &tag), Some("a1"));
@@ -167,7 +193,10 @@ async fn the_member_directory_stub_reports_that_it_is_not_configured() {
 
     // The 健身管 contract is unknown (docs/open-issues.md), so the only honest client is
     // one that says so rather than guessing an endpoint.
-    let err = UnconfiguredDirectory.lookup("m-1").await.expect_err("no client yet");
+    let err = UnconfiguredDirectory
+        .lookup("m-1")
+        .await
+        .expect_err("no client yet");
 
     assert_eq!(err, application::DirectoryError::NotConfigured);
 }
@@ -224,7 +253,9 @@ async fn starting_a_session_persists_the_configuration_it_was_armed_with() {
     let mut plan = plan();
     plan.config = SessionConfig::new("s-new")
         .with_course(class_course())
-        .with_finish_policy(FinishPolicy::ClassDuration { limit: Duration(3_600_000) });
+        .with_finish_policy(FinishPolicy::ClassDuration {
+            limit: Duration(3_600_000),
+        });
 
     let (state, how) = resume_or_start(&store, plan).await.expect("start");
 
@@ -244,7 +275,9 @@ async fn a_resumed_session_keeps_the_finish_policy_it_was_armed_with() {
         Some(
             SessionConfig::new("s-old")
                 .with_course(class_course())
-                .with_finish_policy(FinishPolicy::ClassDuration { limit: Duration(3_600_000) }),
+                .with_finish_policy(FinishPolicy::ClassDuration {
+                    limit: Duration(3_600_000),
+                }),
         ),
     );
     // The caller offers a different rule and a different course, as a fresh startup would.
@@ -256,7 +289,9 @@ async fn a_resumed_session_keeps_the_finish_policy_it_was_armed_with() {
     assert_eq!(how, Recovery::Resumed);
     assert_eq!(
         state.config.finish_policy,
-        FinishPolicy::ClassDuration { limit: Duration(3_600_000) },
+        FinishPolicy::ClassDuration {
+            limit: Duration(3_600_000)
+        },
         "the rule the class started under, not the caller's"
     );
     assert_eq!(state.config.course.as_ref(), Some(&class_course()));
@@ -280,15 +315,23 @@ async fn a_resumed_session_gets_its_reader_map_back() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     let key = ReaderKey::parse("a4cf128b3d91", "rfid-01").expect("key");
     let registration = ReaderRegistration::new(key.clone(), "SKIERG", ReaderMode::Entry);
-    register_reader(&mut state, &store, &registration, &OperatorCommand::new("OP", START))
-        .await
-        .expect("register");
+    register_reader(
+        &mut state,
+        &store,
+        &registration,
+        &OperatorCommand::new("OP", START),
+    )
+    .await
+    .expect("register");
 
     // Restart: only the store survives.
     let (resumed, how) = resume_or_start(&store, plan()).await.expect("resume");
 
     assert_eq!(how, Recovery::Resumed);
-    let found = resumed.readers.resolve(&key).expect("the reader must resolve as before");
+    let found = resumed
+        .readers
+        .resolve(&key)
+        .expect("the reader must resolve as before");
     assert_eq!(found.station, "SKIERG");
     assert_eq!(found.mode, ReaderMode::Entry);
 }
@@ -303,15 +346,24 @@ async fn re_registering_an_unchanged_reader_writes_no_audit_line() {
     let cmd = OperatorCommand::new("OP", START);
     let entry = ReaderRegistration::new(key.clone(), "SKIERG", ReaderMode::Entry);
 
-    register_reader(&mut state, &store, &entry, &cmd).await.expect("first");
-    register_reader(&mut state, &store, &entry, &cmd).await.expect("again");
+    register_reader(&mut state, &store, &entry, &cmd)
+        .await
+        .expect("first");
+    register_reader(&mut state, &store, &entry, &cmd)
+        .await
+        .expect("again");
     let moved = ReaderRegistration::new(key.clone(), "ROWING", ReaderMode::Entry);
-    register_reader(&mut state, &store, &moved, &cmd).await.expect("repointed");
+    register_reader(&mut state, &store, &moved, &cmd)
+        .await
+        .expect("repointed");
 
     let actions: Vec<String> = store.audits().iter().map(|a| a.action.clone()).collect();
     assert_eq!(actions, ["READER_REGISTER", "READER_REGISTER"]);
     assert_eq!(store.audits()[1].before.as_deref(), Some("SKIERG Entry"));
-    assert_eq!(state.readers.resolve(&key).expect("resolve").station, "ROWING");
+    assert_eq!(
+        state.readers.resolve(&key).expect("resolve").station,
+        "ROWING"
+    );
 }
 
 #[tokio::test]
@@ -320,9 +372,15 @@ async fn a_resumed_session_gets_its_bindings_back_including_the_closed_ones() {
     let (mut state, _) = resume_or_start(&store, plan()).await.expect("start");
     let first = TagId::parse("TAG-A1").unwrap();
     let second = TagId::parse("TAG-A2").unwrap();
-    bind_tag(&mut state, &store, &first, "a1", &OperatorCommand::new("CHECKIN", START))
-        .await
-        .expect("bind");
+    bind_tag(
+        &mut state,
+        &store,
+        &first,
+        "a1",
+        &OperatorCommand::new("CHECKIN", START),
+    )
+    .await
+    .expect("bind");
     rebind_tag(
         &mut state,
         &store,
@@ -335,13 +393,20 @@ async fn a_resumed_session_gets_its_bindings_back_including_the_closed_ones() {
 
     let (resumed, _) = resume_or_start(&store, plan()).await.expect("resume");
 
-    assert_eq!(resumed.bindings.athlete_for_tag("s-new", &second), Some("a1"));
+    assert_eq!(
+        resumed.bindings.athlete_for_tag("s-new", &second),
+        Some("a1")
+    );
     assert_eq!(
         resumed.bindings.history().len(),
         2,
         "the closed binding is the audit trail and must survive (CLAUDE.md 20)"
     );
-    assert!(resumed.bindings.history().iter().any(|b| b.tag_id == first && !b.is_active()));
+    assert!(resumed
+        .bindings
+        .history()
+        .iter()
+        .any(|b| b.tag_id == first && !b.is_active()));
 }
 
 #[tokio::test]
@@ -387,13 +452,22 @@ async fn a_tag_bound_before_the_restart_is_not_queued_for_check_in_again() {
         .await
         .expect("raw");
     let tag = TagId::parse("TAG-A1").unwrap();
-    bind_tag(&mut state, &store, &tag, "a1", &OperatorCommand::new("CHECKIN", START))
-        .await
-        .expect("bind");
+    bind_tag(
+        &mut state,
+        &store,
+        &tag,
+        "a1",
+        &OperatorCommand::new("CHECKIN", START),
+    )
+    .await
+    .expect("bind");
 
     let (resumed, _) = resume_or_start(&store, plan()).await.expect("resume");
 
-    assert!(resumed.pending_tags().is_empty(), "a claimed band is not still waiting");
+    assert!(
+        resumed.pending_tags().is_empty(),
+        "a claimed band is not still waiting"
+    );
 }
 
 /// A bib is not replayed from events: it is a stored fact about the roster, and it must
@@ -429,5 +503,8 @@ async fn a_resumed_session_gets_the_bibs_it_already_handed_out() {
         .find(|a| a.athlete_id == id)
         .expect("a roster row")
         .bib;
-    assert_eq!(bib, 2, "the next entrant gets the next free number, not a duplicate");
+    assert_eq!(
+        bib, 2,
+        "the next entrant gets the next free number, not a duplicate"
+    );
 }

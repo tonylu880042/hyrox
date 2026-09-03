@@ -221,7 +221,9 @@ async fn broker_carries_an_ack_from_the_hub_to_the_device_that_earned_it() {
 
     let (edge, mut edge_loop) = client::connect(&config);
     wait_connected(&mut edge_loop).await;
-    client::subscribe_acks(&edge, &device).await.expect("subscribe acks");
+    client::subscribe_acks(&edge, &device)
+        .await
+        .expect("subscribe acks");
     settle(&mut edge_loop).await;
 
     let (hub, mut hub_loop) = client::connect(&MqttConfig {
@@ -235,7 +237,9 @@ async fn broker_carries_an_ack_from_the_hub_to_the_device_that_earned_it() {
     let ack = contract::ingest(&store, &contract::ReceivedEvent::new(event(10_382), 1))
         .await
         .expect("commit");
-    client::publish_ack(&hub, &device, &ack).await.expect("publish ack");
+    client::publish_ack(&hub, &device, &ack)
+        .await
+        .expect("publish ack");
     tokio::spawn(async move { while client::next_inbound(&mut hub_loop).await.is_ok() {} });
 
     match next_message(&mut edge_loop).await {
@@ -267,7 +271,9 @@ async fn broker_retains_device_health_for_a_hub_that_connects_later() {
 
     let (edge, mut edge_loop) = client::connect(&config);
     wait_connected(&mut edge_loop).await;
-    client::publish_status(&edge, &status).await.expect("publish status");
+    client::publish_status(&edge, &status)
+        .await
+        .expect("publish status");
     settle(&mut edge_loop).await;
 
     // A hub that starts *after* the warning must still see it (CLAUDE.md 18, 21).
@@ -283,9 +289,14 @@ async fn broker_retains_device_health_for_a_hub_that_connects_later() {
     }
 
     // Clear the retained message, or it outlives the test run and greets the next one.
-    edge.publish(topic::status(&status.device_id), client::QOS, true, Vec::new())
-        .await
-        .expect("clear retained status");
+    edge.publish(
+        topic::status(&status.device_id),
+        client::QOS,
+        true,
+        Vec::new(),
+    )
+    .await
+    .expect("clear retained status");
     settle(&mut edge_loop).await;
 }
 

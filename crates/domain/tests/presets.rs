@@ -11,9 +11,18 @@ fn there_are_four_presets_and_all_of_them_are_system_templates() {
     let all = presets();
     assert_eq!(all.len(), 4);
     for t in &all {
-        assert_eq!(t.source, TemplateSource::System, "{} must be read-only", t.name);
+        assert_eq!(
+            t.source,
+            TemplateSource::System,
+            "{} must be read-only",
+            t.name
+        );
         assert!(!t.is_editable());
-        assert!(t.blocks.iter().all(|b| !b.exercises.is_empty()), "{} has an empty block", t.name);
+        assert!(
+            t.blocks.iter().all(|b| !b.exercises.is_empty()),
+            "{} has an empty block",
+            t.name
+        );
     }
 }
 
@@ -37,14 +46,21 @@ fn every_preset_compiles_into_a_runnable_course() {
             .compile(&lib)
             .unwrap_or_else(|e| panic!("{} does not compile: {e:?}", t.name));
         assert!(!course.is_empty(), "{} compiles to nothing", t.name);
-        assert!(course.steps.iter().all(|s| s.target.is_some()), "{} has an untargeted step", t.name);
+        assert!(
+            course.steps.iter().all(|s| s.target.is_some()),
+            "{} has an untargeted step",
+            t.name
+        );
     }
 }
 
 #[test]
 fn engine_800_is_the_brief_s_first_template() {
     let lib = ExerciseLibrary::preset();
-    let t = presets().into_iter().find(|t| t.name == "HYROX Engine 800").expect("Engine 800");
+    let t = presets()
+        .into_iter()
+        .find(|t| t.name == "HYROX Engine 800")
+        .expect("Engine 800");
     assert_eq!(t.category, domain::TemplateCategory::Engine);
     assert_eq!(t.blocks[0].block_type, BlockType::Sequential);
 
@@ -65,7 +81,10 @@ fn engine_800_is_the_brief_s_first_template() {
 
 #[test]
 fn engine_short_is_three_rounds_of_four() {
-    let t = presets().into_iter().find(|t| t.name == "HYROX Engine Short").expect("Engine Short");
+    let t = presets()
+        .into_iter()
+        .find(|t| t.name == "HYROX Engine Short")
+        .expect("Engine Short");
     assert_eq!(t.blocks[0].block_type, BlockType::Rounds);
     assert_eq!(t.blocks[0].rounds, Some(3));
     assert_eq!(t.blocks[0].exercises.len(), 4);
@@ -75,7 +94,10 @@ fn engine_short_is_three_rounds_of_four() {
 #[test]
 fn power_is_three_rounds_of_five_functional_movements() {
     let lib = ExerciseLibrary::preset();
-    let t = presets().into_iter().find(|t| t.name == "HYROX Power").expect("Power");
+    let t = presets()
+        .into_iter()
+        .find(|t| t.name == "HYROX Power")
+        .expect("Power");
     assert_eq!(t.category, domain::TemplateCategory::Power);
     assert_eq!(t.step_count(), 15);
     let course = t.compile(&lib).unwrap();
@@ -87,7 +109,10 @@ fn power_is_three_rounds_of_five_functional_movements() {
 #[test]
 fn complete_short_alternates_runs_with_the_eight_stations() {
     let lib = ExerciseLibrary::preset();
-    let t = presets().into_iter().find(|t| t.name == "HYROX Complete Short").expect("Complete");
+    let t = presets()
+        .into_iter()
+        .find(|t| t.name == "HYROX Complete Short")
+        .expect("Complete");
     let course = t.compile(&lib).unwrap();
 
     assert_eq!(course.len(), 16);

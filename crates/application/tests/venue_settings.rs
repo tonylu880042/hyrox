@@ -8,7 +8,7 @@
 
 mod support;
 
-use application::{venue_settings, save_venue_setting, OperatorCommand, SettingError};
+use application::{save_venue_setting, venue_settings, OperatorCommand, SettingError};
 use domain::Instant;
 use support::FakeStore;
 
@@ -24,16 +24,24 @@ async fn a_venue_that_has_set_nothing_gets_the_default() {
 
     let settings = venue_settings(&store).await.expect("settings");
 
-    assert_eq!(settings.live_page_ms, 10_000, "ten seconds, the value shipped with it");
+    assert_eq!(
+        settings.live_page_ms, 10_000,
+        "ten seconds, the value shipped with it"
+    );
 }
 
 #[tokio::test]
 async fn a_stored_value_is_what_the_screen_gets() {
     let store = FakeStore::new();
 
-    save_venue_setting(&store, "live.page_ms", "20000", &desk()).await.expect("saved");
+    save_venue_setting(&store, "live.page_ms", "20000", &desk())
+        .await
+        .expect("saved");
 
-    assert_eq!(venue_settings(&store).await.expect("settings").live_page_ms, 20_000);
+    assert_eq!(
+        venue_settings(&store).await.expect("settings").live_page_ms,
+        20_000
+    );
 }
 
 /// The bounds are sanity, not product policy: a page that flips every 200ms is unreadable,
@@ -60,7 +68,10 @@ async fn a_setting_nobody_defined_is_refused_rather_than_stored() {
 
     let saved = save_venue_setting(&store, "live.colour_scheme", "neon", &desk()).await;
 
-    assert!(matches!(saved, Err(SettingError::Unknown(_))), "an unknown key is a typo, not a feature");
+    assert!(
+        matches!(saved, Err(SettingError::Unknown(_))),
+        "an unknown key is a typo, not a feature"
+    );
 }
 
 /// It changes what a venue's screen does, so it is a write like any other (ADR 0001 D1).
@@ -68,7 +79,9 @@ async fn a_setting_nobody_defined_is_refused_rather_than_stored() {
 async fn changing_a_setting_is_audited() {
     let store = FakeStore::new();
 
-    save_venue_setting(&store, "live.page_ms", "15000", &desk()).await.expect("saved");
+    save_venue_setting(&store, "live.page_ms", "15000", &desk())
+        .await
+        .expect("saved");
 
     let entry = store.audits().pop().expect("an audit record");
     assert_eq!(entry.action, "VENUE_SETTING");
@@ -83,7 +96,10 @@ async fn changing_a_setting_is_audited() {
 async fn a_stored_value_that_makes_no_sense_falls_back_to_the_default() {
     let store = FakeStore::new().with_venue_setting("live.page_ms", "banana");
 
-    assert_eq!(venue_settings(&store).await.expect("settings").live_page_ms, 10_000);
+    assert_eq!(
+        venue_settings(&store).await.expect("settings").live_page_ms,
+        10_000
+    );
 }
 
 // --- how many fit on a page (M6 follow-up) --------------------------------------------
@@ -92,16 +108,30 @@ async fn a_stored_value_that_makes_no_sense_falls_back_to_the_default() {
 async fn the_default_page_holds_twelve() {
     let store = FakeStore::new();
 
-    assert_eq!(venue_settings(&store).await.expect("settings").live_page_size, 12);
+    assert_eq!(
+        venue_settings(&store)
+            .await
+            .expect("settings")
+            .live_page_size,
+        12
+    );
 }
 
 #[tokio::test]
 async fn a_venue_can_pick_a_denser_page() {
     let store = FakeStore::new();
 
-    save_venue_setting(&store, "live.page_size", "30", &desk()).await.expect("saved");
+    save_venue_setting(&store, "live.page_size", "30", &desk())
+        .await
+        .expect("saved");
 
-    assert_eq!(venue_settings(&store).await.expect("settings").live_page_size, 30);
+    assert_eq!(
+        venue_settings(&store)
+            .await
+            .expect("settings")
+            .live_page_size,
+        30
+    );
 }
 
 /// The point of offering layouts instead of a number: seven cards leave a ragged row, and

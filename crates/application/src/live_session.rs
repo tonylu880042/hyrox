@@ -74,7 +74,10 @@ impl LiveSession {
     }
 
     pub fn bib_of(&self, athlete_id: &str) -> Option<i64> {
-        self.bibs.iter().find(|(id, _)| id == athlete_id).map(|(_, b)| *b)
+        self.bibs
+            .iter()
+            .find(|(id, _)| id == athlete_id)
+            .map(|(_, b)| *b)
     }
 
     /// Records the number on somebody's vest. Replaces an existing one, so reassigning a
@@ -91,7 +94,9 @@ impl LiveSession {
     }
 
     pub fn athlete_mut(&mut self, athlete_id: &str) -> Option<&mut AthleteState> {
-        self.athletes.iter_mut().find(|a| a.athlete_id == athlete_id)
+        self.athletes
+            .iter_mut()
+            .find(|a| a.athlete_id == athlete_id)
     }
 
     /// How long the class has been running, which is what a duration-based finish rule

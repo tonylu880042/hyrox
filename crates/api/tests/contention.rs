@@ -36,3 +36,29 @@ async fn a_slow_store_read_does_not_hold_up_the_rest_of_the_hub() {
     let (status, _) = inbox.await.expect("the inbox task");
     assert_eq!(status, StatusCode::OK);
 }
+
+/// The unregistered readers endpoint reads raw_events from the store.
+/// It must let go of the session lock before querying the store.
+#[tokio::test]
+async fn a_slow_unregistered_readers_query_does_not_hold_up_the_rest_of_the_hub() {
+    let (router, store) = running();
+    let gate = store.park_exceptions();
+
+    let readers_task = tokio::spawn({
+        let router = router.clone();
+        async move { call(&router, get("/api/operator/readers/unregistered")).await }
+    });
+    tokio::task::yield_now().await;
+
+    // Meanwhile the live screen -- which needs the session lock -- is served without timeout.
+    let live = tokio::time::timeout(Duration::from_secs(2), call(&router, get("/api/live")));
+
+    let (status, _body) = live
+        .await
+        .expect("the hub was blocked behind an unregistered readers store query");
+    assert_eq!(status, StatusCode::OK);
+
+    gate.notify_one();
+    let (status, _) = readers_task.await.expect("the readers task");
+    assert_eq!(status, StatusCode::OK);
+}

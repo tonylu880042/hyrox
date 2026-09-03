@@ -48,7 +48,9 @@ async fn legacy_db() -> SqlitePool {
 async fn migration_0007_applies_to_a_database_that_already_holds_reads() {
     let pool = legacy_db().await;
 
-    pool.execute(M7).await.expect("0007 must apply to a database with reads in it");
+    pool.execute(M7)
+        .await
+        .expect("0007 must apply to a database with reads in it");
 
     // Immutable means immutable: the rebuild copies, it does not reinterpret (CLAUDE.md 19).
     let rows: Vec<(i64, String, i64)> =
@@ -76,7 +78,10 @@ async fn migration_0007_applies_to_a_database_that_already_holds_reads() {
         .fetch_all(&pool)
         .await
         .expect("the check runs");
-    assert!(violations.is_empty(), "the rebuild must leave no dangling references");
+    assert!(
+        violations.is_empty(),
+        "the rebuild must leave no dangling references"
+    );
 }
 
 #[tokio::test]
@@ -100,5 +105,8 @@ async fn after_0007_one_round_can_hold_several_tags() {
                 VALUES ('a4cf128b3d91', 'rfid-01', 1, 9, 'TAGA', 1300, 1301);",
         )
         .await;
-    assert!(again.is_err(), "device + boot + sequence + tag stays unique");
+    assert!(
+        again.is_err(),
+        "device + boot + sequence + tag stays unique"
+    );
 }

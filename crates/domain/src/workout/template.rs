@@ -43,7 +43,10 @@ impl BlockType {
     /// rotation do not: how many rounds an athlete gets is the *result*, not the plan, so
     /// there is no honest flat course to compile them into (CLAUDE.md 28).
     pub fn is_runnable(self) -> bool {
-        matches!(self, BlockType::Sequential | BlockType::Rounds | BlockType::Interval)
+        matches!(
+            self,
+            BlockType::Sequential | BlockType::Rounds | BlockType::Interval
+        )
     }
 }
 
@@ -143,7 +146,9 @@ impl WorkoutBlock {
             BlockType::Rounds | BlockType::Interval => match self.rounds {
                 // Zero rounds is the same mistake as no rounds: it prescribes no work.
                 Some(n) if n >= 1 => Ok(n),
-                _ => Err(CompileError::RoundsMissing { block: self.name.clone() }),
+                _ => Err(CompileError::RoundsMissing {
+                    block: self.name.clone(),
+                }),
             },
             other => Err(CompileError::BlockTypeNotRunnable {
                 block: self.name.clone(),
@@ -154,7 +159,9 @@ impl WorkoutBlock {
 
     /// Steps this block contributes to a class. Zero if it cannot be compiled.
     pub fn step_count(&self) -> usize {
-        self.repeats().map(|n| n as usize * self.exercises.len()).unwrap_or(0)
+        self.repeats()
+            .map(|n| n as usize * self.exercises.len())
+            .unwrap_or(0)
     }
 }
 
@@ -164,9 +171,16 @@ pub enum CompileError {
     /// A template with no work in it is not a class -- and a course-completion finish rule
     /// would read an empty course as instantly complete.
     Empty,
-    UnknownExercise { code: String },
-    RoundsMissing { block: String },
-    BlockTypeNotRunnable { block: String, block_type: BlockType },
+    UnknownExercise {
+        code: String,
+    },
+    RoundsMissing {
+        block: String,
+    },
+    BlockTypeNotRunnable {
+        block: String,
+        block_type: BlockType,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -210,7 +224,10 @@ impl WorkoutTemplate {
         name: impl Into<String>,
         category: TemplateCategory,
     ) -> Self {
-        Self { source: TemplateSource::System, ..Self::new(id, name, category) }
+        Self {
+            source: TemplateSource::System,
+            ..Self::new(id, name, category)
+        }
     }
 
     pub fn with_block(mut self, block: WorkoutBlock) -> Self {
@@ -292,7 +309,9 @@ impl WorkoutTemplate {
             for _ in 0..repeats {
                 for exercise in &block.exercises {
                     let known = library.get(&exercise.exercise_code).ok_or_else(|| {
-                        CompileError::UnknownExercise { code: exercise.exercise_code.clone() }
+                        CompileError::UnknownExercise {
+                            code: exercise.exercise_code.clone(),
+                        }
                     })?;
                     steps.push(CourseStep {
                         station: known.station_key.clone(),
@@ -333,7 +352,9 @@ fn station_target(target: Target) -> StationTarget {
     match target.target_type {
         TargetType::Distance => StationTarget::Distance { meters: value },
         TargetType::Reps => StationTarget::Repetitions { count: value },
-        TargetType::Time => StationTarget::Duration { duration: Duration(value as i64 * 1_000) },
+        TargetType::Time => StationTarget::Duration {
+            duration: Duration(value as i64 * 1_000),
+        },
         TargetType::Calories => StationTarget::Calories { count: value },
     }
 }
@@ -350,44 +371,63 @@ impl WorkoutTemplate {
     pub fn presets() -> Vec<WorkoutTemplate> {
         use super::exercise::Unit::{Meter, Reps};
         vec![
-            Self::system("sys-engine-800", "HYROX Engine 800", TemplateCategory::Engine)
-                .with_description("Cardio / endurance. Runs between the two ergs.")
-                .with_difficulty("INTERMEDIATE")
-                .with_estimated_duration(50)
-                .with_block(WorkoutBlock::sequential("Main").with_exercises(preset_exercises(&[
+            Self::system(
+                "sys-engine-800",
+                "HYROX Engine 800",
+                TemplateCategory::Engine,
+            )
+            .with_description("Cardio / endurance. Runs between the two ergs.")
+            .with_difficulty("INTERMEDIATE")
+            .with_estimated_duration(50)
+            .with_block(
+                WorkoutBlock::sequential("Main").with_exercises(preset_exercises(&[
                     ("RUN", 800, Meter),
                     ("SKIERG", 1_000, Meter),
                     ("RUN", 800, Meter),
                     ("ROWERG", 1_000, Meter),
                     ("RUN", 800, Meter),
                     ("WALL_BALL", 50, Reps),
-                ]))),
-            Self::system("sys-engine-short", "HYROX Engine Short", TemplateCategory::Engine)
-                .with_description("Three shorter rounds. A first class for a new member.")
-                .with_difficulty("BEGINNER")
-                .with_estimated_duration(40)
-                .with_block(WorkoutBlock::rounds("Main", 3).with_exercises(preset_exercises(&[
+                ])),
+            ),
+            Self::system(
+                "sys-engine-short",
+                "HYROX Engine Short",
+                TemplateCategory::Engine,
+            )
+            .with_description("Three shorter rounds. A first class for a new member.")
+            .with_difficulty("BEGINNER")
+            .with_estimated_duration(40)
+            .with_block(
+                WorkoutBlock::rounds("Main", 3).with_exercises(preset_exercises(&[
                     ("RUN", 400, Meter),
                     ("SKIERG", 500, Meter),
                     ("ROWERG", 500, Meter),
                     ("WALL_BALL", 20, Reps),
-                ]))),
+                ])),
+            ),
             Self::system("sys-power", "HYROX Power", TemplateCategory::Power)
                 .with_description("Strength endurance. The carries and the sleds.")
                 .with_difficulty("INTERMEDIATE")
                 .with_estimated_duration(50)
-                .with_block(WorkoutBlock::rounds("Main", 3).with_exercises(preset_exercises(&[
-                    ("SLED_PUSH", 25, Meter),
-                    ("SLED_PULL", 25, Meter),
-                    ("FARMERS_CARRY", 100, Meter),
-                    ("SANDBAG_LUNGE", 50, Meter),
-                    ("WALL_BALL", 25, Reps),
-                ]))),
-            Self::system("sys-complete-short", "HYROX Complete Short", TemplateCategory::Complete)
-                .with_description("All eight stations, a run between each. Race shaped.")
-                .with_difficulty("ADVANCED")
-                .with_estimated_duration(60)
-                .with_block(WorkoutBlock::sequential("Main").with_exercises(preset_exercises(&[
+                .with_block(
+                    WorkoutBlock::rounds("Main", 3).with_exercises(preset_exercises(&[
+                        ("SLED_PUSH", 25, Meter),
+                        ("SLED_PULL", 25, Meter),
+                        ("FARMERS_CARRY", 100, Meter),
+                        ("SANDBAG_LUNGE", 50, Meter),
+                        ("WALL_BALL", 25, Reps),
+                    ])),
+                ),
+            Self::system(
+                "sys-complete-short",
+                "HYROX Complete Short",
+                TemplateCategory::Complete,
+            )
+            .with_description("All eight stations, a run between each. Race shaped.")
+            .with_difficulty("ADVANCED")
+            .with_estimated_duration(60)
+            .with_block(
+                WorkoutBlock::sequential("Main").with_exercises(preset_exercises(&[
                     ("RUN", 800, Meter),
                     ("SKIERG", 1_000, Meter),
                     ("RUN", 800, Meter),
@@ -404,7 +444,8 @@ impl WorkoutTemplate {
                     ("SANDBAG_LUNGE", 50, Meter),
                     ("RUN", 800, Meter),
                     ("WALL_BALL", 50, Reps),
-                ]))),
+                ])),
+            ),
         ]
     }
 }

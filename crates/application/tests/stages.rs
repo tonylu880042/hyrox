@@ -51,7 +51,11 @@ fn the_stage_an_athlete_is_inside_is_active() {
     assert_eq!(s[0].status, StageStatus::Active);
     assert_eq!(s[0].started_at, Some(1_000));
     assert_eq!(s[0].elapsed_ms, Some(3_000), "an open stage keeps counting");
-    assert_eq!(s[1].status, StageStatus::Pending, "not READY while they are still inside");
+    assert_eq!(
+        s[1].status,
+        StageStatus::Pending,
+        "not READY while they are still inside"
+    );
     assert_eq!(current_stage(&s), Some(1));
 }
 
@@ -66,7 +70,11 @@ fn completing_a_stage_makes_the_next_one_ready() {
 
     assert_eq!(s[0].status, StageStatus::Completed);
     assert_eq!(s[0].completed_at, Some(4_000));
-    assert_eq!(s[0].elapsed_ms, Some(3_000), "a closed stage is frozen at its exit");
+    assert_eq!(
+        s[0].elapsed_ms,
+        Some(3_000),
+        "a closed stage is frozen at its exit"
+    );
     assert_eq!(s[1].status, StageStatus::Ready);
     assert_eq!(current_stage(&s), Some(2));
 }
@@ -82,7 +90,11 @@ fn a_repeated_station_is_two_separate_stages() {
     let s = stages(&course(), &a, NOW);
 
     assert_eq!(s[0].status, StageStatus::Completed);
-    assert_eq!(s[2].status, StageStatus::Completed, "the second run is its own stage");
+    assert_eq!(
+        s[2].status,
+        StageStatus::Completed,
+        "the second run is its own stage"
+    );
     assert_eq!(s[2].started_at, Some(5_000));
     assert_eq!(s[3].status, StageStatus::Ready);
 }
@@ -99,7 +111,11 @@ fn a_station_the_athlete_went_past_is_skipped() {
     let s = stages(&course(), &a, NOW);
 
     assert_eq!(s[0].status, StageStatus::Completed);
-    assert_eq!(s[1].status, StageStatus::Skipped, "the rower was passed over");
+    assert_eq!(
+        s[1].status,
+        StageStatus::Skipped,
+        "the rower was passed over"
+    );
     assert_eq!(s[2].status, StageStatus::Skipped);
     assert_eq!(s[3].status, StageStatus::Completed);
 }
@@ -133,7 +149,11 @@ fn stages_the_class_ended_before_are_dnf_not_pending() {
     assert_eq!(s[0].status, StageStatus::Completed);
     assert_eq!(s[1].status, StageStatus::Dnf);
     assert_eq!(s[3].status, StageStatus::Dnf);
-    assert_eq!(current_stage(&s), None, "a finished athlete is not on a stage");
+    assert_eq!(
+        current_stage(&s),
+        None,
+        "a finished athlete is not on a stage"
+    );
 }
 
 /// An athlete caught inside a station when the class ended keeps that run open: no reader
@@ -148,7 +168,11 @@ fn an_athlete_stopped_mid_station_shows_that_stage_as_dnf() {
     let s = stages(&course(), &a, NOW);
 
     assert_eq!(s[0].status, StageStatus::Dnf);
-    assert_eq!(s[0].elapsed_ms, Some(8_000), "frozen at the class end, not still counting");
+    assert_eq!(
+        s[0].elapsed_ms,
+        Some(8_000),
+        "frozen at the class end, not still counting"
+    );
 }
 
 #[test]
@@ -171,7 +195,10 @@ fn arriving_where_the_plan_says_is_expected() {
     a.runs.push(run("ROWING", 3_000, None));
     a.current_station = Some("ROWING".into());
 
-    assert_eq!(current_expectation(&course(), &a), Some(Expectation::Expected));
+    assert_eq!(
+        current_expectation(&course(), &a),
+        Some(Expectation::Expected)
+    );
 }
 
 /// The other half of scenario C: the same athlete walking into wall balls instead. Recorded,
@@ -184,7 +211,10 @@ fn arriving_further_down_the_plan_is_out_of_order() {
     a.runs.push(run("WALL BALLS", 3_000, None));
     a.current_station = Some("WALL BALLS".into());
 
-    assert_eq!(current_expectation(&course(), &a), Some(Expectation::OutOfOrder));
+    assert_eq!(
+        current_expectation(&course(), &a),
+        Some(Expectation::OutOfOrder)
+    );
 }
 
 #[test]
@@ -194,7 +224,10 @@ fn arriving_somewhere_the_plan_never_mentions_is_unexpected() {
     a.runs.push(run("SLED PUSH", 1_000, None));
     a.current_station = Some("SLED PUSH".into());
 
-    assert_eq!(current_expectation(&course(), &a), Some(Expectation::Unexpected));
+    assert_eq!(
+        current_expectation(&course(), &a),
+        Some(Expectation::Unexpected)
+    );
 }
 
 #[test]

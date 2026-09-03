@@ -41,7 +41,10 @@ fn membership_status_is_carried_but_never_gates_timing() {
         MembershipStatus::Unknown,
     ] {
         let m = MemberRef::new("M-1042", "Chen Wei", status);
-        assert_eq!(m.status, status, "the source system's answer is carried verbatim");
+        assert_eq!(
+            m.status, status,
+            "the source system's answer is carried verbatim"
+        );
     }
 }
 
@@ -68,75 +71,131 @@ fn tag_ids_are_normalised_so_case_cannot_split_one_tag_into_two() {
 #[test]
 fn binding_resolves_a_tag_to_an_athlete_within_a_session() {
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
 
-    assert_eq!(ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")), Some("a1"));
-    assert_eq!(ledger.tag_for_athlete("s1", "a1"), Some(&tag("E28011700000AAAA")));
+    assert_eq!(
+        ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")),
+        Some("a1")
+    );
+    assert_eq!(
+        ledger.tag_for_athlete("s1", "a1"),
+        Some(&tag("E28011700000AAAA"))
+    );
 }
 
 #[test]
 fn a_binding_is_traceable_by_session() {
     // CLAUDE.md 7.2: the same band may be handed to someone else next class.
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    ledger.unbind("s1", &tag("E28011700000AAAA"), at(1_000)).unwrap();
-    ledger.bind("s2", &tag("E28011700000AAAA"), "a2", at(2_000)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    ledger
+        .unbind("s1", &tag("E28011700000AAAA"), at(1_000))
+        .unwrap();
+    ledger
+        .bind("s2", &tag("E28011700000AAAA"), "a2", at(2_000))
+        .unwrap();
 
-    assert_eq!(ledger.athlete_for_tag("s2", &tag("E28011700000AAAA")), Some("a2"));
-    assert_eq!(ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")), None, "s1 is closed");
+    assert_eq!(
+        ledger.athlete_for_tag("s2", &tag("E28011700000AAAA")),
+        Some("a2")
+    );
+    assert_eq!(
+        ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")),
+        None,
+        "s1 is closed"
+    );
 }
 
 #[test]
 fn one_tag_cannot_be_bound_to_two_athletes_at_once() {
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
 
     assert_eq!(
         ledger.bind("s1", &tag("E28011700000AAAA"), "a2", at(1_000)),
-        Err(BindingError::TagAlreadyBound { session_id: "s1".into(), athlete_id: "a1".into() })
+        Err(BindingError::TagAlreadyBound {
+            session_id: "s1".into(),
+            athlete_id: "a1".into()
+        })
     );
-    assert_eq!(ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")), Some("a1"));
+    assert_eq!(
+        ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")),
+        Some("a1")
+    );
 }
 
 #[test]
 fn a_tag_active_in_one_session_cannot_be_bound_in_another() {
     // Two classes running back to back must not both claim the same physical band.
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
 
     assert_eq!(
         ledger.bind("s2", &tag("E28011700000AAAA"), "a2", at(1_000)),
-        Err(BindingError::TagAlreadyBound { session_id: "s1".into(), athlete_id: "a1".into() })
+        Err(BindingError::TagAlreadyBound {
+            session_id: "s1".into(),
+            athlete_id: "a1".into()
+        })
     );
 }
 
 #[test]
 fn one_athlete_holds_at_most_one_active_tag_per_session() {
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
 
     assert_eq!(
         ledger.bind("s1", &tag("E28011700000BBBB"), "a1", at(1_000)),
-        Err(BindingError::AthleteAlreadyBound { tag_id: tag("E28011700000AAAA") })
+        Err(BindingError::AthleteAlreadyBound {
+            tag_id: tag("E28011700000AAAA")
+        })
     );
-    assert_eq!(ledger.tag_for_athlete("s1", "a1"), Some(&tag("E28011700000AAAA")));
+    assert_eq!(
+        ledger.tag_for_athlete("s1", "a1"),
+        Some(&tag("E28011700000AAAA"))
+    );
 }
 
 #[test]
 fn rebinding_closes_the_old_binding_and_opens_a_new_one() {
     // Swapping a band is unbind + bind, two audit records (ADR D3).
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    ledger.rebind_athlete("s1", "a1", &tag("E28011700000BBBB"), at(5_000)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    ledger
+        .rebind_athlete("s1", "a1", &tag("E28011700000BBBB"), at(5_000))
+        .unwrap();
 
-    assert_eq!(ledger.tag_for_athlete("s1", "a1"), Some(&tag("E28011700000BBBB")));
+    assert_eq!(
+        ledger.tag_for_athlete("s1", "a1"),
+        Some(&tag("E28011700000BBBB"))
+    );
     assert_eq!(ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")), None);
 
     let history = ledger.history();
-    assert_eq!(history.len(), 2, "the old binding is closed, never overwritten");
+    assert_eq!(
+        history.len(),
+        2,
+        "the old binding is closed, never overwritten"
+    );
     assert_eq!(history[0].tag_id, tag("E28011700000AAAA"));
     assert_eq!(history[0].bound_at, at(0));
-    assert_eq!(history[0].unbound_at, Some(at(5_000)), "the closed binding keeps its window");
+    assert_eq!(
+        history[0].unbound_at,
+        Some(at(5_000)),
+        "the closed binding keeps its window"
+    );
     assert_eq!(history[1].tag_id, tag("E28011700000BBBB"));
     assert_eq!(history[1].unbound_at, None);
 }
@@ -145,20 +204,36 @@ fn rebinding_closes_the_old_binding_and_opens_a_new_one() {
 fn a_rejected_rebind_leaves_the_ledger_untouched() {
     // Validate before mutating: a half-applied swap would leave an athlete with no tag.
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    ledger.bind("s1", &tag("E28011700000BBBB"), "a2", at(1_000)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000BBBB"), "a2", at(1_000))
+        .unwrap();
 
     let err = ledger.rebind_athlete("s1", "a1", &tag("E28011700000BBBB"), at(5_000));
     assert!(matches!(err, Err(BindingError::TagAlreadyBound { .. })));
-    assert_eq!(ledger.tag_for_athlete("s1", "a1"), Some(&tag("E28011700000AAAA")));
-    assert_eq!(ledger.history().len(), 2, "nothing may be appended or closed");
+    assert_eq!(
+        ledger.tag_for_athlete("s1", "a1"),
+        Some(&tag("E28011700000AAAA"))
+    );
+    assert_eq!(
+        ledger.history().len(),
+        2,
+        "nothing may be appended or closed"
+    );
 }
 
 #[test]
 fn rebinding_an_athlete_who_has_no_tag_yet_simply_binds() {
     let mut ledger = BindingLedger::new();
-    ledger.rebind_athlete("s1", "a1", &tag("E28011700000AAAA"), at(0)).unwrap();
-    assert_eq!(ledger.tag_for_athlete("s1", "a1"), Some(&tag("E28011700000AAAA")));
+    ledger
+        .rebind_athlete("s1", "a1", &tag("E28011700000AAAA"), at(0))
+        .unwrap();
+    assert_eq!(
+        ledger.tag_for_athlete("s1", "a1"),
+        Some(&tag("E28011700000AAAA"))
+    );
     assert_eq!(ledger.history().len(), 1);
 }
 
@@ -166,11 +241,19 @@ fn rebinding_an_athlete_who_has_no_tag_yet_simply_binds() {
 fn binding_the_same_pair_twice_is_idempotent() {
     // The check-in tablet may double-submit; a second identical bind must not fork history.
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(9_000)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(9_000))
+        .unwrap();
 
     assert_eq!(ledger.history().len(), 1);
-    assert_eq!(ledger.history()[0].bound_at, at(0), "the original bind time is authoritative");
+    assert_eq!(
+        ledger.history()[0].bound_at,
+        at(0),
+        "the original bind time is authoritative"
+    );
 }
 
 #[test]
@@ -185,20 +268,35 @@ fn unbinding_a_tag_that_is_not_bound_is_an_error_not_a_silent_success() {
 #[test]
 fn a_freed_tag_can_be_bound_again() {
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    ledger.unbind("s1", &tag("E28011700000AAAA"), at(1_000)).unwrap();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a2", at(2_000)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    ledger
+        .unbind("s1", &tag("E28011700000AAAA"), at(1_000))
+        .unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a2", at(2_000))
+        .unwrap();
 
-    assert_eq!(ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")), Some("a2"));
+    assert_eq!(
+        ledger.athlete_for_tag("s1", &tag("E28011700000AAAA")),
+        Some("a2")
+    );
     assert_eq!(ledger.history().len(), 2, "both bindings remain auditable");
 }
 
 #[test]
 fn active_bindings_exclude_closed_ones() {
     let mut ledger = BindingLedger::new();
-    ledger.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    ledger.bind("s1", &tag("E28011700000BBBB"), "a2", at(0)).unwrap();
-    ledger.unbind("s1", &tag("E28011700000AAAA"), at(1_000)).unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    ledger
+        .bind("s1", &tag("E28011700000BBBB"), "a2", at(0))
+        .unwrap();
+    ledger
+        .unbind("s1", &tag("E28011700000AAAA"), at(1_000))
+        .unwrap();
 
     let active: Vec<&str> = ledger.active().map(|b| b.athlete_id.as_str()).collect();
     assert_eq!(active, ["a2"]);
@@ -218,13 +316,24 @@ fn a_restored_ledger_keeps_its_closed_bindings() {
     // What a restart must not do is drop the history (CLAUDE.md 20, 21): a closed binding is
     // how "who was wearing this band at 10:15" stays answerable after the band moved on.
     let mut original = BindingLedger::new();
-    original.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
-    original.rebind_athlete("s1", "a1", &tag("E28011700000BBBB"), at(5_000)).unwrap();
+    original
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
+    original
+        .rebind_athlete("s1", "a1", &tag("E28011700000BBBB"), at(5_000))
+        .unwrap();
 
     let restored = BindingLedger::restore(original.history().to_vec());
 
-    assert_eq!(restored.history().len(), 2, "the closed row must come back too");
-    assert_eq!(restored.athlete_for_tag("s1", &tag("E28011700000BBBB")), Some("a1"));
+    assert_eq!(
+        restored.history().len(),
+        2,
+        "the closed row must come back too"
+    );
+    assert_eq!(
+        restored.athlete_for_tag("s1", &tag("E28011700000BBBB")),
+        Some("a1")
+    );
     assert_eq!(
         restored.athlete_for_tag("s1", &tag("E28011700000AAAA")),
         None,
@@ -238,7 +347,9 @@ fn a_restored_ledger_still_enforces_one_band_one_wrist() {
     // The invariants are checked against whatever the ledger holds, so they survive the
     // rebuild rather than only applying to bindings made in this process.
     let mut original = BindingLedger::new();
-    original.bind("s1", &tag("E28011700000AAAA"), "a1", at(0)).unwrap();
+    original
+        .bind("s1", &tag("E28011700000AAAA"), "a1", at(0))
+        .unwrap();
 
     let mut restored = BindingLedger::restore(original.history().to_vec());
     let err = restored

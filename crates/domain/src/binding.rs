@@ -59,9 +59,14 @@ impl TagBinding {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BindingError {
     /// The band is already on someone's wrist -- possibly in another session.
-    TagAlreadyBound { session_id: String, athlete_id: String },
+    TagAlreadyBound {
+        session_id: String,
+        athlete_id: String,
+    },
     /// One athlete, one active tag per session (ADR D3).
-    AthleteAlreadyBound { tag_id: TagId },
+    AthleteAlreadyBound {
+        tag_id: TagId,
+    },
     NotBound,
 }
 
@@ -110,7 +115,9 @@ impl BindingLedger {
         // Athlete uniqueness is per session, because the same person may appear in the
         // roster of two sessions with two different bands.
         if let Some(existing) = self.active_for_athlete(session_id, athlete_id) {
-            return Err(BindingError::AthleteAlreadyBound { tag_id: existing.tag_id.clone() });
+            return Err(BindingError::AthleteAlreadyBound {
+                tag_id: existing.tag_id.clone(),
+            });
         }
 
         self.entries.push(TagBinding {
@@ -159,7 +166,9 @@ impl BindingLedger {
             });
         }
 
-        let old_tag = self.active_for_athlete(session_id, athlete_id).map(|b| b.tag_id.clone());
+        let old_tag = self
+            .active_for_athlete(session_id, athlete_id)
+            .map(|b| b.tag_id.clone());
         if let Some(old_tag) = old_tag {
             self.unbind(session_id, &old_tag, at)?;
         }
@@ -174,7 +183,8 @@ impl BindingLedger {
     }
 
     pub fn tag_for_athlete(&self, session_id: &str, athlete_id: &str) -> Option<&TagId> {
-        self.active_for_athlete(session_id, athlete_id).map(|b| &b.tag_id)
+        self.active_for_athlete(session_id, athlete_id)
+            .map(|b| &b.tag_id)
     }
 
     pub fn active(&self) -> impl Iterator<Item = &TagBinding> {
@@ -187,7 +197,9 @@ impl BindingLedger {
     }
 
     fn active_for_tag(&self, tag_id: &TagId) -> Option<&TagBinding> {
-        self.entries.iter().find(|b| b.is_active() && &b.tag_id == tag_id)
+        self.entries
+            .iter()
+            .find(|b| b.is_active() && &b.tag_id == tag_id)
     }
 
     fn active_for_athlete(&self, session_id: &str, athlete_id: &str) -> Option<&TagBinding> {

@@ -20,9 +20,8 @@ fn rid(id: &str) -> ReaderId {
 fn device(mac: &str, readers: &[&str]) -> SimDevice {
     let mut config = DeviceConfig::new(mac).unwrap();
     for r in readers {
-        config = config.with_reader(
-            ReaderConfig::new(r, AbsentTimeout::from_millis(4_000).unwrap()).unwrap(),
-        );
+        config = config
+            .with_reader(ReaderConfig::new(r, AbsentTimeout::from_millis(4_000).unwrap()).unwrap());
     }
     SimDevice::boot(config, T0).unwrap()
 }
@@ -47,7 +46,9 @@ async fn a_fleet_of_devices_reports_independently() {
     for (i, d) in b.devices_mut().iter_mut().enumerate() {
         d.rf_read(&rid("rfid-01"), TAG_A, T0 + i as i64).unwrap();
     }
-    b.device_mut(2).rf_read(&rid("rfid-02"), TAG_B, T0 + 50).unwrap();
+    b.device_mut(2)
+        .rf_read(&rid("rfid-02"), TAG_B, T0 + 50)
+        .unwrap();
 
     let report = b.flush(T0 + 200).await;
     assert_eq!(report.delivered, 4);
@@ -56,7 +57,10 @@ async fn a_fleet_of_devices_reports_independently() {
 
     // Same boot_id and sequence on two devices must stay two events (CLAUDE.md 16).
     let keys = b.hub().arrival_order();
-    assert_eq!(keys.iter().collect::<std::collections::HashSet<_>>().len(), 4);
+    assert_eq!(
+        keys.iter().collect::<std::collections::HashSet<_>>().len(),
+        4
+    );
 }
 
 #[test]
@@ -70,7 +74,10 @@ fn macs_are_configurable_per_device() {
 
 #[tokio::test]
 async fn repeated_reads_never_reach_the_hub_but_a_rearm_does() {
-    let mut b = bench(vec![device("a4cf128b3d91", &["rfid-01"])], LinkFaults::none());
+    let mut b = bench(
+        vec![device("a4cf128b3d91", &["rfid-01"])],
+        LinkFaults::none(),
+    );
     let d = b.device_mut(0);
     for t in (0..3_000).step_by(200) {
         d.rf_read(&rid("rfid-01"), TAG_A, T0 + t).unwrap();
@@ -85,10 +92,15 @@ async fn repeated_reads_never_reach_the_hub_but_a_rearm_does() {
 
 #[tokio::test]
 async fn nothing_is_delivered_while_the_link_is_down() {
-    let mut b = bench(vec![device("a4cf128b3d91", &["rfid-01"])], LinkFaults::none());
+    let mut b = bench(
+        vec![device("a4cf128b3d91", &["rfid-01"])],
+        LinkFaults::none(),
+    );
     b.device_mut(0).disconnect();
     for (i, tag) in [TAG_A, TAG_B].iter().enumerate() {
-        b.device_mut(0).rf_read(&rid("rfid-01"), tag, T0 + i as i64 * 100).unwrap();
+        b.device_mut(0)
+            .rf_read(&rid("rfid-01"), tag, T0 + i as i64 * 100)
+            .unwrap();
     }
 
     let report = b.flush(T0 + 1_000).await;
@@ -99,10 +111,15 @@ async fn nothing_is_delivered_while_the_link_is_down() {
 
 #[tokio::test]
 async fn reconnecting_resends_every_unacknowledged_event() {
-    let mut b = bench(vec![device("a4cf128b3d91", &["rfid-01"])], LinkFaults::none());
+    let mut b = bench(
+        vec![device("a4cf128b3d91", &["rfid-01"])],
+        LinkFaults::none(),
+    );
     b.device_mut(0).disconnect();
     for (i, tag) in [TAG_A, TAG_B].iter().enumerate() {
-        b.device_mut(0).rf_read(&rid("rfid-01"), tag, T0 + i as i64 * 100).unwrap();
+        b.device_mut(0)
+            .rf_read(&rid("rfid-01"), tag, T0 + i as i64 * 100)
+            .unwrap();
     }
     b.flush(T0 + 1_000).await;
 
@@ -117,11 +134,16 @@ async fn reconnecting_resends_every_unacknowledged_event() {
 #[tokio::test]
 async fn an_outage_across_a_reboot_still_loses_nothing() {
     // Disconnect, record, power-cycle, reconnect: the classic venue failure (CLAUDE.md 18).
-    let mut b = bench(vec![device("a4cf128b3d91", &["rfid-01"])], LinkFaults::none());
+    let mut b = bench(
+        vec![device("a4cf128b3d91", &["rfid-01"])],
+        LinkFaults::none(),
+    );
     b.device_mut(0).disconnect();
     b.device_mut(0).rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
     b.device_mut(0).reboot(T0 + 30_000);
-    b.device_mut(0).rf_read(&rid("rfid-01"), TAG_B, T0 + 31_000).unwrap();
+    b.device_mut(0)
+        .rf_read(&rid("rfid-01"), TAG_B, T0 + 31_000)
+        .unwrap();
     b.device_mut(0).reconnect();
 
     b.flush(T0 + 32_000).await;
@@ -182,13 +204,20 @@ async fn a_lost_ack_never_releases_an_event() {
         assert_eq!(report.lost_acks, 1);
         assert_eq!(b.pending_total(), 1, "round {round}");
     }
-    assert_eq!(b.hub().committed_count(), 1, "redelivery did not duplicate the row");
+    assert_eq!(
+        b.hub().committed_count(),
+        1,
+        "redelivery did not duplicate the row"
+    );
 }
 
 #[tokio::test]
 async fn a_failed_commit_produces_no_ack_and_the_edge_retries() {
     // The rule from CLAUDE.md 15, seen from the edge: no commit, no ACK, no release.
-    let mut b = bench(vec![device("a4cf128b3d91", &["rfid-01"])], LinkFaults::none());
+    let mut b = bench(
+        vec![device("a4cf128b3d91", &["rfid-01"])],
+        LinkFaults::none(),
+    );
     b.hub().set_failing(true);
     b.device_mut(0).rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
 
@@ -215,7 +244,9 @@ async fn out_of_order_arrival_does_not_disturb_official_timing() {
     );
     let taps = [(TAG_A, 0), (TAG_B, 500), (TAG_A, 9_000)];
     for (tag, offset) in taps {
-        b.device_mut(0).rf_read(&rid("rfid-01"), tag, T0 + offset).unwrap();
+        b.device_mut(0)
+            .rf_read(&rid("rfid-01"), tag, T0 + offset)
+            .unwrap();
     }
 
     b.flush(T0 + 10_000).await;
@@ -227,16 +258,27 @@ async fn out_of_order_arrival_does_not_disturb_official_timing() {
         .iter()
         .map(|k| b.hub().official_time(k).unwrap())
         .collect();
-    assert_eq!(arrived, [T0 + 9_000, T0 + 500, T0], "arrival really was reversed");
+    assert_eq!(
+        arrived,
+        [T0 + 9_000, T0 + 500, T0],
+        "arrival really was reversed"
+    );
 
     let mut sorted = arrived.clone();
     sorted.sort_unstable();
-    assert_eq!(sorted, [T0, T0 + 500, T0 + 9_000], "detected_at recovers the truth");
+    assert_eq!(
+        sorted,
+        [T0, T0 + 500, T0 + 9_000],
+        "detected_at recovers the truth"
+    );
 }
 
 #[tokio::test]
 async fn a_late_arrival_never_changes_an_events_timestamp() {
-    let mut b = bench(vec![device("a4cf128b3d91", &["rfid-01"])], LinkFaults::none());
+    let mut b = bench(
+        vec![device("a4cf128b3d91", &["rfid-01"])],
+        LinkFaults::none(),
+    );
     b.device_mut(0).disconnect();
     b.device_mut(0).rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
     b.device_mut(0).reconnect();
@@ -245,7 +287,11 @@ async fn a_late_arrival_never_changes_an_events_timestamp() {
     b.flush(T0 + 300_000).await;
     let key = b.hub().arrival_order()[0].clone();
     assert_eq!(b.hub().official_time(&key), Some(T0));
-    assert_eq!(b.hub().arrival_lag_ms(&key), Some(300_000), "lag is diagnostics");
+    assert_eq!(
+        b.hub().arrival_lag_ms(&key),
+        Some(300_000),
+        "lag is diagnostics"
+    );
 }
 
 #[tokio::test]
@@ -264,13 +310,19 @@ async fn everything_at_once_still_loses_nothing() {
 
     let mut expected: Vec<EventId> = Vec::new();
     b.device_mut(0).rf_read(&rid("rfid-01"), TAG_A, T0).unwrap();
-    b.device_mut(0).rf_read(&rid("rfid-02"), TAG_B, T0 + 100).unwrap();
-    b.device_mut(1).rf_read(&rid("rfid-01"), TAG_A, T0 + 200).unwrap();
+    b.device_mut(0)
+        .rf_read(&rid("rfid-02"), TAG_B, T0 + 100)
+        .unwrap();
+    b.device_mut(1)
+        .rf_read(&rid("rfid-01"), TAG_A, T0 + 200)
+        .unwrap();
     b.flush(T0 + 300).await;
 
     b.device_mut(1).disconnect();
     b.device_mut(1).reboot(T0 + 1_000);
-    b.device_mut(1).rf_read(&rid("rfid-01"), TAG_B, T0 + 1_100).unwrap();
+    b.device_mut(1)
+        .rf_read(&rid("rfid-01"), TAG_B, T0 + 1_100)
+        .unwrap();
     b.device_mut(1).reconnect();
     b.link_mut().set_ack_delivery(AckDelivery::Delivered);
     b.flush(T0 + 2_000).await;
@@ -280,5 +332,8 @@ async fn everything_at_once_still_loses_nothing() {
     }
     assert!(expected.is_empty(), "every event was acknowledged");
     assert_eq!(b.hub().committed_count(), 4, "four reads, four rows");
-    assert!(b.hub().commit_calls() > 4, "and plenty of redelivery on the way");
+    assert!(
+        b.hub().commit_calls() > 4,
+        "and plenty of redelivery on the way"
+    );
 }

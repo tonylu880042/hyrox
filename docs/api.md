@@ -316,6 +316,9 @@ These are not oversights. Each of them would require inventing a product rule (C
   does it, with a reason, audited as `READER_REMOVE` carrying what the reader used to mean.
   Re-registering the same `(device_id, reader_id)` still replaces its mapping, which is what
   repointing a reader is.
-* **No "accept as-is" or "reinterpret" on an exception.** D4 names three actions and only
-  `void` has a use case. See `docs/open-issues.md`.
+* ~~**No "accept as-is" on an exception.**~~ **Amended 2026-09-03.** `POST /api/operator/exceptions/{id}/accept`
+  is implemented (migration 0011). It clears the exception from the inbox and badge without erasing
+  the row from the log or replays, and does not trigger expensive recalculation.
+* **No "reinterpret" on an exception.** Adding operator-authored reads (`raw_event_id: None`) is deliberately
+  deferred pending product rules on timestamp provenance (see `docs/open-issues.md`).
 * **No `operator_identity`.** D1 chose device-level traceability on purpose.

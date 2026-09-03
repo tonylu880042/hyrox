@@ -120,7 +120,10 @@ pub enum TargetError {
     /// `target_value > 0` (brief §18). A zero-metre run is not a plan.
     NotPositive,
     /// e.g. `RUN + REPS`, or `WALL_BALL + DISTANCE` (brief §18).
-    UnsupportedTargetType { code: String, target_type: TargetType },
+    UnsupportedTargetType {
+        code: String,
+        target_type: TargetType,
+    },
 }
 
 /// What the athlete is meant to do at one step, as a value and the unit it was written in.
@@ -147,7 +150,11 @@ impl Target {
                 target_type,
             });
         }
-        Ok(Self { target_type, value, unit })
+        Ok(Self {
+            target_type,
+            value,
+            unit,
+        })
     }
 
     /// Metres, reps, seconds or calories (brief §7).
@@ -198,7 +205,9 @@ impl ExerciseLibrary {
 
     /// Case-insensitive: a template written by hand should not fail on `wall_ball`.
     pub fn get(&self, code: &str) -> Option<&Exercise> {
-        self.exercises.iter().find(|e| e.code.eq_ignore_ascii_case(code))
+        self.exercises
+            .iter()
+            .find(|e| e.code.eq_ignore_ascii_case(code))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Exercise> {
@@ -233,10 +242,38 @@ impl ExerciseLibrary {
         };
         Self::new(vec![
             e("RUN", "Run", "RUN", Run, Distance, &[Distance, Time]),
-            e("SKIERG", "SkiErg", "SKIERG", Erg, Distance, &[Distance, Time, Calories]),
-            e("ROWERG", "RowErg", "ROWING", Erg, Distance, &[Distance, Time, Calories]),
-            e("SLED_PUSH", "Sled Push", "SLED PUSH", Functional, Distance, &[Distance, Time]),
-            e("SLED_PULL", "Sled Pull", "SLED PULL", Functional, Distance, &[Distance, Time]),
+            e(
+                "SKIERG",
+                "SkiErg",
+                "SKIERG",
+                Erg,
+                Distance,
+                &[Distance, Time, Calories],
+            ),
+            e(
+                "ROWERG",
+                "RowErg",
+                "ROWING",
+                Erg,
+                Distance,
+                &[Distance, Time, Calories],
+            ),
+            e(
+                "SLED_PUSH",
+                "Sled Push",
+                "SLED PUSH",
+                Functional,
+                Distance,
+                &[Distance, Time],
+            ),
+            e(
+                "SLED_PULL",
+                "Sled Pull",
+                "SLED PULL",
+                Functional,
+                Distance,
+                &[Distance, Time],
+            ),
             e(
                 "BURPEE_BROAD_JUMP",
                 "Burpee Broad Jump",
@@ -261,7 +298,14 @@ impl ExerciseLibrary {
                 Distance,
                 &[Distance, Reps, Time],
             ),
-            e("WALL_BALL", "Wall Ball", "WALL BALLS", Functional, Reps, &[Reps, Time]),
+            e(
+                "WALL_BALL",
+                "Wall Ball",
+                "WALL BALLS",
+                Functional,
+                Reps,
+                &[Reps, Time],
+            ),
         ])
     }
 }

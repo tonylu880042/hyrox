@@ -3,7 +3,7 @@
 //! `/checkin` is the narrow write surface -- it may bind tags and nothing else, so a
 //! check-in tablet handed to a helper can never touch timing.
 
-use crate::ingest::attribute_read;
+use crate::ingest::{attribute_read, ReadContext};
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
 use crate::ports::{AuditEntry, HubStore};
@@ -27,7 +27,11 @@ pub struct Entrant {
 
 impl Entrant {
     pub fn walk_in(display_name: impl Into<String>) -> Self {
-        Self { member_id: None, display_name: display_name.into(), bib: None }
+        Self {
+            member_id: None,
+            display_name: display_name.into(),
+            bib: None,
+        }
     }
 
     /// Membership status is deliberately not read. Confirmed with the user 2026-08-27: if
@@ -76,7 +80,9 @@ pub async fn enter<S: HubStore>(
             asked
         }
         // The next free one, stepping over anything already handed out at the door.
-        None => (1..).find(|n| !state.bibs().any(|b| b == *n)).expect("a free bib exists"),
+        None => (1..)
+            .find(|n| !state.bibs().any(|b| b == *n))
+            .expect("a free bib exists"),
     };
 
     // A member keeps one identity across every class. A walk-in is issued an entry code:
@@ -89,7 +95,13 @@ pub async fn enter<S: HubStore>(
     };
 
     store
-        .save_athlete(&state.session.id, &athlete_id, name, bib, entrant.member_id.as_deref())
+        .save_athlete(
+            &state.session.id,
+            &athlete_id,
+            name,
+            bib,
+            entrant.member_id.as_deref(),
+        )
         .await
         .map_err(OperatorError::Storage)?;
     state.athletes.push(AthleteState::ready(&athlete_id, name));
@@ -245,12 +257,14 @@ async fn claim_reads<S: HubStore>(
         let event = attribute_read(
             state,
             store,
-            athlete_id,
-            true, // checked by the caller before the binding was made
-            &read.device_id,
-            &read.reader_id,
-            Some(read.raw_event_id),
-            read.detected_at,
+            ReadContext {
+                athlete_id,
+                on_roster: true, // checked by the caller before the binding was made
+                device_id: &read.device_id,
+                reader_id: &read.reader_id,
+                raw_event_id: Some(read.raw_event_id),
+                at: read.detected_at,
+            },
         )
         .await
         .map_err(OperatorError::Storage)?;
@@ -273,7 +287,10 @@ async fn persist_bindings<S: HubStore>(
     store: &S,
 ) -> Result<(), OperatorError<S::Error>> {
     for binding in state.bindings.history() {
-        store.save_binding(binding).await.map_err(OperatorError::Storage)?;
+        store
+            .save_binding(binding)
+            .await
+            .map_err(OperatorError::Storage)?;
     }
     Ok(())
 }

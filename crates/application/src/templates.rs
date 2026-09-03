@@ -63,7 +63,10 @@ pub async fn save_template<S: HubStore>(
     if !template.is_editable() {
         return Err(TemplateError::NotEditable);
     }
-    let existing = store.template(&template.id).await.map_err(TemplateError::Storage)?;
+    let existing = store
+        .template(&template.id)
+        .await
+        .map_err(TemplateError::Storage)?;
     if let Some(previous) = &existing {
         if !previous.is_editable() {
             return Err(TemplateError::NotEditable);
@@ -72,11 +75,18 @@ pub async fn save_template<S: HubStore>(
         template.edited();
     }
 
-    store.save_template(&template).await.map_err(TemplateError::Storage)?;
+    store
+        .save_template(&template)
+        .await
+        .map_err(TemplateError::Storage)?;
     audit(
         store,
         cmd,
-        if existing.is_some() { "TEMPLATE_UPDATE" } else { "TEMPLATE_CREATE" },
+        if existing.is_some() {
+            "TEMPLATE_UPDATE"
+        } else {
+            "TEMPLATE_CREATE"
+        },
         &template.id,
         existing.as_ref().map(describe),
         Some(describe(&template)),
@@ -101,9 +111,19 @@ pub async fn duplicate_template<S: HubStore>(
         .ok_or_else(|| TemplateError::UnknownTemplate(source_id.to_string()))?;
 
     let copy = source.duplicate(new_id, new_name, owner_id);
-    store.save_template(&copy).await.map_err(TemplateError::Storage)?;
-    audit(store, cmd, "TEMPLATE_DUPLICATE", &copy.id, Some(describe(&source)), Some(describe(&copy)))
-        .await?;
+    store
+        .save_template(&copy)
+        .await
+        .map_err(TemplateError::Storage)?;
+    audit(
+        store,
+        cmd,
+        "TEMPLATE_DUPLICATE",
+        &copy.id,
+        Some(describe(&source)),
+        Some(describe(&copy)),
+    )
+    .await?;
     Ok(copy)
 }
 
@@ -125,8 +145,19 @@ pub async fn delete_template<S: HubStore>(
         return Err(TemplateError::NotEditable);
     }
 
-    store.delete_template(template_id).await.map_err(TemplateError::Storage)?;
-    audit(store, cmd, "TEMPLATE_DELETE", template_id, Some(describe(&existing)), None).await
+    store
+        .delete_template(template_id)
+        .await
+        .map_err(TemplateError::Storage)?;
+    audit(
+        store,
+        cmd,
+        "TEMPLATE_DELETE",
+        template_id,
+        Some(describe(&existing)),
+        None,
+    )
+    .await
 }
 
 /// What a class is created with (brief §15).
@@ -168,15 +199,27 @@ pub async fn create_class<S: HubStore>(
         .with_course(course)
         .with_finish_policy(new.finish_policy);
 
-    store.save_session(&session, new.created_at).await.map_err(TemplateError::Storage)?;
+    store
+        .save_session(&session, new.created_at)
+        .await
+        .map_err(TemplateError::Storage)?;
     // After the session row, not before: the configuration belongs to a session that exists.
-    store.save_session_config(&config).await.map_err(TemplateError::Storage)?;
+    store
+        .save_session_config(&config)
+        .await
+        .map_err(TemplateError::Storage)?;
 
     let mut athletes = Vec::with_capacity(new.roster.len());
     let mut bibs = Vec::with_capacity(new.roster.len());
     for (i, entry) in new.roster.iter().enumerate() {
         store
-            .save_athlete(&session.id, &entry.athlete_id, &entry.display_name, i as i64 + 1, None)
+            .save_athlete(
+                &session.id,
+                &entry.athlete_id,
+                &entry.display_name,
+                i as i64 + 1,
+                None,
+            )
             .await
             .map_err(TemplateError::Storage)?;
         athletes.push(AthleteState::ready(&entry.athlete_id, &entry.display_name));

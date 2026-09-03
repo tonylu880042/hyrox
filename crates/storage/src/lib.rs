@@ -6,13 +6,11 @@
 mod hub_store;
 mod workout;
 
-use application::{AuditEntry, StoredException, StoredRawRead, SeenReader, VenueAsset,
-};
+use application::{AuditEntry, SeenReader, StoredException, StoredRawRead, VenueAsset};
 use domain::{
     AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, ReaderKey,
-    ReaderMode,
-    ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode, SessionStatus,
-    TagBinding, TagId,
+    ReaderMode, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
+    SessionStatus, TagBinding, TagId,
 };
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::str::FromStr;
@@ -41,7 +39,9 @@ pub enum StoreError {
 /// not go through". The two need different answers, and only one of them is worth waking
 /// somebody up for (ADR 0012).
 fn is_corruption(error: &sqlx::Error) -> bool {
-    let Some(db) = error.as_database_error() else { return false };
+    let Some(db) = error.as_database_error() else {
+        return false;
+    };
     matches!(db.code().as_deref(), Some("11") | Some("26"))
 }
 
@@ -79,9 +79,13 @@ impl Store {
             .foreign_keys(true);
         // Damage can surface here rather than in the check below: opening sets the journal
         // mode, and that reads pages. Either way the answer is the same one.
-        let pool = SqlitePool::connect_with(opts)
-            .await
-            .map_err(|e| if is_corruption(&e) { StoreError::Damaged(vec![e.to_string()]) } else { e.into() })?;
+        let pool = SqlitePool::connect_with(opts).await.map_err(|e| {
+            if is_corruption(&e) {
+                StoreError::Damaged(vec![e.to_string()])
+            } else {
+                e.into()
+            }
+        })?;
         let store = Self { pool };
         // Before the migrations, not after: a migration against a damaged file writes into
         // the damage. And before anything is served, because acknowledging a read out of a
@@ -133,7 +137,9 @@ impl Store {
         // Single-quoted SQL literal, so a path containing one has to be doubled. Not a
         // bound parameter: VACUUM INTO does not take one.
         let target = path.display().to_string().replace('\'', "''");
-        sqlx::query(&format!("VACUUM INTO '{target}'")).execute(&self.pool).await?;
+        sqlx::query(&format!("VACUUM INTO '{target}'"))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -207,7 +213,10 @@ impl Store {
         .bind(session_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|r| (r.get("athlete_id"), r.get("bib"))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("athlete_id"), r.get("bib")))
+            .collect())
     }
 
     /// Stores one tag's read, returning its id. A redelivery of the same
@@ -257,7 +266,12 @@ impl Store {
         event: &Interpreted,
     ) -> Result<i64, StoreError> {
         let (kind, station, detected_at, transition_ms, started, reason) = match event {
-            Interpreted::Entered { station, at, transition, started_timing } => (
+            Interpreted::Entered {
+                station,
+                at,
+                transition,
+                started_timing,
+            } => (
                 "ENTERED",
                 Some(station.clone()),
                 at.0,
@@ -268,9 +282,14 @@ impl Store {
             Interpreted::Exited { station, at } => {
                 ("EXITED", Some(station.clone()), at.0, None, false, None)
             }
-            Interpreted::Exception { reason, at } => {
-                ("EXCEPTION", None, at.0, None, false, Some(reason_str(reason)))
-            }
+            Interpreted::Exception { reason, at } => (
+                "EXCEPTION",
+                None,
+                at.0,
+                None,
+                false,
+                Some(reason_str(reason)),
+            ),
         };
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO interpreted_events
@@ -290,6 +309,19 @@ impl Store {
         .fetch_one(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    /// Checks whether a raw event has already produced an interpreted event row.
+    pub async fn raw_event_has_interpretation(
+        &self,
+        raw_event_id: i64,
+    ) -> Result<bool, StoreError> {
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM interpreted_events WHERE raw_event_id = ?1 LIMIT 1")
+                .bind(raw_event_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(exists.is_some())
     }
 
     /// The session to resume after a restart: a live one (READY, RUNNING or PAUSED) in
@@ -446,7 +478,9 @@ impl Store {
         // After the replay, not before: a finish the clock decided comes at the end of the
         // class, so applying it first would let a later read reopen a closed result.
         for r in &roster {
-            let Some(ms) = r.get::<Option<i64>, _>("finished_at") else { continue };
+            let Some(ms) = r.get::<Option<i64>, _>("finished_at") else {
+                continue;
+            };
             let aid: String = r.get("athlete_id");
             if let Some(state) = out.iter_mut().find(|a| a.athlete_id == aid) {
                 domain::finish(state, Instant(ms));
@@ -530,7 +564,9 @@ fn row_to_interpreted(r: &sqlx::sqlite::SqliteRow) -> Result<Interpreted, StoreE
                 .get::<Option<String>, _>("station")
                 .ok_or_else(|| StoreError::Corrupt("ENTERED without station".into()))?,
             at,
-            transition: r.get::<Option<i64>, _>("transition_ms").map(domain::Duration),
+            transition: r
+                .get::<Option<i64>, _>("transition_ms")
+                .map(domain::Duration),
             started_timing: r.get::<i64, _>("started_timing") != 0,
         }),
         "EXITED" => Ok(Interpreted::Exited {
@@ -767,7 +803,10 @@ impl Store {
             .bind(key)
             .fetch_optional(&self.pool)
             .await?;
-        Ok(row.map(|r| VenueAsset { media_type: r.get("media_type"), bytes: r.get("bytes") }))
+        Ok(row.map(|r| VenueAsset {
+            media_type: r.get("media_type"),
+            bytes: r.get("bytes"),
+        }))
     }
 
     /// Stores one, replacing whatever was there. A venue has one logo, not a gallery.
@@ -822,7 +861,10 @@ impl Store {
         let rows = sqlx::query("SELECT key, value FROM venue_settings ORDER BY key")
             .fetch_all(&self.pool)
             .await?;
-        Ok(rows.iter().map(|r| (r.get("key"), r.get("value"))).collect())
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("key"), r.get("value")))
+            .collect())
     }
 
     /// Stores one, replacing any previous value. Keyed upsert, so setting the same number

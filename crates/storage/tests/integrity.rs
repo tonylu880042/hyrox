@@ -31,7 +31,10 @@ async fn a_healthy_database_passes_its_check() {
     let path = scratch("healthy.db");
     let store = Store::open(&url(&path)).await.expect("a store");
 
-    store.quick_check().await.expect("a fresh database is not damaged");
+    store
+        .quick_check()
+        .await
+        .expect("a fresh database is not damaged");
 }
 
 /// The point of checking on the way in: the hub must not open a damaged file, start
@@ -106,7 +109,10 @@ async fn a_backup_can_be_taken_while_the_database_is_in_use() {
     // The copy opens on its own and holds the row -- including one written since the last
     // checkpoint, which is exactly what a `cp` of the main file would have missed.
     let restored = Store::open(&url(&backup)).await.expect("the backup opens");
-    restored.quick_check().await.expect("the backup is not damaged");
+    restored
+        .quick_check()
+        .await
+        .expect("the backup is not damaged");
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log")
         .fetch_one(restored.pool())
         .await
@@ -125,14 +131,23 @@ async fn a_backup_will_not_overwrite_one_that_is_already_there() {
 
     let second = store.backup_to(&backup).await;
 
-    assert!(second.is_err(), "an existing backup file is not overwritten");
+    assert!(
+        second.is_err(),
+        "an existing backup file is not overwritten"
+    );
 }
 
 /// Writes rubbish into the middle of the file, past the header and the schema.
 fn scribble_over_a_page(path: &std::path::Path) {
-    let mut file = std::fs::OpenOptions::new().write(true).open(path).expect("the db file");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("the db file");
     let len = file.metadata().expect("metadata").len();
-    assert!(len > 8192, "the fixture should be several pages, got {len} bytes");
+    assert!(
+        len > 8192,
+        "the fixture should be several pages, got {len} bytes"
+    );
     file.seek(SeekFrom::Start(len / 2)).expect("seek");
     file.write_all(&[0x5A; 2048]).expect("scribble");
     file.flush().expect("flush");

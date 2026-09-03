@@ -85,8 +85,7 @@ pub async fn resume_or_start<S: HubStore>(
             // wearing and the store refuses the write -- an entrant turned away at a race
             // they paid to enter, by a restart nobody saw (CLAUDE.md 21).
             let bibs = store.athlete_bibs(&existing.id).await?;
-            let mut state = LiveSession::new(existing, config, class_start)
-                .with_athletes(athletes);
+            let mut state = LiveSession::new(existing, config, class_start).with_athletes(athletes);
             for (athlete_id, bib) in bibs {
                 state.note_bib(&athlete_id, bib);
             }
@@ -111,7 +110,13 @@ pub async fn resume_or_start<S: HubStore>(
     let mut bibs = Vec::with_capacity(plan.roster.len());
     for (i, entry) in plan.roster.iter().enumerate() {
         store
-            .save_athlete(&session.id, &entry.athlete_id, &entry.display_name, i as i64 + 1, None)
+            .save_athlete(
+                &session.id,
+                &entry.athlete_id,
+                &entry.display_name,
+                i as i64 + 1,
+                None,
+            )
             .await?;
         athletes.push(AthleteState::ready(&entry.athlete_id, &entry.display_name));
         bibs.push((entry.athlete_id.clone(), i as i64 + 1));

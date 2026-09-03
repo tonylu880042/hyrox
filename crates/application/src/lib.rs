@@ -41,7 +41,7 @@ pub use config::configure;
 pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceReport};
 pub use finish::{apply_finish_policy, end_class};
 pub use health::{health, health_with_version, Blocker, Health};
-pub use ingest::{ingest_read, Ingested, IngestError, IngestOutcome};
+pub use ingest::{ingest_read, IngestError, IngestOutcome, Ingested};
 pub use live::{
     checkin_view, course_view, last_event_age_ms, reader_views, snapshot, AthleteView,
     CheckInAthlete, CheckInView, CourseStation, ReaderView, Snapshot, SplitView,
@@ -59,12 +59,12 @@ pub use assets::{
     VENUE_LOGO,
 };
 pub mod settings;
+pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
+pub use results::{live_results, results, Ordering, ResultRow, SessionResults, SplitRow};
 pub use settings::{
     save_venue_setting, venue_settings, SettingError, VenueSettings, DEFAULT_LIVE_PAGE_MS,
     DEFAULT_LIVE_PAGE_SIZE, LIVE_PAGE_LAYOUTS, LIVE_PAGE_MS, LIVE_PAGE_SIZE,
 };
-pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
-pub use results::{live_results, results, Ordering, ResultRow, SessionResults, SplitRow};
 pub use stages::{current_expectation, current_stage, stages, StageStatus, StageView};
 pub use templates::{
     create_class, delete_template, duplicate_template, list_templates, save_template, NewClass,

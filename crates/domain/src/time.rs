@@ -49,7 +49,11 @@ pub struct ClassClock {
 
 impl ClassClock {
     pub fn started_at(started_at: Instant) -> Self {
-        Self { started_at, paused_total: Duration(0), paused_since: None }
+        Self {
+            started_at,
+            paused_total: Duration(0),
+            paused_since: None,
+        }
     }
 
     pub fn is_paused(&self) -> bool {
@@ -58,7 +62,10 @@ impl ClassClock {
 
     /// Time the class has actually been running. Frozen while paused.
     pub fn elapsed(self, now: Instant) -> Duration {
-        let open = self.paused_since.map(|since| now.since(since).millis()).unwrap_or(0);
+        let open = self
+            .paused_since
+            .map(|since| now.since(since).millis())
+            .unwrap_or(0);
         Duration(now.since(self.started_at).millis() - self.paused_total.millis() - open)
     }
 

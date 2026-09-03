@@ -2,9 +2,9 @@
 
 use application::{course_view, snapshot, LiveSession};
 use domain::{
-    AthleteState, AthleteStatus, Course, CourseStep, Duration, Instant, Interpreted,
-    ReaderKey, ReaderMode, ReaderRegistration, ReaderRegistry, Session, SessionConfig,
-    SessionMode, StationState, StationTarget,
+    AthleteState, AthleteStatus, Course, CourseStep, Duration, Instant, Interpreted, ReaderKey,
+    ReaderMode, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
+    StationState, StationTarget,
 };
 
 const START: Instant = Instant(1_000_000);
@@ -15,8 +15,7 @@ fn course() -> Course {
         vec![
             CourseStep::new("SKIERG").with_target(StationTarget::Distance { meters: 500 }),
             CourseStep::new("SLED PUSH").with_target(StationTarget::Distance { meters: 25 }),
-            CourseStep::new("WALL BALLS")
-                .with_target(StationTarget::Repetitions { count: 50 }),
+            CourseStep::new("WALL BALLS").with_target(StationTarget::Repetitions { count: 50 }),
         ],
     )
 }
@@ -51,8 +50,11 @@ fn the_course_carries_a_stable_key_and_a_printable_plan() {
 fn a_duration_target_is_shown_as_a_clock() {
     let course = Course::new(
         "TABATA",
-        vec![CourseStep::new("BIKE")
-            .with_target(StationTarget::Duration { duration: Duration(150_000) })],
+        vec![
+            CourseStep::new("BIKE").with_target(StationTarget::Duration {
+                duration: Duration(150_000),
+            }),
+        ],
     );
 
     assert_eq!(course_view(Some(&course))[0].plan, "2:30 MIN");
@@ -110,7 +112,10 @@ fn an_athlete_between_stations_shows_the_transition_and_what_is_next() {
     );
     domain::apply(
         athlete,
-        &Interpreted::Exited { station: "SKIERG".into(), at: Instant(START.0 + 100_000) },
+        &Interpreted::Exited {
+            station: "SKIERG".into(),
+            at: Instant(START.0 + 100_000),
+        },
     );
 
     let snap = snapshot(&state, Instant(START.0 + 110_000));

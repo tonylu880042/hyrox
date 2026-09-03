@@ -35,7 +35,11 @@ fn an_arriving_ack_topic_names_the_device_it_is_addressed_to() {
     let d = device();
     assert_eq!(topic::device_of_ack(&topic::ack(&d)), Some(d.clone()));
     for t in [&topic::events(&d), &topic::status(&d), "hyrox/v1/hub/time"] {
-        assert_eq!(topic::device_of_ack(t), None, "{t} must not parse as an ack");
+        assert_eq!(
+            topic::device_of_ack(t),
+            None,
+            "{t} must not parse as an ack"
+        );
     }
 }
 

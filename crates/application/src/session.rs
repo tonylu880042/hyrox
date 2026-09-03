@@ -100,7 +100,10 @@ pub async fn return_to_draft<S: HubStore>(
     store: &S,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    transition(state, store, cmd, "SESSION_BACK_TO_DRAFT", |s, _| s.back_to_draft()).await
+    transition(state, store, cmd, "SESSION_BACK_TO_DRAFT", |s, _| {
+        s.back_to_draft()
+    })
+    .await
 }
 
 /// Applies a domain transition, persists it, then records it. Persisting first means a
@@ -113,11 +116,12 @@ async fn transition<S: HubStore>(
     change: fn(&mut Session, Instant) -> Result<(), SessionError>,
 ) -> Result<(), OperatorError<S::Error>> {
     let before = state.session.status.name();
-    change(&mut state.session, cmd.at).map_err(OperatorError::Session)?;
-    let after = state.session.status.name();
+    let mut candidate = state.session.clone();
+    change(&mut candidate, cmd.at).map_err(OperatorError::Session)?;
+    let after = candidate.status.name();
 
     store
-        .save_session(&state.session, state.class_start)
+        .save_session(&candidate, state.class_start)
         .await
         .map_err(OperatorError::Storage)?;
     store
@@ -125,13 +129,14 @@ async fn transition<S: HubStore>(
             at: cmd.at,
             operator: cmd.operator.clone(),
             action: action.to_string(),
-            subject: state.session.id.clone(),
+            subject: candidate.id.clone(),
             reason: cmd.stated_reason().map(str::to_string),
             before: Some(before.to_string()),
             after: Some(after.to_string()),
         })
         .await
         .map_err(OperatorError::Storage)?;
+    state.session = candidate;
     Ok(())
 }
 

@@ -27,7 +27,9 @@ pub async fn configure<S: HubStore>(
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
     if !state.session.accepts_config_edits() {
-        return Err(OperatorError::NotEditable { status: state.session.status });
+        return Err(OperatorError::NotEditable {
+            status: state.session.status,
+        });
     }
 
     let mut config = SessionConfig::new(&state.session.id);

@@ -22,14 +22,20 @@ fn the_preset_library_holds_the_nine_hyrox_movements() {
         "SANDBAG_LUNGE",
         "WALL_BALL",
     ] {
-        assert!(lib.get(code).is_some(), "{code} is missing from the library");
+        assert!(
+            lib.get(code).is_some(),
+            "{code} is missing from the library"
+        );
     }
     assert_eq!(lib.len(), 9);
 }
 
 #[test]
 fn a_code_is_matched_regardless_of_case() {
-    assert_eq!(library().get("wall_ball").map(|e| e.code.as_str()), Some("WALL_BALL"));
+    assert_eq!(
+        library().get("wall_ball").map(|e| e.code.as_str()),
+        Some("WALL_BALL")
+    );
 }
 
 /// The station key is the string a course step and a reader registration both carry. It is
@@ -49,7 +55,10 @@ fn exercises_are_categorised() {
     let lib = library();
     assert_eq!(lib.get("RUN").unwrap().category, ExerciseCategory::Run);
     assert_eq!(lib.get("ROWERG").unwrap().category, ExerciseCategory::Erg);
-    assert_eq!(lib.get("WALL_BALL").unwrap().category, ExerciseCategory::Functional);
+    assert_eq!(
+        lib.get("WALL_BALL").unwrap().category,
+        ExerciseCategory::Functional
+    );
 }
 
 // --- target types ----------------------------------------------------------------------
@@ -60,11 +69,17 @@ fn an_exercise_accepts_only_the_target_types_it_declares() {
     let run = lib.get("RUN").unwrap();
     assert!(run.accepts(TargetType::Distance));
     assert!(run.accepts(TargetType::Time));
-    assert!(!run.accepts(TargetType::Reps), "a run is not counted in reps");
+    assert!(
+        !run.accepts(TargetType::Reps),
+        "a run is not counted in reps"
+    );
 
     let wall_ball = lib.get("WALL_BALL").unwrap();
     assert!(wall_ball.accepts(TargetType::Reps));
-    assert!(!wall_ball.accepts(TargetType::Distance), "wall balls are not measured in metres");
+    assert!(
+        !wall_ball.accepts(TargetType::Distance),
+        "wall balls are not measured in metres"
+    );
 }
 
 #[test]
@@ -97,7 +112,10 @@ fn values_convert_to_canonical_units() {
     let lib = library();
     let run = lib.get("RUN").unwrap();
     assert_eq!(Target::new(run, 800, Unit::Meter).unwrap().canonical(), 800);
-    assert_eq!(Target::new(run, 5, Unit::Kilometer).unwrap().canonical(), 5_000);
+    assert_eq!(
+        Target::new(run, 5, Unit::Kilometer).unwrap().canonical(),
+        5_000
+    );
     assert_eq!(Target::new(run, 3, Unit::Minute).unwrap().canonical(), 180);
     let wb = lib.get("WALL_BALL").unwrap();
     assert_eq!(Target::new(wb, 50, Unit::Reps).unwrap().canonical(), 50);

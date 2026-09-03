@@ -24,7 +24,10 @@ pub enum ReaderKeyError {
 
 impl ReaderKey {
     pub fn new(device_id: DeviceId, reader_id: ReaderId) -> Self {
-        Self { device_id, reader_id }
+        Self {
+            device_id,
+            reader_id,
+        }
     }
 
     /// Parse both halves straight off an incoming MQTT payload (CLAUDE.md 16).
@@ -49,7 +52,12 @@ pub struct ReaderRegistration {
 
 impl ReaderRegistration {
     pub fn new(key: ReaderKey, station: impl Into<String>, mode: ReaderMode) -> Self {
-        Self { key, station: station.into(), zone: None, mode }
+        Self {
+            key,
+            station: station.into(),
+            zone: None,
+            mode,
+        }
     }
 
     pub fn with_zone(mut self, zone: impl Into<String>) -> Self {
@@ -59,7 +67,10 @@ impl ReaderRegistration {
 
     /// The slice of the mapping the interpreter needs (CLAUDE.md 10).
     pub fn binding(&self) -> ReaderBinding {
-        ReaderBinding { station: self.station.clone(), mode: self.mode }
+        ReaderBinding {
+            station: self.station.clone(),
+            mode: self.mode,
+        }
     }
 }
 
@@ -86,7 +97,11 @@ impl ReaderRegistry {
     /// Register or reconfigure a reader. Returns the mapping that was displaced, if any,
     /// so a re-registration is visible to the caller instead of silently overwriting.
     pub fn register(&mut self, registration: ReaderRegistration) -> Option<ReaderRegistration> {
-        match self.registrations.iter_mut().find(|r| r.key == registration.key) {
+        match self
+            .registrations
+            .iter_mut()
+            .find(|r| r.key == registration.key)
+        {
             Some(existing) => Some(std::mem::replace(existing, registration)),
             None => {
                 self.registrations.push(registration);
@@ -109,10 +124,13 @@ impl ReaderRegistry {
     }
 
     pub fn resolve(&self, key: &ReaderKey) -> Result<&ReaderRegistration, UnknownReader> {
-        self.registrations.iter().find(|r| &r.key == key).ok_or_else(|| UnknownReader {
-            device_id: key.device_id.clone(),
-            reader_id: key.reader_id.clone(),
-        })
+        self.registrations
+            .iter()
+            .find(|r| &r.key == key)
+            .ok_or_else(|| UnknownReader {
+                device_id: key.device_id.clone(),
+                reader_id: key.reader_id.clone(),
+            })
     }
 
     /// Every reader configured on one board, for device health screens (CLAUDE.md 23).
@@ -120,7 +138,9 @@ impl ReaderRegistry {
         &'a self,
         device_id: &'a DeviceId,
     ) -> impl Iterator<Item = &'a ReaderRegistration> {
-        self.registrations.iter().filter(move |r| &r.key.device_id == device_id)
+        self.registrations
+            .iter()
+            .filter(move |r| &r.key.device_id == device_id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &ReaderRegistration> {

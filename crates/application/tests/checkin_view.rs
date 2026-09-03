@@ -1,9 +1,7 @@
 //! The read model behind `/checkin` (ADR 0001 D3).
 
 use application::{checkin_view, LiveSession};
-use domain::{
-    AthleteState, BindingLedger, Instant, Session, SessionConfig, SessionMode, TagId,
-};
+use domain::{AthleteState, BindingLedger, Instant, Session, SessionConfig, SessionMode, TagId};
 
 const START: Instant = Instant(1_000_000);
 

@@ -12,9 +12,10 @@ fn sole(ingested: &application::Ingested) -> application::IngestOutcome {
     }
 }
 
-
 const T0: i64 = 1_787_734_800_000;
-fn at(ms: i64) -> Instant { Instant(T0 + ms) }
+fn at(ms: i64) -> Instant {
+    Instant(T0 + ms)
+}
 
 fn raw(seq: i64, detected: i64) -> RawEvent {
     RawEvent {
@@ -29,7 +30,10 @@ fn raw(seq: i64, detected: i64) -> RawEvent {
 }
 
 fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
-    ReaderBinding { station: station.into(), mode }
+    ReaderBinding {
+        station: station.into(),
+        mode,
+    }
 }
 
 /// Ingests a short class into a fresh store and returns the live in-memory state.
@@ -38,7 +42,10 @@ async fn ingest(store: &Store) -> (Session, AthleteState) {
     session.mark_ready().unwrap();
     session.start().unwrap();
     store.save_session(&session, at(0)).await.unwrap();
-    store.save_athlete("s1", "a1", "CHEN YU-TING", 1, None).await.unwrap();
+    store
+        .save_athlete("s1", "a1", "CHEN YU-TING", 1, None)
+        .await
+        .unwrap();
 
     let mut athlete = AthleteState::ready("a1", "CHEN YU-TING");
     let script = [
@@ -51,7 +58,10 @@ async fn ingest(store: &Store) -> (Session, AthleteState) {
         let (raw_id, inserted) = store.save_raw(&r).await.unwrap();
         assert!(inserted);
         let event = interpret(&mut athlete, &reader(station, *mode), at(*t), &session);
-        store.save_interpreted("s1", "a1", Some(raw_id), &event).await.unwrap();
+        store
+            .save_interpreted("s1", "a1", Some(raw_id), &event)
+            .await
+            .unwrap();
         session.interpreted_event_count += 1;
     }
     store.save_session(&session, at(0)).await.unwrap();
@@ -64,9 +74,16 @@ async fn state_survives_a_restart() {
     let (_, live) = ingest(&store).await;
 
     // Restart: nothing but the database survives.
-    let session = store.active_session().await.unwrap().expect("session must be recoverable");
+    let session = store
+        .active_session()
+        .await
+        .unwrap()
+        .expect("session must be recoverable");
     assert_eq!(session.id, "s1");
-    assert!(session.accepts_events(), "an ARMED session must resume ARMED");
+    assert!(
+        session.accepts_events(),
+        "an ARMED session must resume ARMED"
+    );
 
     let rebuilt = store.rebuild_athletes("s1").await.unwrap();
     assert_eq!(rebuilt.len(), 1);
@@ -74,10 +91,16 @@ async fn state_survives_a_restart() {
     assert_eq!(a.status, live.status);
     assert_eq!(a.station_state, live.station_state);
     assert_eq!(a.current_station, live.current_station);
-    assert_eq!(a.started_at, live.started_at, "timing must survive verbatim");
+    assert_eq!(
+        a.started_at, live.started_at,
+        "timing must survive verbatim"
+    );
     assert_eq!(a.last_exit_at, live.last_exit_at);
     assert_eq!(a.runs.len(), live.runs.len());
-    assert_eq!(a.runs[1].transition_from_prev, live.runs[1].transition_from_prev);
+    assert_eq!(
+        a.runs[1].transition_from_prev,
+        live.runs[1].transition_from_prev
+    );
 }
 
 #[tokio::test]
@@ -114,7 +137,10 @@ async fn voiding_an_interpreted_event_changes_what_recovery_rebuilds() {
     assert_eq!(before[0].runs.len(), 2);
 
     // Void the SLED PUSH entry the way an operator correction would (CLAUDE.md 20).
-    store.void_interpreted(3, at(200_000), "櫃檯平板", "誤刷").await.unwrap();
+    store
+        .void_interpreted(3, at(200_000), "櫃檯平板", "誤刷")
+        .await
+        .unwrap();
 
     let after = store.rebuild_athletes("s1").await.unwrap();
     assert_eq!(after[0].runs.len(), 1, "the voided station must disappear");
@@ -136,13 +162,26 @@ async fn an_unknown_reader_exception_survives_a_restart() {
     session.mark_ready().unwrap();
     session.start().unwrap();
     store.save_session(&session, at(0)).await.unwrap();
-    store.save_athlete("s1", "a1", "CHEN YU-TING", 1, None).await.unwrap();
+    store
+        .save_athlete("s1", "a1", "CHEN YU-TING", 1, None)
+        .await
+        .unwrap();
 
-    let event = Interpreted::Exception { reason: ExceptionReason::UnknownReader, at: at(1_000) };
-    store.save_interpreted("s1", "a1", None, &event).await.unwrap();
+    let event = Interpreted::Exception {
+        reason: ExceptionReason::UnknownReader,
+        at: at(1_000),
+    };
+    store
+        .save_interpreted("s1", "a1", None, &event)
+        .await
+        .unwrap();
 
     let rebuilt = store.rebuild_athletes("s1").await.unwrap();
-    assert_eq!(rebuilt[0].runs.len(), 0, "an exception must not advance station state");
+    assert_eq!(
+        rebuilt[0].runs.len(),
+        0,
+        "an exception must not advance station state"
+    );
     assert_eq!(rebuilt[0].status, domain::AthleteStatus::Ready);
 }
 
@@ -155,12 +194,12 @@ mod resumed {
         ingest_read, register_reader, resume_or_start, HubStore, OperatorCommand, Recovery,
         RosterEntry, SessionPlan,
     };
+    use contract::{EdgeEvent, ReceivedEvent};
     use domain::{
         AthleteStatus, Course, CourseStep, Duration, ExceptionReason, FinishPolicy, Instant,
         Interpreted, ReaderKey, ReaderMode, ReaderRegistration, Session, SessionConfig,
         SessionMode, StationTarget, TagId,
     };
-    use contract::{EdgeEvent, ReceivedEvent};
     use storage::Store;
 
     const T0: i64 = 1_787_734_800_000;
@@ -176,8 +215,7 @@ mod resumed {
             "HYROX CLASS",
             vec![
                 CourseStep::new("SKIERG").with_target(StationTarget::Distance { meters: 500 }),
-                CourseStep::new("WALL BALLS")
-                    .with_target(StationTarget::Repetitions { count: 50 }),
+                CourseStep::new("WALL BALLS").with_target(StationTarget::Repetitions { count: 50 }),
             ],
         )
     }
@@ -263,24 +301,34 @@ mod resumed {
 
         // Restart. The caller offers a different rule and a different course, as a fresh
         // process would; the stored ones must win.
-        let (mut resumed, how) =
-            resume_or_start(&store, plan(FinishPolicy::CoachDecides, None)).await.unwrap();
+        let (mut resumed, how) = resume_or_start(&store, plan(FinishPolicy::CoachDecides, None))
+            .await
+            .unwrap();
 
         assert_eq!(how, Recovery::Resumed);
-        assert_eq!(resumed.config.finish_policy, FinishPolicy::ClassDuration { limit: LIMIT });
+        assert_eq!(
+            resumed.config.finish_policy,
+            FinishPolicy::ClassDuration { limit: LIMIT }
+        );
         assert_eq!(resumed.config.course.as_ref(), Some(&course()));
 
         // And the rule is still enforced: nobody finishes before the limit...
-        assert!(apply_finish_policy(&mut resumed, &store, at(LIMIT.millis() - 1))
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            apply_finish_policy(&mut resumed, &store, at(LIMIT.millis() - 1))
+                .await
+                .unwrap()
+                .is_empty()
+        );
         // ...and the athlete who was running finishes on it (CLAUDE.md 12, answered
         // 2026-08-27). Under the caller's CoachDecides nothing would have finished at all.
-        let finished =
-            apply_finish_policy(&mut resumed, &store, at(LIMIT.millis())).await.unwrap();
+        let finished = apply_finish_policy(&mut resumed, &store, at(LIMIT.millis()))
+            .await
+            .unwrap();
         assert_eq!(finished, ["a1"]);
-        assert_eq!(resumed.athlete("a1").unwrap().status, AthleteStatus::Finished);
+        assert_eq!(
+            resumed.athlete("a1").unwrap().status,
+            AthleteStatus::Finished
+        );
     }
 
     /// A class-duration finish is decided by the clock, not by a read, so replaying the
@@ -309,9 +357,13 @@ mod resumed {
         )
         .await
         .unwrap();
-        ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 60_000)).await.unwrap();
+        ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 60_000))
+            .await
+            .unwrap();
 
-        let finished = apply_finish_policy(&mut state, &store, at(LIMIT.millis())).await.unwrap();
+        let finished = apply_finish_policy(&mut state, &store, at(LIMIT.millis()))
+            .await
+            .unwrap();
         assert_eq!(finished, ["a1"]);
         drop(state);
 
@@ -320,7 +372,11 @@ mod resumed {
             .unwrap();
 
         let athlete = resumed.athlete("a1").unwrap();
-        assert_eq!(athlete.status, AthleteStatus::Finished, "the restart un-finished them");
+        assert_eq!(
+            athlete.status,
+            AthleteStatus::Finished,
+            "the restart un-finished them"
+        );
         // The moment the rule said they stopped, not the moment the hub came back up: a
         // restart must never inflate a result (CLAUDE.md 11, 17).
         assert_eq!(athlete.finished_at, Some(at(LIMIT.millis())));
@@ -328,7 +384,10 @@ mod resumed {
         // And the same on the page an athlete actually reads. This is where the defect
         // showed: /result and /leaderboard disagreed, because one asked the live session and
         // the other rebuilt from the store.
-        let results = application::results(&store, "s1").await.unwrap().expect("results");
+        let results = application::results(&store, "s1")
+            .await
+            .unwrap()
+            .expect("results");
         let row = results.rows.iter().find(|r| r.athlete_id == "a1").unwrap();
         assert_eq!(row.status, AthleteStatus::Finished);
         assert_eq!(row.finished_at, Some(at(LIMIT.millis()).0));
@@ -375,7 +434,10 @@ mod resumed {
         ingest_read(&mut resumed, &store, &read("rfid-01", "TAG-A1", 1, 60_000))
             .await
             .unwrap();
-        assert_eq!(resumed.athlete("a1").unwrap().current_station.as_deref(), Some("SKIERG"));
+        assert_eq!(
+            resumed.athlete("a1").unwrap().current_station.as_deref(),
+            Some("SKIERG")
+        );
 
         // ...and one that was never registered is still an exception (CLAUDE.md 8; D4).
         let out = ingest_read(&mut resumed, &store, &read("rfid-99", "TAG-A1", 2, 120_000))
@@ -384,7 +446,10 @@ mod resumed {
         assert!(matches!(
             crate::sole(&out),
             application::IngestOutcome::Interpreted {
-                event: Interpreted::Exception { reason: ExceptionReason::UnknownReader, .. },
+                event: Interpreted::Exception {
+                    reason: ExceptionReason::UnknownReader,
+                    ..
+                },
                 ..
             }
         ));
@@ -398,9 +463,15 @@ mod resumed {
             .unwrap();
         let first = TagId::parse("TAG-A1").unwrap();
         let second = TagId::parse("TAG-A2").unwrap();
-        bind_tag(&mut state, &store, &first, "a1", &OperatorCommand::new("CHECKIN", at(0)))
-            .await
-            .unwrap();
+        bind_tag(
+            &mut state,
+            &store,
+            &first,
+            "a1",
+            &OperatorCommand::new("CHECKIN", at(0)),
+        )
+        .await
+        .unwrap();
         rebind_tag(
             &mut state,
             &store,
@@ -419,8 +490,15 @@ mod resumed {
         assert_eq!(resumed.bindings.athlete_for_tag("s1", &second), Some("a1"));
         assert_eq!(resumed.bindings.athlete_for_tag("s1", &first), None);
         let history = resumed.bindings.history();
-        assert_eq!(history.len(), 2, "the closed row is the audit trail (CLAUDE.md 20)");
-        let closed = history.iter().find(|b| b.tag_id == first).expect("the old band");
+        assert_eq!(
+            history.len(),
+            2,
+            "the closed row is the audit trail (CLAUDE.md 20)"
+        );
+        let closed = history
+            .iter()
+            .find(|b| b.tag_id == first)
+            .expect("the old band");
         assert_eq!(closed.athlete_id, "a1", "who held it is never rewritten");
         assert_eq!(closed.unbound_at, Some(at(30_000)));
     }
@@ -439,9 +517,13 @@ mod resumed {
         )
         .await
         .unwrap();
-        ingest_read(&mut state, &store, &read("rfid-01", "TAG-NOBODY", 1, 60_000))
-            .await
-            .unwrap();
+        ingest_read(
+            &mut state,
+            &store,
+            &read("rfid-01", "TAG-NOBODY", 1, 60_000),
+        )
+        .await
+        .unwrap();
         assert_eq!(state.pending_tags().len(), 1);
         drop(state);
 
@@ -463,7 +545,10 @@ mod resumed {
             .await
             .unwrap();
         let device = DEVICE.replace(':', "");
-        for (reader, mode) in [("rfid-01", ReaderMode::Entry), ("rfid-02", ReaderMode::Exit)] {
+        for (reader, mode) in [
+            ("rfid-01", ReaderMode::Entry),
+            ("rfid-02", ReaderMode::Exit),
+        ] {
             register_reader(
                 &mut state,
                 &store,
@@ -477,8 +562,12 @@ mod resumed {
             .await
             .unwrap();
         }
-        ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 60_000)).await.unwrap();
-        ingest_read(&mut state, &store, &read("rfid-02", "TAG-A1", 2, 170_000)).await.unwrap();
+        ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 60_000))
+            .await
+            .unwrap();
+        ingest_read(&mut state, &store, &read("rfid-02", "TAG-A1", 2, 170_000))
+            .await
+            .unwrap();
         drop(state);
 
         let (mut resumed, _) = resume_or_start(&store, plan(FinishPolicy::CoachDecides, None))

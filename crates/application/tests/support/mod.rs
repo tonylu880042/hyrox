@@ -5,14 +5,15 @@
 #![allow(dead_code)]
 
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, StoredException, StoredRawRead, SeenReader,
+    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, SeenReader, StoredException,
+    StoredRawRead,
 };
+use contract::CommitOutcome;
 use domain::{
     AthleteState, BindingLedger, Exercise, ExerciseLibrary, Instant, Interpreted, MemberRef,
     PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig, StationMap,
     TagBinding, WorkoutTemplate,
 };
-use contract::CommitOutcome;
 use std::sync::Mutex;
 
 /// What the store was asked to do, in order. The ingestion contract is as much about
@@ -79,6 +80,9 @@ pub struct FakeStore {
     /// exist for it (CLAUDE.md 15).
     pub fail_raw: bool,
     pub fail_interpreted: bool,
+    pub fail_save_athlete_finish: bool,
+    pub fail_save_session: bool,
+    pub fail_record_audit: bool,
 }
 
 impl FakeStore {
@@ -87,11 +91,17 @@ impl FakeStore {
     }
 
     pub fn failing_raw() -> Self {
-        Self { fail_raw: true, ..Self::default() }
+        Self {
+            fail_raw: true,
+            ..Self::default()
+        }
     }
 
     pub fn failing_interpreted() -> Self {
-        Self { fail_interpreted: true, ..Self::default() }
+        Self {
+            fail_interpreted: true,
+            ..Self::default()
+        }
     }
 
     /// Seed a session as if a previous run had left it behind (CLAUDE.md 21).
@@ -186,7 +196,11 @@ impl FakeStore {
 
     /// A venue setting already stored, including one that makes no sense.
     pub fn with_venue_setting(self, key: &str, value: &str) -> Self {
-        self.inner.lock().unwrap().venue_settings.push((key.to_string(), value.to_string()));
+        self.inner
+            .lock()
+            .unwrap()
+            .venue_settings
+            .push((key.to_string(), value.to_string()));
         self
     }
 
@@ -230,7 +244,9 @@ impl FakeStore {
         session.mark_ready().unwrap();
         session.start().unwrap();
         inner.sessions.push(session);
-        inner.configs.push(SessionConfig::new(session_id).with_finish_policy(policy));
+        inner
+            .configs
+            .push(SessionConfig::new(session_id).with_finish_policy(policy));
         inner.athletes = finishes
             .iter()
             .map(|(name, at)| {
@@ -258,9 +274,10 @@ impl HubStore for FakeStore {
             return Err(FakeError("raw commit failed"));
         }
         let mut inner = self.inner.lock().unwrap();
-        inner
-            .calls
-            .push(Call::Raw { tag_id: raw.tag_id.clone(), sequence: raw.sequence });
+        inner.calls.push(Call::Raw {
+            tag_id: raw.tag_id.clone(),
+            sequence: raw.sequence,
+        });
         // Keyed the way `crates/storage` keys it: the round's idempotency key plus the tag,
         // because one round carries several tags (ADR 0014).
         let existing = inner.raw.iter().position(|r| {
@@ -297,7 +314,18 @@ impl HubStore for FakeStore {
         Ok(inner.interpreted.len() as i64)
     }
 
+    async fn raw_event_has_interpretation(&self, raw_event_id: i64) -> Result<bool, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .interpreted
+            .iter()
+            .any(|(_, raw_id, _)| *raw_id == Some(raw_event_id)))
+    }
+
     async fn save_session(&self, session: &Session, created_at: Instant) -> Result<(), FakeError> {
+        if self.fail_save_session {
+            return Err(FakeError("save_session failed"));
+        }
         let mut inner = self.inner.lock().unwrap();
         inner.calls.push(Call::Session {
             status: format!("{:?}", session.status).to_uppercase(),
@@ -320,8 +348,12 @@ impl HubStore for FakeStore {
         member_id: Option<&str>,
     ) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
-        inner.calls.push(Call::Athlete { athlete_id: athlete_id.to_string() });
-        inner.athletes.push(AthleteState::ready(athlete_id, display_name));
+        inner.calls.push(Call::Athlete {
+            athlete_id: athlete_id.to_string(),
+        });
+        inner
+            .athletes
+            .push(AthleteState::ready(athlete_id, display_name));
         inner.roster.push(SavedAthlete {
             athlete_id: athlete_id.to_string(),
             display_name: display_name.to_string(),
@@ -337,8 +369,15 @@ impl HubStore for FakeStore {
         athlete_id: &str,
         finished_at: Option<domain::Instant>,
     ) -> Result<(), FakeError> {
+        if self.fail_save_athlete_finish {
+            return Err(FakeError("save_athlete_finish failed"));
+        }
         let mut inner = self.inner.lock().unwrap();
-        if let Some(a) = inner.athletes.iter_mut().find(|a| a.athlete_id == athlete_id) {
+        if let Some(a) = inner
+            .athletes
+            .iter_mut()
+            .find(|a| a.athlete_id == athlete_id)
+        {
             match finished_at {
                 Some(at) => domain::finish(a, at),
                 None => a.finished_at = None,
@@ -377,7 +416,11 @@ impl HubStore for FakeStore {
                 .map(|(i, a)| (a.athlete_id.clone(), i as i64 + 1))
                 .collect());
         }
-        Ok(inner.roster.iter().map(|a| (a.athlete_id.clone(), a.bib)).collect())
+        Ok(inner
+            .roster
+            .iter()
+            .map(|a| (a.athlete_id.clone(), a.bib))
+            .collect())
     }
 
     async fn rebuild_athletes(&self, _session_id: &str) -> Result<Vec<AthleteState>, FakeError> {
@@ -466,8 +509,8 @@ impl HubStore for FakeStore {
         _reason: &str,
     ) -> Result<bool, FakeError> {
         let mut inner = self.inner.lock().unwrap();
-        let exists = interpreted_event_id >= 1
-            && interpreted_event_id as usize <= inner.interpreted.len();
+        let exists =
+            interpreted_event_id >= 1 && interpreted_event_id as usize <= inner.interpreted.len();
         if exists {
             inner.voided.push(interpreted_event_id);
         }
@@ -503,16 +546,19 @@ impl HubStore for FakeStore {
     ) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
         inner.venue_settings.retain(|(k, _)| k != key);
-        inner.venue_settings.push((key.to_string(), value.to_string()));
+        inner
+            .venue_settings
+            .push((key.to_string(), value.to_string()));
         Ok(())
     }
 
-    async fn venue_asset(
-        &self,
-        key: &str,
-    ) -> Result<Option<application::VenueAsset>, FakeError> {
+    async fn venue_asset(&self, key: &str) -> Result<Option<application::VenueAsset>, FakeError> {
         let inner = self.inner.lock().unwrap();
-        Ok(inner.venue_assets.iter().find(|(k, _)| k == key).map(|(_, a)| a.clone()))
+        Ok(inner
+            .venue_assets
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, a)| a.clone()))
     }
 
     async fn save_venue_asset(
@@ -527,26 +573,42 @@ impl HubStore for FakeStore {
         inner.venue_assets.retain(|(k, _)| k != key);
         inner.venue_assets.push((
             key.to_string(),
-            application::VenueAsset { media_type: media_type.to_string(), bytes: bytes.to_vec() },
+            application::VenueAsset {
+                media_type: media_type.to_string(),
+                bytes: bytes.to_vec(),
+            },
         ));
         Ok(())
     }
 
     async fn delete_venue_asset(&self, key: &str) -> Result<(), FakeError> {
-        self.inner.lock().unwrap().venue_assets.retain(|(k, _)| k != key);
+        self.inner
+            .lock()
+            .unwrap()
+            .venue_assets
+            .retain(|(k, _)| k != key);
         Ok(())
     }
 
     async fn record_audit(&self, entry: &AuditEntry) -> Result<(), FakeError> {
+        if self.fail_record_audit {
+            return Err(FakeError("record_audit failed"));
+        }
         let mut inner = self.inner.lock().unwrap();
-        inner.calls.push(Call::Audit { action: entry.action.clone() });
+        inner.calls.push(Call::Audit {
+            action: entry.action.clone(),
+        });
         inner.audits.push(entry.clone());
         Ok(())
     }
 
     async fn save_session_config(&self, config: &SessionConfig) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
-        match inner.configs.iter_mut().find(|c| c.session_id == config.session_id) {
+        match inner
+            .configs
+            .iter_mut()
+            .find(|c| c.session_id == config.session_id)
+        {
             Some(existing) => *existing = config.clone(),
             None => inner.configs.push(config.clone()),
         }
@@ -584,9 +646,7 @@ impl HubStore for FakeStore {
     /// Append or close, never re-attribute: the same contract the real table enforces.
     async fn save_binding(&self, binding: &TagBinding) -> Result<(), FakeError> {
         let mut inner = self.inner.lock().unwrap();
-        let key = |b: &TagBinding| {
-            (b.session_id.clone(), b.tag_id.clone(), b.bound_at)
-        };
+        let key = |b: &TagBinding| (b.session_id.clone(), b.tag_id.clone(), b.bound_at);
         match inner.bindings.iter_mut().find(|b| key(b) == key(binding)) {
             Some(existing) => existing.unbound_at = binding.unbound_at,
             None => inner.bindings.push(binding.clone()),
@@ -685,7 +745,9 @@ impl HubStore for FakeStore {
     }
 
     async fn exercises(&self) -> Result<ExerciseLibrary, FakeError> {
-        Ok(ExerciseLibrary::new(self.inner.lock().unwrap().exercises.clone()))
+        Ok(ExerciseLibrary::new(
+            self.inner.lock().unwrap().exercises.clone(),
+        ))
     }
 
     async fn save_station(&self, station: &PhysicalStation) -> Result<(), FakeError> {

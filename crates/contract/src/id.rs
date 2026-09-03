@@ -22,7 +22,11 @@ pub struct EventId {
 
 impl EventId {
     pub fn new(device_id: DeviceId, boot_id: i64, sequence: i64) -> Self {
-        Self { device_id, boot_id, sequence }
+        Self {
+            device_id,
+            boot_id,
+            sequence,
+        }
     }
 
     pub fn of(event: &crate::EdgeEvent) -> Self {

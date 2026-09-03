@@ -1,8 +1,8 @@
 //! Physical stations and expectation (workout brief §11, §12, §20).
 
 use domain::{
-    AthleteState, Course, CourseStep, Expectation, ExerciseLibrary, PhysicalStation, StationMap,
-    expectation,
+    expectation, AthleteState, Course, CourseStep, ExerciseLibrary, Expectation, PhysicalStation,
+    StationMap,
 };
 
 fn map() -> StationMap {
@@ -27,7 +27,10 @@ fn one_exercise_can_be_served_by_several_physical_stations() {
 fn a_station_declares_the_one_exercise_it_can_serve() {
     let m = map();
     assert!(m.can_serve("ROW_02", "ROWERG"));
-    assert!(!m.can_serve("ROW_02", "WALL_BALL"), "a rower is not a wall ball target");
+    assert!(
+        !m.can_serve("ROW_02", "WALL_BALL"),
+        "a rower is not a wall ball target"
+    );
 }
 
 #[test]
@@ -82,7 +85,10 @@ fn skipping_ahead_in_the_course_is_out_of_order_not_unexpected() {
     let mut a = AthleteState::ready("a1", "TONY");
     a.runs.push(finished_run("RUN"));
 
-    assert_eq!(expectation(&course(), &a, "WALL BALLS"), Expectation::OutOfOrder);
+    assert_eq!(
+        expectation(&course(), &a, "WALL BALLS"),
+        Expectation::OutOfOrder
+    );
 }
 
 #[test]
@@ -97,7 +103,10 @@ fn going_back_to_a_station_already_completed_is_out_of_order() {
 #[test]
 fn a_station_the_course_never_mentions_is_unexpected() {
     let a = AthleteState::ready("a1", "TONY");
-    assert_eq!(expectation(&course(), &a, "SLED PUSH"), Expectation::Unexpected);
+    assert_eq!(
+        expectation(&course(), &a, "SLED PUSH"),
+        Expectation::Unexpected
+    );
 }
 
 /// Past the end of the plan there is no next station to compare against, so nothing about
@@ -109,7 +118,10 @@ fn a_read_after_the_last_step_is_unexpected() {
         a.runs.push(finished_run(station));
     }
     assert_eq!(expectation(&course(), &a, "RUN"), Expectation::OutOfOrder);
-    assert_eq!(expectation(&course(), &a, "SLED PUSH"), Expectation::Unexpected);
+    assert_eq!(
+        expectation(&course(), &a, "SLED PUSH"),
+        Expectation::Unexpected
+    );
 }
 
 /// Training records what actually happens and must never warn on a different order

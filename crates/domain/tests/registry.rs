@@ -40,7 +40,12 @@ fn mac_strings_are_normalised_to_the_canonical_form() {
     // become six rows in the reader registry, and the lookup would miss on punctuation
     // alone -- silently, at the venue.
     let expected = device("a4cf128b3d91");
-    for raw in ["a4:cf:12:8b:3d:91", "A4-CF-12-8B-3D-91", "A4CF128B3D91", "a4.cf.12.8b.3d.91"] {
+    for raw in [
+        "a4:cf:12:8b:3d:91",
+        "A4-CF-12-8B-3D-91",
+        "A4CF128B3D91",
+        "a4.cf.12.8b.3d.91",
+    ] {
         assert_eq!(DeviceId::from_mac_str(raw).unwrap(), expected, "{raw}");
     }
 }
@@ -60,14 +65,24 @@ fn malformed_device_ids_are_rejected() {
         ("a4cf128b3d911", DeviceIdError::WrongLength { found: 13 }),
         // Separators are for humans and config files; the wire carries the canonical form
         // only, so there is exactly one spelling of one device (ADR 0015).
-        ("a4:cf:12:8b:3d:91", DeviceIdError::WrongLength { found: 17 }),
+        (
+            "a4:cf:12:8b:3d:91",
+            DeviceIdError::WrongLength { found: 17 },
+        ),
         ("a4cf128b3dzz", DeviceIdError::NotHex),
         // The old prefixed form. Rejected rather than tolerated: two spellings is the thing
         // the canonical form exists to prevent.
-        ("esp32-a4cf128b3d91", DeviceIdError::WrongLength { found: 18 }),
+        (
+            "esp32-a4cf128b3d91",
+            DeviceIdError::WrongLength { found: 18 },
+        ),
     ];
     for (raw, expected) in cases {
-        assert_eq!(DeviceId::parse(raw), Err(expected), "{raw:?} must be rejected");
+        assert_eq!(
+            DeviceId::parse(raw),
+            Err(expected),
+            "{raw:?} must be rejected"
+        );
     }
 }
 
@@ -82,7 +97,10 @@ fn a_uuid_is_not_a_device_id() {
 fn reader_ids_are_validated_and_kept_separate_from_the_device() {
     assert_eq!(reader("RFID-02").as_str(), "rfid-02");
     assert_eq!(ReaderId::parse(""), Err(ReaderIdError::Empty));
-    assert_eq!(ReaderId::parse("rfid 02"), Err(ReaderIdError::InvalidCharacter { found: ' ' }));
+    assert_eq!(
+        ReaderId::parse("rfid 02"),
+        Err(ReaderIdError::InvalidCharacter { found: ' ' })
+    );
 }
 
 // --- reader registry (CLAUDE.md 8) ----------------------------------------------------
@@ -106,11 +124,25 @@ fn one_device_can_host_several_readers() {
     // CLAUDE.md 7.3: reader_id stays separate precisely so this stays possible.
     let mut registry = ReaderRegistry::new();
     let dev = "a4cf128b3d91";
-    registry.register(ReaderRegistration::new(key(dev, "rfid-01"), "SKIERG", ReaderMode::Entry));
-    registry.register(ReaderRegistration::new(key(dev, "rfid-02"), "SKIERG", ReaderMode::Exit));
+    registry.register(ReaderRegistration::new(
+        key(dev, "rfid-01"),
+        "SKIERG",
+        ReaderMode::Entry,
+    ));
+    registry.register(ReaderRegistration::new(
+        key(dev, "rfid-02"),
+        "SKIERG",
+        ReaderMode::Exit,
+    ));
 
-    assert_eq!(registry.resolve(&key(dev, "rfid-01")).unwrap().mode, ReaderMode::Entry);
-    assert_eq!(registry.resolve(&key(dev, "rfid-02")).unwrap().mode, ReaderMode::Exit);
+    assert_eq!(
+        registry.resolve(&key(dev, "rfid-01")).unwrap().mode,
+        ReaderMode::Entry
+    );
+    assert_eq!(
+        registry.resolve(&key(dev, "rfid-02")).unwrap().mode,
+        ReaderMode::Exit
+    );
 }
 
 #[test]
@@ -122,7 +154,10 @@ fn the_same_reader_id_on_a_different_device_is_a_different_reader() {
         ReaderMode::Entry,
     ));
     let other = key("b0b1b2b3b4b5", "rfid-01");
-    assert!(registry.resolve(&other).is_err(), "reader_id alone must not identify a reader");
+    assert!(
+        registry.resolve(&other).is_err(),
+        "reader_id alone must not identify a reader"
+    );
 }
 
 #[test]
@@ -146,15 +181,27 @@ fn re_registering_a_reader_returns_the_replaced_mapping() {
     let mut registry = ReaderRegistry::new();
     let k = key("a4cf128b3d91", "rfid-02");
     assert!(registry
-        .register(ReaderRegistration::new(k.clone(), "SKIERG", ReaderMode::Entry))
+        .register(ReaderRegistration::new(
+            k.clone(),
+            "SKIERG",
+            ReaderMode::Entry
+        ))
         .is_none());
 
     let replaced = registry
-        .register(ReaderRegistration::new(k.clone(), "ROWING", ReaderMode::Toggle))
+        .register(ReaderRegistration::new(
+            k.clone(),
+            "ROWING",
+            ReaderMode::Toggle,
+        ))
         .expect("the old mapping must be returned");
     assert_eq!(replaced.station, "SKIERG");
     assert_eq!(registry.resolve(&k).unwrap().station, "ROWING");
-    assert_eq!(registry.len(), 1, "re-registering must not duplicate the key");
+    assert_eq!(
+        registry.len(),
+        1,
+        "re-registering must not duplicate the key"
+    );
 }
 
 #[test]
@@ -180,12 +227,19 @@ fn a_registration_yields_the_binding_the_interpreter_consumes() {
 fn a_reader_can_be_removed_and_stops_resolving() {
     let mut registry = ReaderRegistry::new();
     let key = ReaderKey::parse("a4cf128b3d91", "rfid-01").expect("a key");
-    registry.register(ReaderRegistration::new(key.clone(), "SKIERG", ReaderMode::Entry));
+    registry.register(ReaderRegistration::new(
+        key.clone(),
+        "SKIERG",
+        ReaderMode::Entry,
+    ));
 
     let removed = registry.remove(&key).expect("it was there");
 
     assert_eq!(removed.station, "SKIERG");
-    assert!(registry.resolve(&key).is_err(), "a read from it is now an unknown reader");
+    assert!(
+        registry.resolve(&key).is_err(),
+        "a read from it is now an unknown reader"
+    );
     assert!(registry.is_empty());
 }
 
@@ -204,11 +258,22 @@ fn removing_one_reader_leaves_the_others_alone() {
     let mut registry = ReaderRegistry::new();
     let entry = ReaderKey::parse("a4cf128b3d91", "rfid-01").expect("a key");
     let exit = ReaderKey::parse("a4cf128b3d91", "rfid-02").expect("a key");
-    registry.register(ReaderRegistration::new(entry.clone(), "SKIERG", ReaderMode::Entry));
-    registry.register(ReaderRegistration::new(exit.clone(), "SKIERG", ReaderMode::Exit));
+    registry.register(ReaderRegistration::new(
+        entry.clone(),
+        "SKIERG",
+        ReaderMode::Entry,
+    ));
+    registry.register(ReaderRegistration::new(
+        exit.clone(),
+        "SKIERG",
+        ReaderMode::Exit,
+    ));
 
     registry.remove(&entry);
 
-    assert!(registry.resolve(&exit).is_ok(), "the exit antenna is untouched");
+    assert!(
+        registry.resolve(&exit).is_ok(),
+        "the exit antenna is untouched"
+    );
     assert_eq!(registry.len(), 1);
 }

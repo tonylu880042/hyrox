@@ -14,7 +14,10 @@ use domain::*;
 fn a_code_is_six_characters_from_the_unambiguous_alphabet() {
     let code = EntryCode::encode(0);
     assert_eq!(code.as_str().len(), 6);
-    assert!(code.as_str().chars().all(|c| EntryCode::ALPHABET.contains(c)));
+    assert!(code
+        .as_str()
+        .chars()
+        .all(|c| EntryCode::ALPHABET.contains(c)));
 }
 
 #[test]
@@ -22,7 +25,10 @@ fn the_alphabet_leaves_out_the_letters_people_misread() {
     // Crockford's rule: no I, L, O or U. The first three are misread as 1 and 0 on a phone
     // screen at arm's length; U is dropped so no code spells anything unfortunate.
     for c in ['I', 'L', 'O', 'U'] {
-        assert!(!EntryCode::ALPHABET.contains(c), "{c} should not be in the alphabet");
+        assert!(
+            !EntryCode::ALPHABET.contains(c),
+            "{c} should not be in the alphabet"
+        );
     }
 }
 
@@ -76,7 +82,10 @@ fn parsing_refuses_what_is_not_a_code() {
 
 #[test]
 fn a_parsed_code_is_stored_and_shown_in_upper_case() {
-    assert_eq!(EntryCode::parse("k7qd2m").expect("valid").as_str(), "K7QD2M");
+    assert_eq!(
+        EntryCode::parse("k7qd2m").expect("valid").as_str(),
+        "K7QD2M"
+    );
 }
 
 #[test]

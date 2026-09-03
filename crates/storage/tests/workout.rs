@@ -13,7 +13,10 @@ async fn store() -> Store {
 
 fn ex(code: &str, value: u32, unit: Unit) -> WorkoutExercise {
     let lib = ExerciseLibrary::preset();
-    WorkoutExercise::new(code, Target::new(lib.get(code).unwrap(), value, unit).unwrap())
+    WorkoutExercise::new(
+        code,
+        Target::new(lib.get(code).unwrap(), value, unit).unwrap(),
+    )
 }
 
 fn template() -> WorkoutTemplate {
@@ -39,9 +42,16 @@ async fn a_template_round_trips_whole() {
     let t = template();
 
     store.save_template(&t).await.expect("saved");
-    let back = store.template("sys1").await.expect("read").expect("a stored template");
+    let back = store
+        .template("sys1")
+        .await
+        .expect("read")
+        .expect("a stored template");
 
-    assert_eq!(back, t, "every field, blocks included, comes back as it went in");
+    assert_eq!(
+        back, t,
+        "every field, blocks included, comes back as it went in"
+    );
 }
 
 #[tokio::test]
@@ -61,7 +71,12 @@ async fn saving_a_template_twice_replaces_it_rather_than_duplicating() {
 
 #[tokio::test]
 async fn a_template_that_was_never_stored_is_none_not_an_error() {
-    assert!(store().await.template("nope").await.expect("a clean read").is_none());
+    assert!(store()
+        .await
+        .template("nope")
+        .await
+        .expect("a clean read")
+        .is_none());
 }
 
 #[tokio::test]
@@ -70,7 +85,10 @@ async fn deleting_reports_whether_a_row_went() {
     store.save_template(&template()).await.unwrap();
 
     assert!(store.delete_template("sys1").await.unwrap());
-    assert!(!store.delete_template("sys1").await.unwrap(), "a second delete removes nothing");
+    assert!(
+        !store.delete_template("sys1").await.unwrap(),
+        "a second delete removes nothing"
+    );
     assert!(store.templates().await.unwrap().is_empty());
 }
 
@@ -79,7 +97,11 @@ async fn the_source_survives_storage_so_the_read_only_rule_survives_a_restart() 
     let store = store().await;
     store.save_template(&template()).await.unwrap();
     store
-        .save_template(&WorkoutTemplate::new("t2", "Mine", TemplateCategory::Custom))
+        .save_template(&WorkoutTemplate::new(
+            "t2",
+            "Mine",
+            TemplateCategory::Custom,
+        ))
         .await
         .unwrap();
 
@@ -108,7 +130,10 @@ async fn the_exercise_library_round_trips() {
     let wall_ball = back.get("WALL_BALL").expect("wall ball");
     assert_eq!(wall_ball.station_key, "WALL BALLS");
     assert_eq!(wall_ball.default_target_type, TargetType::Reps);
-    assert_eq!(wall_ball.supported_target_types, vec![TargetType::Reps, TargetType::Time]);
+    assert_eq!(
+        wall_ball.supported_target_types,
+        vec![TargetType::Reps, TargetType::Time]
+    );
     assert_eq!(back.get("ROWERG").unwrap().category, ExerciseCategory::Erg);
 }
 
@@ -203,7 +228,10 @@ async fn a_pause_survives_a_reload() {
     assert_eq!(back.status, SessionStatus::Paused);
     assert_eq!(back.paused_total, domain::Duration(15_000));
     assert_eq!(back.paused_since, Some(Instant(30_000)));
-    assert_eq!(back.clock(Instant(0)).elapsed(Instant(60_000)), domain::Duration(15_000));
+    assert_eq!(
+        back.clock(Instant(0)).elapsed(Instant(60_000)),
+        domain::Duration(15_000)
+    );
 }
 
 /// A paused class is still today's class: `active_session` has to pick it back up, or a
@@ -223,6 +251,10 @@ async fn a_paused_session_is_still_the_active_one() {
     paused.pause(Instant(10_000)).unwrap();
     store.save_session(&paused, Instant(1)).await.unwrap();
 
-    let active = store.active_session().await.unwrap().expect("a session to resume");
+    let active = store
+        .active_session()
+        .await
+        .unwrap()
+        .expect("a session to resume");
     assert_eq!(active.id, "today");
 }

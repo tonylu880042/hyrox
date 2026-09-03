@@ -24,7 +24,10 @@ use transport::MqttConfig;
 pub const ENABLED: &str = "HYROX_DEMO";
 
 pub fn enabled() -> bool {
-    matches!(std::env::var(ENABLED).as_deref(), Ok("1") | Ok("true") | Ok("on"))
+    matches!(
+        std::env::var(ENABLED).as_deref(),
+        Ok("1") | Ok("true") | Ok("on")
+    )
 }
 
 pub struct DemoVenue {
@@ -40,7 +43,12 @@ pub struct DemoVenue {
 
 impl DemoVenue {
     pub fn new(clock: VirtualClock, broker: MqttConfig) -> Self {
-        Self { hub: OnceLock::new(), clock, broker, running: Arc::new(AtomicBool::new(false)) }
+        Self {
+            hub: OnceLock::new(),
+            clock,
+            broker,
+            running: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn attach(&self, hub: Hub<Store>) {
@@ -60,8 +68,7 @@ impl Demo for DemoVenue {
             // publishing the same sequence numbers.
             return Err("demo data is already running".to_string());
         }
-        let (clock, broker, running) =
-            (self.clock, self.broker.clone(), Arc::clone(&self.running));
+        let (clock, broker, running) = (self.clock, self.broker.clone(), Arc::clone(&self.running));
         tokio::spawn(async move {
             if let Err(e) = provision(&hub, clock).await {
                 eprintln!("demo: cannot provision the fixture venue: {e}");
@@ -100,7 +107,9 @@ async fn provision(hub: &Hub<Store>, clock: VirtualClock) -> Result<(), String> 
     operator
         .configure(
             Some(feeder::course()),
-            FinishPolicy::ClassDuration { limit: DEV_CLASS_LENGTH },
+            FinishPolicy::ClassDuration {
+                limit: DEV_CLASS_LENGTH,
+            },
             &cmd,
         )
         .await
@@ -126,7 +135,13 @@ async fn provision(hub: &Hub<Store>, clock: VirtualClock) -> Result<(), String> 
             .map_err(|e| fail("band", e.to_string()))?;
     }
 
-    operator.mark_ready(&cmd).await.map_err(|e| fail("arming", e.to_string()))?;
-    operator.start(&cmd).await.map_err(|e| fail("start", e.to_string()))?;
+    operator
+        .mark_ready(&cmd)
+        .await
+        .map_err(|e| fail("arming", e.to_string()))?;
+    operator
+        .start(&cmd)
+        .await
+        .map_err(|e| fail("start", e.to_string()))?;
     Ok(())
 }

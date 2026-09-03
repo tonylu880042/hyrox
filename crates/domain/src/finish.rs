@@ -36,7 +36,9 @@ pub enum FinishDecision {
     /// Carries WHEN, not just whether. The moment an athlete stopped is their result, and
     /// it is not the moment a background tick happened to notice: a tick is up to a poll
     /// interval late, and after a restart it can be minutes late (CLAUDE.md 11, 17).
-    Finished { at: Instant },
+    Finished {
+        at: Instant,
+    },
     NotFinished,
     Undetermined,
 }
@@ -71,7 +73,9 @@ impl FinishPolicy {
                     // Never scanned in: the class ended, but this athlete did not take part.
                     AthleteStatus::Ready => FinishDecision::NotFinished,
                     // The clock ran out at the limit, whenever we got around to looking.
-                    _ => FinishDecision::Finished { at: clock.instant_at_elapsed(*limit) },
+                    _ => FinishDecision::Finished {
+                        at: clock.instant_at_elapsed(*limit),
+                    },
                 }
             }
 
@@ -81,8 +85,11 @@ impl FinishPolicy {
                     // NotFinished would read as an answer (CLAUDE.md 28).
                     return FinishDecision::Undetermined;
                 };
-                let finished_runs: Vec<_> =
-                    state.runs.iter().filter_map(|r| r.exited_at.map(|at| (&r.station, at))).collect();
+                let finished_runs: Vec<_> = state
+                    .runs
+                    .iter()
+                    .filter_map(|r| r.exited_at.map(|at| (&r.station, at)))
+                    .collect();
                 let Some(last_step) = course.steps.last() else {
                     return FinishDecision::Undetermined;
                 };
