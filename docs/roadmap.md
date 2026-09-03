@@ -353,4 +353,4 @@ IAM 驗證只會讓每台出貨機多一份要輪換的憑證，完整性一點�
 - **10,000 筆 backlog 的逐筆 ACK 未壓測**。
 - **裝置同名無法區分** — ADR 0001 自己列的未決項；兩台平板取一樣的名字在稽核上分不出來。
 - **`transport::client` 的 broker 測試需要本機 Mosquitto**，無 broker 時自動跳過。
-- **瀏覽器 `fetch()` 對非 ASCII header 值行為不一致** — 伺服器端已可接受 UTF-8 裝置名，但 M6 做操作介面時可能需要 percent-encode 或改放 body。
+- ~~**瀏覽器 `fetch()` 對非 ASCII header 值行為不一致**~~ — 已解決（2026-09-03）。不是不一致，是**一律拒絕**：`fetch` 對 ISO-8859-1 以外的 header 值直接丟例外，請求根本沒離開分頁，所以「櫃檯平板」這個裝置名在畫面上完全不能用。四個畫面改為 `encodeURIComponent`，主機端 percent-decode（只在能解出合法 UTF-8 時才採用）。

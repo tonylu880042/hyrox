@@ -34,16 +34,25 @@ impl<S: Send + Sync> FromRequestParts<S> for OperatorDevice {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
-        // Decode the raw bytes as UTF-8 rather than using `to_str`, which rejects anything
-        // outside visible ASCII. ADR 0001 D1 makes the device's own name the audit identity,
-        // and this gym names its tablets in Chinese -- 「櫃檯平板」 would otherwise read as
-        // no operator at all, which is exactly the anonymous audit row D1 exists to prevent.
-        let name = parts
+        // Two spellings, because two things have to agree and only one of them is ours.
+        //
+        // ADR 0001 D1 makes the device's own name the audit identity, and this gym names its
+        // tablets in Chinese. `to_str` would reject 「櫃檯平板」 outright -- it allows only
+        // visible ASCII -- so the raw bytes are read as UTF-8 instead, which is what a
+        // `curl` or a native client sends.
+        //
+        // A browser cannot send those bytes at all: `fetch` refuses a header value outside
+        // ISO-8859-1 and throws before the request leaves the tab. So the screens
+        // percent-encode the name, and it is decoded back here. Decoding is only accepted
+        // when it yields valid UTF-8; a name that merely contains a stray `%` is left as it
+        // was rather than mangled.
+        let raw = parts
             .headers
             .get(OPERATOR_HEADER)
             .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
-            .map(str::trim)
             .unwrap_or_default();
+        let decoded = percent_encoding::percent_decode_str(raw).decode_utf8().ok();
+        let name = decoded.as_deref().unwrap_or(raw).trim();
         // Whitespace is not a name. A header of `"   "` would satisfy "present" and tell a
         // later reader of the audit trail exactly as much as no header at all.
         if name.is_empty() {

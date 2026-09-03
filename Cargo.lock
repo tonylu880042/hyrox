@@ -16,6 +16,7 @@ dependencies = [
  "axum",
  "contract",
  "domain",
+ "percent-encoding",
  "qrcode",
  "serde",
  "serde_json",

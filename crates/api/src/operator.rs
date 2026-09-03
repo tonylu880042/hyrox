@@ -35,6 +35,8 @@ where
         .route("/config", put(configure))
         .route("/exceptions", get(exceptions))
         .route("/exceptions/{interpreted_event_id}/void", post(void))
+        // The non-destructive half of the pair (ADR 0001 D4).
+        .route("/exceptions/{interpreted_event_id}/accept", post(accept))
         // The nightly window asks for this rather than copying the file itself: the hub is
         // the only process allowed to touch the database (ADR 0009, 0012).
         .route("/backup", post(backup))
@@ -194,6 +196,26 @@ where
     let now = operator.read().now();
     let cmd = command(device, now, request.reason);
     operator.void_exception(interpreted_event_id, &cmd).await?;
+    exceptions(State(operator)).await
+}
+
+/// Accepts one exception as it stands: out of the inbox, still in the log (ADR 0001 D4).
+///
+/// A reason is optional here, unlike voiding. Nothing is removed and no result changes, so
+/// requiring one would buy a trail of "ok" rather than a trail worth reading.
+async fn accept<S>(
+    State(operator): State<Operator<S>>,
+    Path(interpreted_event_id): Path<i64>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<ReasonRequest>,
+) -> Result<Json<ExceptionsResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let now = operator.read().now();
+    let cmd = command(device, now, request.reason);
+    operator.accept_exception(interpreted_event_id, &cmd).await?;
     exceptions(State(operator)).await
 }
 

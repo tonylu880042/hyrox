@@ -323,11 +323,38 @@ impl Store {
 
     /// The session's live exceptions, oldest first (ADR 0001 D4). Ordered by `detected_at`
     /// like the replay, so the inbox reads in the order the venue produced it.
+    /// Marks one exception as looked at and left alone (migration 0011).
+    ///
+    /// Returns false when there is no such row, so the caller can answer 404 rather than
+    /// report a success that changed nothing. Accepting twice is harmless -- the second
+    /// write restamps who cleared it, which is the more useful of the two records.
+    pub async fn acknowledge_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: &str,
+        reason: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let done = sqlx::query(
+            "UPDATE interpreted_events
+                SET acknowledged_at = ?2, acknowledged_by = ?3, acknowledge_reason = ?4
+              WHERE id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+        )
+        .bind(interpreted_event_id)
+        .bind(at.0)
+        .bind(operator)
+        .bind(reason)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
     pub async fn exceptions(&self, session_id: &str) -> Result<Vec<StoredException>, StoreError> {
         let rows = sqlx::query(
             "SELECT id, athlete_id, raw_event_id, detected_at, exception_reason
              FROM interpreted_events
              WHERE session_id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL
+               AND acknowledged_at IS NULL
              ORDER BY detected_at, id",
         )
         .bind(session_id)
@@ -476,8 +503,11 @@ impl Store {
     /// inbox clears the badge too (CLAUDE.md 20; ADR 0001 D4).
     pub async fn exception_count(&self, session_id: &str) -> Result<i64, StoreError> {
         Ok(sqlx::query_scalar(
+            // The badge counts outstanding work, so it counts what the inbox lists:
+            // accepted exceptions are still in the log and no longer on anyone's list.
             "SELECT COUNT(*) FROM interpreted_events
-             WHERE session_id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+             WHERE session_id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL
+               AND acknowledged_at IS NULL",
         )
         .bind(session_id)
         .fetch_one(&self.pool)

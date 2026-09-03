@@ -53,6 +53,7 @@ struct Inner {
     /// too, because a correction trail that deleted its subject would prove nothing
     /// (CLAUDE.md 19, 20).
     voided: Vec<i64>,
+    accepted: Vec<i64>,
     audits: Vec<AuditEntry>,
     seen_readers: Vec<SeenReader>,
     venue_settings: Vec<(String, String)>,
@@ -413,6 +414,7 @@ impl HubStore for FakeStore {
             .filter(|(i, (_, _, e))| {
                 matches!(e, Interpreted::Exception { .. })
                     && !inner.voided.contains(&(*i as i64 + 1))
+                    && !inner.accepted.contains(&(*i as i64 + 1))
             })
             .count())
     }
@@ -437,6 +439,23 @@ impl HubStore for FakeStore {
                 _ => None,
             })
             .collect())
+    }
+
+    async fn acknowledge_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        _at: Instant,
+        _operator: &str,
+        _reason: Option<&str>,
+    ) -> Result<bool, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let open = interpreted_event_id >= 1
+            && interpreted_event_id as usize <= inner.interpreted.len()
+            && !inner.voided.contains(&interpreted_event_id);
+        if open {
+            inner.accepted.push(interpreted_event_id);
+        }
+        Ok(open)
     }
 
     async fn void_interpreted(

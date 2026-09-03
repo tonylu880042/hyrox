@@ -54,6 +54,7 @@ struct Inner {
     raw: Vec<RawRead>,
     interpreted: Vec<(String, Option<i64>, Interpreted)>,
     voided: Vec<i64>,
+    accepted: Vec<i64>,
     audits: Vec<AuditEntry>,
     seen_readers: Vec<SeenReader>,
     venue_settings: Vec<(String, String)>,
@@ -134,6 +135,16 @@ impl FakeStore {
             .interpreted
             .push((athlete_id.to_string(), None, event));
         inner.interpreted.len() as i64
+    }
+
+    /// Which exceptions were accepted as they stand, in order.
+    pub fn accepted(&self) -> Vec<i64> {
+        self.inner.lock().unwrap().accepted.clone()
+    }
+
+    /// Which interpretations were voided.
+    pub fn voided(&self) -> Vec<i64> {
+        self.inner.lock().unwrap().voided.clone()
     }
 
     /// Where a backup was asked to be written, in the order it was asked for.
@@ -403,6 +414,7 @@ impl HubStore for FakeStore {
             .filter(|(i, (_, _, e))| {
                 matches!(e, Interpreted::Exception { .. })
                     && !inner.voided.contains(&(*i as i64 + 1))
+                    && !inner.accepted.contains(&(*i as i64 + 1))
             })
             .count())
     }
@@ -419,6 +431,7 @@ impl HubStore for FakeStore {
             .iter()
             .enumerate()
             .filter(|(i, _)| !inner.voided.contains(&(*i as i64 + 1)))
+            .filter(|(i, _)| !inner.accepted.contains(&(*i as i64 + 1)))
             .filter_map(|(i, (athlete_id, raw_event_id, event))| match event {
                 Interpreted::Exception { reason, at } => Some(StoredException {
                     interpreted_event_id: i as i64 + 1,
@@ -430,6 +443,23 @@ impl HubStore for FakeStore {
                 _ => None,
             })
             .collect())
+    }
+
+    async fn acknowledge_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        _at: Instant,
+        _operator: &str,
+        _reason: Option<&str>,
+    ) -> Result<bool, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let open = interpreted_event_id >= 1
+            && interpreted_event_id as usize <= inner.interpreted.len()
+            && !inner.voided.contains(&interpreted_event_id);
+        if open {
+            inner.accepted.push(interpreted_event_id);
+        }
+        Ok(open)
     }
 
     async fn void_interpreted(

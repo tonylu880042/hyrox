@@ -29,6 +29,56 @@ pub async fn list<S: HubStore>(
     store.exceptions(session_id).await.map_err(OperatorError::Storage)
 }
 
+/// Accepts one exception as it stands: it leaves the inbox, and nothing else changes.
+///
+/// The other half of D4's pair. `void` is for a reading that should never have counted;
+/// this is for one that is a true record and simply needs no action -- a band that brushed
+/// an antenna twice, a read taken while a reader was being moved. Nothing is removed from
+/// the log and no replay changes, so unlike voiding it takes no reason. Demanding one would
+/// only teach an operator to type "ok" thirty times an evening, and a trail full of "ok" is
+/// worse than a trail that says an operator cleared it and when.
+pub async fn accept<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    interpreted_event_id: i64,
+    cmd: &OperatorCommand,
+) -> Result<(), OperatorError<S::Error>> {
+    let accepted = store
+        .acknowledge_interpreted(
+            interpreted_event_id,
+            cmd.at,
+            &cmd.operator,
+            cmd.stated_reason(),
+        )
+        .await
+        .map_err(OperatorError::Storage)?;
+    if !accepted {
+        return Err(OperatorError::UnknownEvent(interpreted_event_id));
+    }
+
+    store
+        .record_audit(&AuditEntry {
+            at: cmd.at,
+            operator: cmd.operator.clone(),
+            action: "EXCEPTION_ACCEPT".to_string(),
+            subject: interpreted_event_id.to_string(),
+            reason: cmd.stated_reason().map(str::to_string),
+            before: None,
+            after: Some("ACCEPTED".to_string()),
+        })
+        .await
+        .map_err(OperatorError::Storage)?;
+
+    // Only the badge moves. Athlete state is not rebuilt, because nothing that replays has
+    // changed -- and rebuilding the whole class to clear one notification would be the
+    // expensive way to do nothing.
+    state.exception_count = store
+        .exception_count(&state.session.id)
+        .await
+        .map_err(OperatorError::Storage)?;
+    Ok(())
+}
+
 /// Voids one interpreted event and recomputes everything derived from it.
 ///
 /// The raw read is not touched (CLAUDE.md 19). The interpretation is marked voided, which

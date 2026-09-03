@@ -310,6 +310,18 @@ pub trait HubStore {
     /// The interpretation is marked voided, never deleted, and the raw read it points at is
     /// not touched at all (CLAUDE.md 19). A voided event must disappear from every replay,
     /// which is what makes the derived values recomputable after the fact.
+    /// Marks one exception as looked at and left alone (ADR 0001 D4; migration 0011).
+    ///
+    /// Not a void: the interpretation stays in the log and in every replay. False means no
+    /// such open exception.
+    fn acknowledge_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: &str,
+        reason: Option<&str>,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
     fn void_interpreted(
         &self,
         interpreted_event_id: i64,

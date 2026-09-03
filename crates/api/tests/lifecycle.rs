@@ -419,6 +419,27 @@ async fn voiding_an_exception_needs_a_reason_and_a_real_event() {
     assert_eq!(audit.reason.as_deref(), Some("誤刷"));
 }
 
+/// The same name as a browser is able to send it.
+///
+/// `fetch` refuses a header value outside ISO-8859-1 -- it throws in the tab, so the request
+/// never leaves -- which made 「櫃檯平板」 unusable from the very screens that ask for it,
+/// even though the server had accepted it since the test below. The screens escape it now.
+#[tokio::test]
+async fn a_percent_encoded_device_name_is_read_back_as_itself() {
+    let (router, store) = running();
+
+    let (status, _) = call(
+        &router,
+        post("/api/operator/session/complete", "%E6%AB%83%E6%AA%AF%E5%B9%B3%E6%9D%BF", json!({})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(store.audits()[0].operator, "櫃檯平板");
+}
+
+/// A name that is not escaped at all still works: `curl`, a native client, and every test
+/// in this file send the bytes as they are.
 #[tokio::test]
 async fn an_operator_device_may_be_named_in_chinese() {
     // ADR 0001 D1's own examples are 「櫃檯平板」 and 「教練手機」. HTTP header values are

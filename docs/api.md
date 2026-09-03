@@ -100,6 +100,7 @@ three cannot drift apart. Members keep their `member_id` and are issued no code.
 | `PUT` | `/api/operator/config` | ✎ | `finish_policy`; optional `course` | the new session view |
 | `GET` | `/api/operator/exceptions` | — | — | `{ freshness, exceptions }` |
 | `POST` | `/api/operator/exceptions/{id}/void` | ✎! | `reason` | the remaining inbox |
+| `POST` | `/api/operator/exceptions/{id}/accept` | ✎ | optional `reason` | the remaining inbox — clears one exception **without** removing it (ADR 0001 D4) |
 | `POST` | `/api/operator/session/ready` | ✎ | — | the new session view |
 | `POST` | `/api/operator/session/start` | ✎ | — | the new session view |
 | `POST` | `/api/operator/session/pause` | ✎ | — | the new session view |
@@ -135,6 +136,14 @@ database produces a copy missing whatever sits in the `-wal`, or a corrupt one. 
 named for the moment it was taken, so sorting by name sorts by time; the caller rotates the
 directory. It is audited as `DATABASE_BACKUP`: a copy of the venue's whole history left the
 database, and who asked is worth keeping even though nothing recorded changed.
+
+`POST /api/operator/exceptions/{id}/accept` is the non-destructive half of D4's pair. The
+interpretation keeps its place in the log and in every replay; what changes is that the inbox
+and its badge stop counting it, because both mean "still somebody's work". Voiding is for a
+reading that should never have counted; accepting is for one that is a true record of what
+the antenna saw and needs nothing done. Accepting therefore takes no `reason` and triggers no
+recalculation -- nothing that replays has changed. An id that is unknown, or already voided,
+answers `404 UNKNOWN_EVENT`.
 
 `POST /api/operator/demo` exists on every build but answers `503 DEMO_UNAVAILABLE` unless the
 machine was started with `HYROX_DEMO=1`; `GET /api/settings` reports the same thing as

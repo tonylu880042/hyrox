@@ -647,6 +647,16 @@ impl<S: HubStore> Operator<S> {
     /// the same reason. The id cannot go stale under us: a session id never changes, and a
     /// query for a session that has just been replaced returns that session's exceptions,
     /// which is what was asked for.
+    /// Clears one exception without erasing it (ADR 0001 D4).
+    pub async fn accept_exception(
+        &self,
+        interpreted_event_id: i64,
+        cmd: &OperatorCommand,
+    ) -> Result<(), OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        exceptions::accept(&mut state, &*self.hub.store, interpreted_event_id, cmd).await
+    }
+
     pub async fn exceptions(&self) -> Result<Vec<StoredException>, OperatorError<S::Error>> {
         let session_id = {
             let state = self.hub.lock().await;

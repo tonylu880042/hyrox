@@ -95,6 +95,16 @@ impl HubStore for Store {
         Store::exceptions(self, session_id).await
     }
 
+    async fn acknowledge_interpreted(
+        &self,
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: &str,
+        reason: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        Store::acknowledge_interpreted(self, interpreted_event_id, at, operator, reason).await
+    }
+
     async fn void_interpreted(
         &self,
         interpreted_event_id: i64,

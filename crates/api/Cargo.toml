@@ -10,6 +10,8 @@ rust-version.workspace = true
 # does in the use cases, so a handler cannot reach a database even by accident and the whole
 # surface is testable against an in-memory fake (CLAUDE.md 24).
 [dependencies]
+# Already in the tree via axum; used to read a device name a browser had to escape.
+percent-encoding = "2"
 domain = { path = "../domain" }
 application = { path = "../application" }
 axum = { version = "0.8", features = ["ws"] }

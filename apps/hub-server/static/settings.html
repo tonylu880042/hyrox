@@ -13,6 +13,9 @@
   /* Set up on a tablet, standing at a wall, often with one hand holding a band. */
   button, select, input { min-height: 48px; font-size: 16px; }
   .mono { font-family: "JetBrains Mono", monospace; }
+  /* The reason dialog is modal; without a dimmed backdrop it reads as just more page,
+     and the list behind it stays the thing your eye follows. */
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
 </style>
 </head>
 <body class="bg-surface text-on-surface min-h-screen">
@@ -157,8 +160,14 @@
 "use strict";
 
 let DEVICE = localStorage.getItem("hyrox.device") || "";
+/// The name most of these tablets have, as one tap. Anything else is typed, once per
+/// tablet, and kept (ADR 0001 D1).
+const DEVICE_CHIPS = ["ask.deviceDefault"];
 let VIEW = { readers: [], devices: [], exceptions: [], unregistered: [], stations: [] };
 const MODES = ["ENTRY", "EXIT", "TOGGLE", "CHECKPOINT", "PASSAGE"];
+/// The reasons an exception actually gets cleared for, as one-tap answers.
+const EXCEPTION_CHIPS = ["exc.chip.missed", "exc.chip.wrongStation", "exc.chip.duplicate",
+                         "exc.chip.newBand", "exc.chip.coachApproved"];
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -174,9 +183,10 @@ function toast(message, bad) {
 /// Every write carries the tablet's name; that name is the audit identity (ADR 0001 D1).
 /// Asked for once and kept, because a helper setting up a venue should be asked their
 /// device name once, not on every antenna.
-function device() {
+async function device() {
   while (!DEVICE) {
-    DEVICE = (prompt(I18N.t("device.ask") || "Device name") || "").trim();
+    DEVICE = (await ask(I18N.t("ask.device"), true, DEVICE_CHIPS)) || "";
+    DEVICE = DEVICE.trim();
     if (DEVICE) localStorage.setItem("hyrox.device", DEVICE);
   }
   return DEVICE;
@@ -184,7 +194,9 @@ function device() {
 
 async function api(method, path, body) {
   const headers = { "content-type": "application/json" };
-  if (method !== "GET") headers["x-operator-device"] = device();
+  // `fetch` throws on a header value outside ISO-8859-1, so a device named 「櫃檯平板」
+  // would never leave the tab. Escaped here, decoded back by the hub (ADR 0001 D1).
+  if (method !== "GET") headers["x-operator-device"] = encodeURIComponent(await device());
   const response = await fetch(path, {
     method,
     headers,
@@ -277,8 +289,8 @@ function renderRegistered() {
     li.querySelector(".rm").onclick = () => guard(async () => {
       // A reason, like every action that changes what the hub will record (CLAUDE.md 20):
       // from here on this antenna's reads are exceptions rather than progress.
-      const reason = (prompt(I18N.t("set.removeReason")) || "").trim();
-      if (!reason) return;
+      const reason = (await ask(I18N.t("set.removeReason"), true)) || "";
+      if (!reason.trim()) return;
       await api("DELETE", `/api/operator/readers/${encodeURIComponent(r.device_id)}/${encodeURIComponent(r.reader_id)}`, { reason });
       toast(I18N.t("set.removed").replace("{0}", r.reader_id));
       await refresh();
@@ -330,6 +342,49 @@ function renderDevices() {
 }
 
 // ── Exceptions ────────────────────────────────────────────────────────────────
+/// Asks for one line of text, with optional one-tap answers.
+///
+/// `prompt()` was the wrong tool on the floor twice over. A coach is standing up holding a
+/// tablet, often one-handed, and the virtual keyboard covers the list they were reading --
+/// and some tablet browsers refuse `prompt()` outright, which took the whole write surface
+/// with it, device name included. The chips cover the cases that repeat; the box underneath
+/// is still there for the one that does not. What is stored is free text either way: the
+/// audit trail's value is the sentence, not a code (CLAUDE.md 20).
+///
+/// Returns null when cancelled, which is not the same as an empty answer.
+function ask(title, required, chipKeys) {
+  return new Promise((resolve) => {
+    const chips = chipKeys || [];
+    const dialog = document.createElement("dialog");
+    dialog.className = "bg-surface-container text-on-surface rounded-lg border border-outline-variant p-4 max-w-sm w-full";
+    dialog.innerHTML = `
+      <p class="mb-3">${esc(title)}</p>
+      <div class="flex flex-wrap gap-2 mb-3">
+        ${chips.map((k) => `<button data-chip="${esc(I18N.t(k))}" class="chip border border-outline rounded-full px-3 py-2 text-sm">${esc(I18N.t(k))}</button>`).join("")}
+      </div>
+      <input id="reason-free" class="w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2 mb-3" placeholder="${esc(I18N.t("ask.typeYourOwn"))}"/>
+      <div class="flex justify-end gap-2">
+        <button id="reason-cancel" class="border border-outline rounded px-4 py-2">${esc(I18N.t("set.cancel"))}</button>
+        <button id="reason-ok" class="bg-primary text-on-primary rounded px-4 py-2">${esc(I18N.t("set.confirm"))}</button>
+      </div>`;
+    document.body.appendChild(dialog);
+    const done = (value) => { dialog.close(); dialog.remove(); resolve(value); };
+    const free = dialog.querySelector("#reason-free");
+    // One tap is the whole interaction: the chip *is* the answer, not a way to fill a field
+    // that then needs a second tap on OK.
+    dialog.querySelectorAll(".chip").forEach((b) => {
+      b.onclick = () => done(b.dataset.chip);
+    });
+    dialog.querySelector("#reason-ok").onclick = () => {
+      const typed = free.value.trim();
+      if (required && !typed) return;
+      done(typed);
+    };
+    dialog.querySelector("#reason-cancel").onclick = () => done(null);
+    dialog.showModal();
+  });
+}
+
 function renderExceptions() {
   const host = document.getElementById("exceptions");
   host.innerHTML = "";
@@ -344,10 +399,20 @@ function renderExceptions() {
       <span class="text-xs px-2 py-1 rounded border border-outline">${esc(label("exc.", e.reason))}</span>
       <span class="mono text-sm flex-1" style="min-width:8rem">${esc(e.athlete_id)}</span>
       <span class="text-xs text-on-surface-variant mono">${esc(ago(e.age_ms))}</span>
+      <button class="ac border border-outline rounded px-3 py-2 text-sm">${esc(I18N.t("set.accept"))}</button>
       <button class="vd border border-error text-error rounded px-3 py-2 text-sm">${esc(I18N.t("set.void"))}</button>`;
+    // Accepting removes nothing, so the reason is optional -- and it is the button a coach
+    // reaches for most, which is why it sits before the destructive one.
+    li.querySelector(".ac").onclick = () => guard(async () => {
+      const reason = await ask(I18N.t("set.acceptReason"), false, EXCEPTION_CHIPS);
+      if (reason === null) return;
+      await api("POST", "/api/operator/exceptions/" + e.interpreted_event_id + "/accept",
+                reason ? { reason } : {});
+      await refresh();
+    });
     li.querySelector(".vd").onclick = () => guard(async () => {
       // Voiding changes recorded data, so it carries a reason (CLAUDE.md 20).
-      const reason = (prompt(I18N.t("set.voidReason")) || "").trim();
+      const reason = await ask(I18N.t("set.voidReason"), true, EXCEPTION_CHIPS);
       if (!reason) return;
       await api("POST", "/api/operator/exceptions/" + e.interpreted_event_id + "/void", { reason });
       await refresh();
@@ -378,7 +443,10 @@ document.getElementById("logo-file").onchange = (e) => guard(async () => {
   if (!file) return;
   const response = await fetch("/api/operator/logo", {
     method: "POST",
-    headers: { "content-type": file.type || "application/octet-stream", "x-operator-device": device() },
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-operator-device": encodeURIComponent(await device()),
+    },
     body: file,
   });
   const data = await response.json().catch(() => ({}));

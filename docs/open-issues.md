@@ -109,23 +109,29 @@ a migration. Until then, do not build the table.
 
 ---
 
-## OPEN — Exception Inbox 的「accept as-is」與「改判」
+## OPEN — Exception Inbox 的「改判」（accept as-is 已完成）
 
 ADR 0001 D4 列了三個處理動作：accept as-is / void / 改判（改站點、改 ENTRY/EXIT、改選手）。
-只有 `void` 有 use case（`application::exceptions::void`），因此 `crates/api` 也只有
-`POST /api/operator/exceptions/{id}/void`。另外兩個是刻意缺席，不是遺漏。
 
-**accept as-is** 需要一個地方記下「有人看過這筆例外，決定不動它」。`interpreted_events`
-沒有這樣的欄位，而加一個欄位就要先回答：被 accept 的例外還算不算 D4 的 badge？
-重算時它如何參與？兩者都是產品規則。
+**accept as-is 已實作**（2026-09-03，`POST /api/operator/exceptions/{id}/accept`，
+migration 0011）。當初卡住的兩個產品問題，答案是：
+
+- **badge 不再算它。** badge 的定義是「還沒有人處理的事」，不是「發生過幾次例外」。
+  一個沒人敢清空的信箱，下一筆真的例外就會死在裡面（CLAUDE.md 31 第 6 條）。
+- **重算完全不參與。** 被 accept 的那一列還在 log 裡、還在每一次重播裡，效果和以前
+  一模一樣（對 exception 而言就是沒有效果）。改變的只有「它還算不算某個人的待辦」。
+  所以 accept 不觸發重算——為了清掉一個通知而重建整班選手，是很貴的什麼都沒做。
+
+不要求填原因：沒有東西被移除或改變，強制填只會換來一整排「ok」。有填就記在
+`acknowledge_reason` 與 audit（`EXCEPTION_ACCEPT`）。
 
 **改判**等於由 operator 產生一筆事件（不同站點、不同 ENTRY/EXIT、不同選手）。
-CLAUDE.md 20 明文允許，但它是一條獨立的寫入路徑：`raw_event_id` 為 `None` 的
-interpreted event，且必須完整走過 audit 與衍生值重算。它會需要自己的 use case
-與自己的測試。
+CLAUDE.md 20 明文允許，`InterpretedWrite.raw_event_id` 也早就為它留了 `None`，
+但真正沒答案的是**時間**：補一筆事件要用哪個時刻？手打、由前後事件推算、或標記為
+人工補錄並在成績單上顯示？這會直接改寫分段、轉場、ROX 與名次，競賽模式尤其敏感。
 
-**Needs:** 先確定 accept as-is 之後那筆例外在 badge 與重算裡的身分。在那之前，
-現場的替代路徑是 void 加上人工紀錄——不理想，但不會產生一個沒人定義的狀態。
+**Needs:** 先決定補錄事件的 `effective_time` 從哪裡來，以及競賽模式要不要另外標記。
+在那之前，現場的替代路徑是 void 加上人工紀錄。
 
 ---
 
