@@ -639,9 +639,20 @@ impl<S: HubStore> Operator<S> {
         readers::register_reader(&mut state, &*self.hub.store, registration, cmd).await
     }
 
+    /// The exception inbox, which lives in the store rather than in the session.
+    ///
+    /// The session id is taken and the guard **dropped** before the query. Holding the lock
+    /// across disk I/O would put a growing table between a reader's tap and its ACK, and the
+    /// settings screen asks for this every five seconds. `backup()` has the same shape for
+    /// the same reason. The id cannot go stale under us: a session id never changes, and a
+    /// query for a session that has just been replaced returns that session's exceptions,
+    /// which is what was asked for.
     pub async fn exceptions(&self) -> Result<Vec<StoredException>, OperatorError<S::Error>> {
-        let state = self.hub.lock().await;
-        exceptions::list(&state, &*self.hub.store).await
+        let session_id = {
+            let state = self.hub.lock().await;
+            state.session.id.clone()
+        };
+        exceptions::list(&session_id, &*self.hub.store).await
     }
 
     /// Takes a backup and returns where it went (ADR 0012).

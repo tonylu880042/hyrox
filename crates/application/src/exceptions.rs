@@ -17,14 +17,16 @@ use crate::ports::{AuditEntry, HubStore, StoredException};
 ///
 /// Read from the store rather than from memory, for the same reason the badge is
 /// (CLAUDE.md 21): the inbox must survive the process that produced it.
+///
+/// Takes the session id, not the session: the caller can then let go of the live session
+/// before waiting on the disk. This query filters a table that grows all season, and the
+/// settings screen asks for it every five seconds -- with the session locked, that is a
+/// growing wait between a reader's tap and its ACK.
 pub async fn list<S: HubStore>(
-    state: &LiveSession,
+    session_id: &str,
     store: &S,
 ) -> Result<Vec<StoredException>, OperatorError<S::Error>> {
-    store
-        .exceptions(&state.session.id)
-        .await
-        .map_err(OperatorError::Storage)
+    store.exceptions(session_id).await.map_err(OperatorError::Storage)
 }
 
 /// Voids one interpreted event and recomputes everything derived from it.

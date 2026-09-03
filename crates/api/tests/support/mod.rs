@@ -85,9 +85,19 @@ pub struct SavedAthlete {
 #[derive(Default)]
 pub struct FakeStore {
     inner: Mutex<Inner>,
+    /// A read that will not return until the test says so, for asserting that a slow store
+    /// cannot stall the ingestion path. `Some` means `exceptions()` parks.
+    parked: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl FakeStore {
+    /// Makes the next `exceptions()` hang until the returned gate is notified.
+    pub fn park_exceptions(&self) -> Arc<tokio::sync::Notify> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *self.parked.lock().unwrap() = Some(Arc::clone(&gate));
+        gate
+    }
+
     /// Puts a system template in the store without going through a use case, so a test can
     /// start from a library that already exists.
     pub fn seed_system_template(&self, id: &str, name: &str) {
@@ -398,6 +408,11 @@ impl HubStore for FakeStore {
     }
 
     async fn exceptions(&self, _session_id: &str) -> Result<Vec<StoredException>, FakeError> {
+        // A disk that is busy, or a table that has grown a season deep.
+        let parked = self.parked.lock().unwrap().clone();
+        if let Some(gate) = parked {
+            gate.notified().await;
+        }
         let inner = self.inner.lock().unwrap();
         Ok(inner
             .interpreted

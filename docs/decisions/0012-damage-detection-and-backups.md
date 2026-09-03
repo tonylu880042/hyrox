@@ -14,6 +14,23 @@
 * 所有寫入都在同一把 `Mutex<LiveSession>` 之下——MQTT 進料、HTTP 寫入、tick 迴圈
 * 兩個寫入者相撞的最壞結果是 `database is locked`，那是一個錯誤，不是毀損
 
+那把鎖被拿住多久，2026-09-03 量過（release build）：
+
+| 誰拿鎖 | 多久 |
+| --- | --- |
+| `ingest_read`（解碼＋判讀＋`synchronous=FULL` 的 COMMIT） | 457 µs |
+| `/api/stages` 投影，30 人 × 8 站 | 10 µs |
+
+讀取是它可能擋到的那個寫入的 2%，而一堂 30 人的課整場約 480 次刷卡。**單一互斥鎖不是瓶頸，
+`RwLock` 也不會有幫助**——`ingest_read` 要 `&mut`，tick 迴圈也會改狀態，寫入者本來就佔絕大多數。
+
+**真正的規則是：拿著鎖就不要碰 I/O。** 記憶體裡的計算有上限，磁碟沒有——一張隨賽季長大的表
+會把等待長度接到「刷卡到 ACK」之間。`backup()` 一開始就是對的（`VACUUM INTO` 要好幾秒，
+它完全不拿鎖）；`Operator::exceptions()` 一開始是錯的（拿著鎖查 `interpreted_events`，
+而設定頁每 5 秒問一次），2026-09-03 修正為先取 session id、放掉 guard、再查。
+回歸測試 `crates/api/tests/contention.rs` 把假 store 的那個查詢卡住，然後要求 `/api/live`
+仍然要在兩秒內回應。
+
 真正的風險有三個，而且原本**一個都沒有處理**：
 
 1. **執行中用 `cp` 複製資料庫當備份。** 漏掉 `-wal` 就是一份壞檔，而這是最常見的做法。
