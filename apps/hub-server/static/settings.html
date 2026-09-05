@@ -16,6 +16,78 @@
   /* The reason dialog is modal; without a dimmed backdrop it reads as just more page,
      and the list behind it stays the thing your eye follows. */
   dialog::backdrop { background: rgba(0, 0, 0, .6); }
+
+  #pin-modal {
+    width: 320px;
+    max-width: 92vw;
+    border-radius: 16px;
+    background: #1e1e1e;
+    color: #e5e5e5;
+    border: 1px solid #3e3e3e;
+    padding: 24px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+  }
+  #pin-modal::backdrop {
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+  }
+  .pin-pad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 16px 0;
+  }
+  .pin-key {
+    min-height: 52px;
+    font-size: 24px;
+    font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+    border-radius: 8px;
+    background: #2b2b2b;
+    color: #ffffff;
+    border: 1px solid #3a3a3a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s, transform 0.05s;
+  }
+  .pin-key:active {
+    background: #fee400;
+    color: #000000;
+    transform: scale(0.96);
+  }
+  .pin-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid #555555;
+    display: inline-block;
+    transition: all 0.15s ease;
+  }
+  .pin-dot.filled {
+    background: #fee400;
+    border-color: #fee400;
+    box-shadow: 0 0 10px rgba(254, 228, 0, 0.5);
+  }
+  .pin-dot.error {
+    border-color: #ff5449;
+    background: #ff5449;
+  }
+  @keyframes pin-shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-6px); }
+    40%, 80% { transform: translateX(6px); }
+  }
+  .shake {
+    animation: pin-shake 0.35s cubic-bezier(.36,.07,.19,.97) both;
+  }
 </style>
 </head>
 <body class="bg-surface text-on-surface min-h-screen">
@@ -30,6 +102,7 @@
       <button data-view="exceptions" class="nav px-3 py-2 rounded" data-i18n="set.tab.exceptions"></button>
       <button data-view="screen"     class="nav px-3 py-2 rounded" data-i18n="set.tab.screen"></button>
       <button data-view="power"      class="nav px-3 py-2 rounded" data-i18n="set.tab.power"></button>
+      <button data-view="security"   class="nav px-3 py-2 rounded" data-i18n="set.tab.security"></button>
       <!-- Only on a machine that carries demo data; hidden until /api/settings says so. -->
       <button data-view="demo" id="tab-demo" class="nav px-3 py-2 rounded hidden" data-i18n="set.tab.demo"></button>
     </nav>
@@ -41,6 +114,45 @@
   </div>
   <div id="toast" class="hidden px-4 py-2 text-sm"></div>
 </header>
+
+<dialog id="pin-modal">
+  <div class="text-center">
+    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary text-on-primary mb-3">
+      <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+    </div>
+    <h2 class="text-2xl font-bold tracking-wide mb-1" data-i18n="pin.title"></h2>
+    <p class="text-sm text-on-surface-variant mb-4" data-i18n="pin.prompt"></p>
+    
+    <div id="pin-dots" class="flex justify-center gap-4 mb-4" style="display:flex; justify-content:center; gap:16px;">
+      <span class="pin-dot"></span>
+      <span class="pin-dot"></span>
+      <span class="pin-dot"></span>
+      <span class="pin-dot"></span>
+    </div>
+    <p id="pin-error" class="hidden text-error text-sm font-semibold mb-3" data-i18n="pin.invalid"></p>
+
+    <div class="pin-pad">
+      <button type="button" class="pin-key">1</button>
+      <button type="button" class="pin-key">2</button>
+      <button type="button" class="pin-key">3</button>
+      <button type="button" class="pin-key">4</button>
+      <button type="button" class="pin-key">5</button>
+      <button type="button" class="pin-key">6</button>
+      <button type="button" class="pin-key">7</button>
+      <button type="button" class="pin-key">8</button>
+      <button type="button" class="pin-key">9</button>
+      <button type="button" id="pin-clear" class="pin-key" style="font-size:14px; font-family:inherit;" data-i18n="pin.clear"></button>
+      <button type="button" class="pin-key">0</button>
+      <button type="button" id="pin-back" class="pin-key">
+        <svg style="width:24px; height:24px;" fill="currentColor" viewBox="0 0 24 24"><path d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z"/></svg>
+      </button>
+    </div>
+    <div class="flex justify-between items-center text-xs text-on-surface-variant pt-2 border-t border-outline-variant" style="display:flex; justify-content:space-between; align-items:center;">
+      <span data-i18n="pin.defaultHint"></span>
+      <a href="/live" class="underline hover:text-primary" data-i18n="pin.cancel"></a>
+    </div>
+  </div>
+</dialog>
 
 <main class="max-w-5xl mx-auto px-4 py-4 space-y-4">
 
@@ -152,6 +264,34 @@
     <div class="flex flex-wrap gap-2">
       <button id="demo-load"  class="border border-outline rounded px-4 py-2" data-i18n="set.demoLoad"></button>
       <button id="demo-clear" class="border border-outline rounded px-4 py-2" data-i18n="set.demoClear"></button>
+    </div>
+  </section>
+
+  <!-- Venue Security Lock (PIN) -->
+  <section id="view-security" class="hidden bg-surface-container rounded-lg border border-outline-variant p-4 space-y-4">
+    <div>
+      <h2 class="text-xl mb-1" data-i18n="pin.title"></h2>
+      <p class="text-sm text-on-surface-variant" data-i18n="pin.desc"></p>
+    </div>
+    <div class="bg-surface-container-high rounded-md p-3 text-sm text-primary flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-primary"></span>
+      <span data-i18n="pin.status"></span>
+    </div>
+    <div class="max-w-md pt-2 space-y-3">
+      <h3 class="text-lg font-bold" data-i18n="pin.change"></h3>
+      <label class="block">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="pin.current"></span>
+        <input id="pin-curr" type="password" maxlength="8" class="mono w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+      </label>
+      <label class="block">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="pin.new"></span>
+        <input id="pin-new" type="password" maxlength="8" class="mono w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+      </label>
+      <label class="block">
+        <span class="block text-xs text-on-surface-variant mb-1" data-i18n="pin.confirm"></span>
+        <input id="pin-conf" type="password" maxlength="8" class="mono w-full bg-surface-container-high border border-outline-variant rounded px-3 py-2"/>
+      </label>
+      <button id="btn-save-pin" class="bg-primary text-on-primary font-semibold px-5 py-2 rounded" data-i18n="set.save"></button>
     </div>
   </section>
 </main>
@@ -498,7 +638,7 @@ document.getElementById("demo-clear").onclick = () => guard(async () => {
 
 // ── Views and polling ─────────────────────────────────────────────────────────
 function show(view) {
-  for (const name of ["readers", "devices", "exceptions", "screen", "power", "demo"]) {
+  for (const name of ["readers", "devices", "exceptions", "screen", "power", "security", "demo"]) {
     document.getElementById("view-" + name).classList.toggle("hidden", name !== view);
   }
   document.querySelectorAll(".nav").forEach((b) => {
@@ -507,6 +647,142 @@ function show(view) {
   });
 }
 document.querySelectorAll(".nav").forEach((b) => b.onclick = () => show(b.dataset.view));
+
+// ── Venue PIN Lock ────────────────────────────────────────────────────────────
+const PIN_AUTH_KEY = "hyrox.pin.auth";
+const PIN_AUTH_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+function isPinAuthenticated() {
+  const auth = localStorage.getItem(PIN_AUTH_KEY);
+  if (!auth) return false;
+  const ts = parseInt(auth, 10);
+  if (isNaN(ts) || Date.now() - ts > PIN_AUTH_TTL_MS) {
+    localStorage.removeItem(PIN_AUTH_KEY);
+    return false;
+  }
+  return true;
+}
+
+function setPinAuthenticated() {
+  localStorage.setItem(PIN_AUTH_KEY, String(Date.now()));
+}
+
+let currentEnteredPin = "";
+const pinModal = document.getElementById("pin-modal");
+const pinDots = document.querySelectorAll(".pin-dot");
+const pinError = document.getElementById("pin-error");
+
+function updatePinDots() {
+  pinDots.forEach((dot, idx) => {
+    if (idx < currentEnteredPin.length) {
+      dot.classList.add("bg-primary", "border-primary");
+    } else {
+      dot.classList.remove("bg-primary", "border-primary");
+    }
+  });
+}
+
+function checkPinLock() {
+  if (!isPinAuthenticated()) {
+    currentEnteredPin = "";
+    updatePinDots();
+    pinError.classList.add("hidden");
+    if (typeof pinModal.showModal === "function") {
+      pinModal.showModal();
+    }
+  }
+}
+
+async function onPinDigit(digit) {
+  if (currentEnteredPin.length >= 4) return;
+  currentEnteredPin += digit;
+  updatePinDots();
+  if (currentEnteredPin.length === 4) {
+    try {
+      const res = await fetch("/api/operator/pin/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pin: currentEnteredPin }),
+      });
+      if (res.ok) {
+        setPinAuthenticated();
+        pinModal.close();
+        toast(I18N.t("pin.status"));
+      } else {
+        shakePin();
+      }
+    } catch (e) {
+      shakePin();
+    }
+  }
+}
+
+function onPinBack() {
+  if (currentEnteredPin.length > 0) {
+    currentEnteredPin = currentEnteredPin.slice(0, -1);
+    updatePinDots();
+    pinError.classList.add("hidden");
+  }
+}
+
+function onPinClear() {
+  currentEnteredPin = "";
+  updatePinDots();
+  pinError.classList.add("hidden");
+}
+
+function shakePin() {
+  pinError.classList.remove("hidden");
+  const dotsContainer = document.getElementById("pin-dots");
+  dotsContainer.classList.add("animate-bounce");
+  setTimeout(() => {
+    currentEnteredPin = "";
+    updatePinDots();
+    dotsContainer.classList.remove("animate-bounce");
+  }, 400);
+}
+
+document.querySelectorAll(".pin-key").forEach((btn) => {
+  btn.onclick = () => onPinDigit(btn.textContent.trim());
+});
+document.getElementById("pin-back").onclick = onPinBack;
+document.getElementById("pin-clear").onclick = onPinClear;
+
+window.addEventListener("keydown", (e) => {
+  if (!pinModal.open) return;
+  if (e.key >= "0" && e.key <= "9") {
+    onPinDigit(e.key);
+  } else if (e.key === "Backspace") {
+    onPinBack();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+  }
+});
+
+// Changing PIN
+document.getElementById("btn-save-pin").onclick = () => guard(async () => {
+  const curr = document.getElementById("pin-curr").value.trim();
+  const next = document.getElementById("pin-new").value.trim();
+  const conf = document.getElementById("pin-conf").value.trim();
+  if (!curr || !next || !conf) {
+    toast(I18N.t("pin.prompt"), true);
+    return;
+  }
+  if (next !== conf) {
+    toast(I18N.t("pin.mismatch"), true);
+    return;
+  }
+  if (next.length < 4 || next.length > 8 || !/^\d+$/.test(next)) {
+    toast(I18N.t("pin.new"), true);
+    return;
+  }
+  await api("POST", "/api/operator/pin/change", { current_pin: curr, new_pin: next });
+  setPinAuthenticated();
+  document.getElementById("pin-curr").value = "";
+  document.getElementById("pin-new").value = "";
+  document.getElementById("pin-conf").value = "";
+  toast(I18N.t("pin.updated"));
+});
 
 async function guard(work) {
   try { await work(); } catch (e) { toast(e.message || String(e), true); }
@@ -562,6 +838,7 @@ I18N.apply();
 I18N.switcher(document.getElementById("lang"));
 document.body.insertAdjacentHTML("beforeend", '<datalist id="stations"></datalist>');
 show("readers");
+checkPinLock();
 guard(refresh);
 setInterval(() => guard(refresh), 5000);
 </script>

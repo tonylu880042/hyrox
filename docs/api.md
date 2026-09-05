@@ -319,6 +319,10 @@ These are not oversights. Each of them would require inventing a product rule (C
 * ~~**No "accept as-is" on an exception.**~~ **Amended 2026-09-03.** `POST /api/operator/exceptions/{id}/accept`
   is implemented (migration 0011). It clears the exception from the inbox and badge without erasing
   the row from the log or replays, and does not trigger expensive recalculation.
-* **No "reinterpret" on an exception.** Adding operator-authored reads (`raw_event_id: None`) is deliberately
-  deferred pending product rules on timestamp provenance (see `docs/open-issues.md`).
+* ~~**No "reinterpret" on an exception.**~~ **Amended 2026-09-04.** `POST /api/operator/exceptions/{id}/reinterpret`
+  is implemented. It voids the exception, commits a corrected interpretation (with optional station, mode,
+  athlete and timestamp), and triggers replay recalculation with full audit logging (`EVENT_REINTERPRET`).
+* **Venue PIN Security Lock.** **Amended 2026-09-05.** `POST /api/operator/pin/verify` and
+  `POST /api/operator/pin/change` protect sensitive settings (`/settings`, power control, reader mapping).
+  Default is `2018`, overridable via `HYROX_PIN` or `venue_settings` table.
 * **No `operator_identity`.** D1 chose device-level traceability on purpose.

@@ -128,3 +128,109 @@ async fn accepting_needs_an_operator_name_like_every_other_write() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "OPERATOR_REQUIRED");
 }
+
+#[tokio::test]
+async fn reinterpreting_an_exception_voids_it_and_commits_new_interpretation() {
+    let (router, store) = running();
+    let id = an_exception(&store);
+
+    let path = format!("/api/operator/exceptions/{id}/reinterpret");
+    let (status, body) = call(
+        &router,
+        post(
+            &path,
+            DESK,
+            json!({
+                "station": "RUN",
+                "mode": "ENTRY",
+                "reason": "手動改判進站"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["exceptions"].as_array().expect("a list").is_empty(),
+        "the inbox is cleared"
+    );
+    assert_eq!(store.voided(), vec![id], "original exception was voided");
+
+    let audit = store
+        .audits()
+        .into_iter()
+        .find(|a| a.action == "EVENT_REINTERPRET")
+        .expect("a reinterpret audit");
+    assert_eq!(audit.operator, DESK);
+    assert_eq!(audit.subject, id.to_string());
+    assert_eq!(audit.reason.as_deref(), Some("手動改判進站"));
+}
+
+#[tokio::test]
+async fn reinterpreting_an_exception_demands_a_reason() {
+    let (router, store) = running();
+    let id = an_exception(&store);
+
+    let path = format!("/api/operator/exceptions/{id}/reinterpret");
+    let (status, body) = call(
+        &router,
+        post(
+            &path,
+            DESK,
+            json!({
+                "station": "RUN",
+                "mode": "ENTRY"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "REASON_REQUIRED");
+}
+
+#[tokio::test]
+async fn reinterpreting_an_exception_needs_an_operator_name() {
+    let (router, store) = running();
+    let id = an_exception(&store);
+
+    let path = format!("/api/operator/exceptions/{id}/reinterpret");
+    let (status, body) = call(
+        &router,
+        support::anonymous(
+            "POST",
+            &path,
+            json!({
+                "station": "RUN",
+                "mode": "ENTRY",
+                "reason": "無操作者"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "OPERATOR_REQUIRED");
+}
+
+#[tokio::test]
+async fn reinterpreting_something_that_is_not_there_is_a_404() {
+    let (router, _store) = running();
+
+    let (status, body) = call(
+        &router,
+        post(
+            "/api/operator/exceptions/999/reinterpret",
+            DESK,
+            json!({
+                "station": "RUN",
+                "mode": "ENTRY",
+                "reason": "不存在的事件"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "UNKNOWN_EVENT");
+}

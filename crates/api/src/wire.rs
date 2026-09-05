@@ -210,6 +210,38 @@ pub struct ReasonRequest {
     pub reason: Option<String>,
 }
 
+/// `POST /api/operator/exceptions/{id}/reinterpret` (ADR 0001 D4; CLAUDE.md 20).
+#[derive(Debug, Deserialize)]
+pub struct ReinterpretRequest {
+    pub station: String,
+    pub mode: domain::ReaderMode,
+    #[serde(default)]
+    pub athlete_id: Option<String>,
+    #[serde(default)]
+    pub at: Option<i64>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /api/operator/pin/verify`
+#[derive(Debug, Deserialize)]
+pub struct VerifyPinRequest {
+    pub pin: String,
+}
+
+/// Response to `POST /api/operator/pin/verify`
+#[derive(Debug, Serialize)]
+pub struct VerifyPinResponse {
+    pub ok: bool,
+}
+
+/// `POST /api/operator/pin/change`
+#[derive(Debug, Deserialize)]
+pub struct ChangePinRequest {
+    pub current_pin: String,
+    pub new_pin: String,
+}
+
 /// `PUT /api/operator/config` (ADR 0001 D2).
 ///
 /// `finish_policy` is deliberately required. It has a `Default` -- `NotConfigured` -- and

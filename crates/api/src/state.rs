@@ -653,14 +653,6 @@ impl<S: HubStore> Operator<S> {
         readers::register_reader(&mut state, &*self.hub.store, registration, cmd).await
     }
 
-    /// The exception inbox, which lives in the store rather than in the session.
-    ///
-    /// The session id is taken and the guard **dropped** before the query. Holding the lock
-    /// across disk I/O would put a growing table between a reader's tap and its ACK, and the
-    /// settings screen asks for this every five seconds. `backup()` has the same shape for
-    /// the same reason. The id cannot go stale under us: a session id never changes, and a
-    /// query for a session that has just been replaced returns that session's exceptions,
-    /// which is what was asked for.
     /// Clears one exception without erasing it (ADR 0001 D4).
     pub async fn accept_exception(
         &self,
@@ -671,6 +663,14 @@ impl<S: HubStore> Operator<S> {
         exceptions::accept(&mut state, &*self.hub.store, interpreted_event_id, cmd).await
     }
 
+    /// The exception inbox, which lives in the store rather than in the session.
+    ///
+    /// The session id is taken and the guard **dropped** before the query. Holding the lock
+    /// across disk I/O would put a growing table between a reader's tap and its ACK, and the
+    /// settings screen asks for this every five seconds. `backup()` has the same shape for
+    /// the same reason. The id cannot go stale under us: a session id never changes, and a
+    /// query for a session that has just been replaced returns that session's exceptions,
+    /// which is what was asked for.
     pub async fn exceptions(&self) -> Result<Vec<StoredException>, OperatorError<S::Error>> {
         let session_id = {
             let state = self.hub.lock().await;
@@ -890,5 +890,29 @@ impl<S: HubStore> Operator<S> {
     ) -> Result<(), OperatorError<S::Error>> {
         let mut state = self.hub.lock().await;
         exceptions::void(&mut state, &*self.hub.store, interpreted_event_id, cmd).await
+    }
+
+    pub async fn reinterpret_exception(
+        &self,
+        interpreted_event_id: i64,
+        spec: application::ReinterpretSpec,
+        cmd: &OperatorCommand,
+    ) -> Result<i64, OperatorError<S::Error>> {
+        let mut state = self.hub.lock().await;
+        exceptions::reinterpret(
+            &mut state,
+            &*self.hub.store,
+            interpreted_event_id,
+            spec,
+            cmd,
+        )
+        .await
+    }
+
+    pub async fn verify_pin(&self, candidate: &str) -> Result<bool, S::Error>
+    where
+        S: HubStore,
+    {
+        application::verify_pin(&*self.hub.store, candidate).await
     }
 }

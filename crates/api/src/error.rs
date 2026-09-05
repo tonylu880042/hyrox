@@ -67,6 +67,14 @@ impl ApiError {
     pub fn not_found(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, code, message)
     }
+
+    pub fn pin_invalid() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "PIN_INVALID",
+            "the provided PIN is incorrect",
+        )
+    }
 }
 
 impl IntoResponse for ApiError {

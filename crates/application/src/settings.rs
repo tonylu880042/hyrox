@@ -21,6 +21,8 @@ pub const LIVE_PAGE_MS_RANGE: std::ops::RangeInclusive<i64> = 3_000..=120_000;
 
 pub const LIVE_PAGE_MS: &str = "live.page_ms";
 pub const LIVE_PAGE_SIZE: &str = "live.page_size";
+pub const SECURITY_PIN: &str = "security.pin";
+pub const DEFAULT_SECURITY_PIN: &str = "2018";
 
 /// How many athletes fit on one page of the live screen, and the grid that holds them.
 ///
@@ -40,10 +42,17 @@ pub const LIVE_PAGE_LAYOUTS: [(i64, i64, i64); 4] = [
 
 pub const DEFAULT_LIVE_PAGE_SIZE: i64 = 12;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Checks whether a candidate PIN meets the criteria: 4 to 8 ASCII digits.
+pub fn is_valid_pin(pin: &str) -> bool {
+    let p = pin.trim();
+    p.len() >= 4 && p.len() <= 8 && p.chars().all(|c| c.is_ascii_digit())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VenueSettings {
     pub live_page_ms: i64,
     pub live_page_size: i64,
+    pub security_pin: String,
 }
 
 impl Default for VenueSettings {
@@ -51,6 +60,7 @@ impl Default for VenueSettings {
         Self {
             live_page_ms: DEFAULT_LIVE_PAGE_MS,
             live_page_size: DEFAULT_LIVE_PAGE_SIZE,
+            security_pin: DEFAULT_SECURITY_PIN.to_string(),
         }
     }
 }
@@ -74,6 +84,7 @@ pub enum SettingError<E> {
 /// projector down.
 pub async fn venue_settings<S: HubStore>(store: &S) -> Result<VenueSettings, S::Error> {
     let mut settings = VenueSettings::default();
+    let mut stored_pin: Option<String> = None;
     for (key, value) in store.venue_settings().await? {
         if key == LIVE_PAGE_MS {
             if let Ok(ms) = value.parse::<i64>() {
@@ -87,8 +98,16 @@ pub async fn venue_settings<S: HubStore>(store: &S) -> Result<VenueSettings, S::
                     settings.live_page_size = size;
                 }
             }
+        } else if key == SECURITY_PIN {
+            let pin = value.trim();
+            if is_valid_pin(pin) {
+                stored_pin = Some(pin.to_string());
+            }
         }
     }
+    settings.security_pin = stored_pin
+        .or_else(|| std::env::var("HYROX_PIN").ok().filter(|p| is_valid_pin(p)))
+        .unwrap_or_else(|| DEFAULT_SECURITY_PIN.to_string());
     Ok(settings)
 }
 
@@ -99,7 +118,7 @@ pub async fn save_venue_setting<S: HubStore>(
     value: &str,
     cmd: &OperatorCommand,
 ) -> Result<(), SettingError<S::Error>> {
-    match key {
+    let masked_audit: Option<String> = match key {
         LIVE_PAGE_MS => {
             let ms: i64 = value.trim().parse().map_err(|_| SettingError::Invalid {
                 key: key.to_string(),
@@ -115,6 +134,7 @@ pub async fn save_venue_setting<S: HubStore>(
                     ),
                 });
             }
+            Some(value.trim().to_string())
         }
         LIVE_PAGE_SIZE => {
             let size: i64 = value.trim().parse().map_err(|_| SettingError::Invalid {
@@ -136,9 +156,21 @@ pub async fn save_venue_setting<S: HubStore>(
                     ),
                 });
             }
+            Some(value.trim().to_string())
+        }
+        SECURITY_PIN => {
+            let pin = value.trim();
+            if !is_valid_pin(pin) {
+                return Err(SettingError::Invalid {
+                    key: key.to_string(),
+                    message: "PIN must be between 4 and 8 digits".to_string(),
+                });
+            }
+            // Mask PIN in audit trail so secrets are not exposed in plaintext logs
+            Some("****".to_string())
         }
         other => return Err(SettingError::Unknown(other.to_string())),
-    }
+    };
 
     store
         .save_venue_setting(key, value.trim(), cmd.at, &cmd.operator)
@@ -150,10 +182,16 @@ pub async fn save_venue_setting<S: HubStore>(
             operator: cmd.operator.clone(),
             action: "VENUE_SETTING".to_string(),
             subject: key.to_string(),
-            reason: None,
+            reason: cmd.stated_reason().map(str::to_string),
             before: None,
-            after: Some(value.trim().to_string()),
+            after: masked_audit,
         })
         .await
         .map_err(SettingError::Storage)
+}
+
+/// Verifies whether the candidate PIN matches the venue's active PIN.
+pub async fn verify_pin<S: HubStore>(store: &S, candidate: &str) -> Result<bool, S::Error> {
+    let settings = venue_settings(store).await?;
+    Ok(settings.security_pin == candidate.trim())
 }

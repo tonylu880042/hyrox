@@ -5,13 +5,25 @@
 //! that the hub could not turn it into progress -- an unknown reader, an impossible
 //! transition, a band belonging to somebody not on this roster.
 //!
-//! Two of D4's three actions live here. `void` is the one that changes anything; listing is
-//! how the operator's screen is filled. *Accept as-is* and *reinterpret* are not implemented
-//! -- see the note on [`void`] and `docs/open-issues.md`.
+//! The actions from ADR 0001 D4 live here: `list` fills the operator's inbox,
+//! `accept` clears an exception without modifying historical interpretations or recomputing,
+//! and `void` marks an invalid read voided and triggers a rebuild from the log.
 
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, HubStore, StoredException};
+use crate::ports::{AuditEntry, HubStore, InterpretedWrite, StoredException};
+use domain::{AthleteStatus, Instant, Interpreted, ReaderMode};
+
+/// What the operator wants to reinterpret an exception into (ADR 0001 D4; CLAUDE.md 20).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReinterpretSpec {
+    pub station: String,
+    pub mode: ReaderMode,
+    /// If None, keeps the athlete the original exception was attributed to.
+    pub athlete_id: Option<String>,
+    /// If None, keeps the original exception's detected_at timestamp.
+    pub at: Option<Instant>,
+}
 
 /// The session's live exceptions, oldest first.
 ///
@@ -91,12 +103,6 @@ pub async fn accept<S: HubStore>(
 ///
 /// A reason is required: this is destructive, and D1 kept the requirement even after
 /// dropping logins.
-///
-/// **Not implemented here:** *accept as-is* needs somewhere to record that a human looked at
-/// an exception and left it alone, and `interpreted_events` has no such column; *reinterpret*
-/// means adding an operator-authored event (a different station, a different athlete, a
-/// different ENTRY/EXIT reading), which is a write path of its own. Both are listed in
-/// `docs/open-issues.md` rather than half-built here.
 pub async fn void<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
@@ -129,6 +135,94 @@ pub async fn void<S: HubStore>(
         .map_err(OperatorError::Storage)?;
 
     recalculate(state, store).await
+}
+
+/// Reinterprets one exception: voids the old exception, commits a new corrected interpretation,
+/// and recomputes athlete state from the log (ADR 0001 D4; CLAUDE.md 20).
+pub async fn reinterpret<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    interpreted_event_id: i64,
+    spec: ReinterpretSpec,
+    cmd: &OperatorCommand,
+) -> Result<i64, OperatorError<S::Error>> {
+    let Some(reason) = cmd.stated_reason() else {
+        return Err(OperatorError::ReasonRequired);
+    };
+
+    let exceptions = store
+        .exceptions(&state.session.id)
+        .await
+        .map_err(OperatorError::Storage)?;
+    let exception = exceptions
+        .iter()
+        .find(|e| e.interpreted_event_id == interpreted_event_id)
+        .ok_or(OperatorError::UnknownEvent(interpreted_event_id))?;
+
+    let target_athlete_id = spec.athlete_id.as_deref().unwrap_or(&exception.athlete_id);
+
+    let athlete = state
+        .athlete(target_athlete_id)
+        .ok_or_else(|| OperatorError::UnknownAthlete(target_athlete_id.to_string()))?;
+
+    let effective_at = spec.at.unwrap_or(exception.at);
+
+    let started_timing = athlete.status == AthleteStatus::Ready && spec.mode != ReaderMode::Exit;
+    let transition = if spec.mode == ReaderMode::Entry {
+        athlete.last_exit_at.map(|prev| effective_at.since(prev))
+    } else {
+        None
+    };
+
+    let new_event = match spec.mode {
+        ReaderMode::Exit => Interpreted::Exited {
+            station: spec.station.clone(),
+            at: effective_at,
+        },
+        _ => Interpreted::Entered {
+            station: spec.station.clone(),
+            at: effective_at,
+            transition,
+            started_timing,
+        },
+    };
+
+    let voided = store
+        .void_interpreted(interpreted_event_id, cmd.at, &cmd.operator, reason)
+        .await
+        .map_err(OperatorError::Storage)?;
+    if !voided {
+        return Err(OperatorError::UnknownEvent(interpreted_event_id));
+    }
+
+    let new_id = store
+        .commit_interpreted(InterpretedWrite {
+            session_id: &state.session.id,
+            athlete_id: target_athlete_id,
+            raw_event_id: exception.raw_event_id,
+            event: &new_event,
+        })
+        .await
+        .map_err(OperatorError::Storage)?;
+
+    store
+        .record_audit(&AuditEntry {
+            at: cmd.at,
+            operator: cmd.operator.clone(),
+            action: "EVENT_REINTERPRET".to_string(),
+            subject: interpreted_event_id.to_string(),
+            reason: Some(reason.to_string()),
+            before: Some(format!("EXCEPTION: {:?}", exception.reason)),
+            after: Some(format!(
+                "INTERPRETED: {new_id}, {target_athlete_id}, {}, {:?}",
+                spec.station, spec.mode
+            )),
+        })
+        .await
+        .map_err(OperatorError::Storage)?;
+
+    recalculate(state, store).await?;
+    Ok(new_id)
 }
 
 /// Re-derives athlete state and the inbox badge from the stored log.

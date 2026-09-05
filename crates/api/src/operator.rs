@@ -13,9 +13,10 @@ use crate::identity::{Body, OperatorDevice};
 use crate::read::freshness;
 use crate::state::Operator;
 use crate::wire::{
-    ConfigureRequest, CreateClassRequest, DeviceView, DuplicateTemplateRequest, EndClassResponse,
-    ExceptionView, ExceptionsResponse, OverviewResponse, ReadersResponse, ReasonRequest,
-    RegisterReaderRequest, SaveTemplateRequest, TemplatesResponse,
+    ChangePinRequest, ConfigureRequest, CreateClassRequest, DeviceView, DuplicateTemplateRequest,
+    EndClassResponse, ExceptionView, ExceptionsResponse, OverviewResponse, ReadersResponse,
+    ReasonRequest, RegisterReaderRequest, ReinterpretRequest, SaveTemplateRequest,
+    TemplatesResponse, VerifyPinRequest, VerifyPinResponse,
 };
 use application::HubStore;
 use axum::extract::{Path, State};
@@ -37,6 +38,11 @@ where
         .route("/exceptions/{interpreted_event_id}/void", post(void))
         // The non-destructive half of the pair (ADR 0001 D4).
         .route("/exceptions/{interpreted_event_id}/accept", post(accept))
+        // The corrective action (ADR 0001 D4).
+        .route(
+            "/exceptions/{interpreted_event_id}/reinterpret",
+            post(reinterpret),
+        )
         // The nightly window asks for this rather than copying the file itself: the hub is
         // the only process allowed to touch the database (ADR 0009, 0012).
         .route("/backup", post(backup))
@@ -44,6 +50,8 @@ where
         // and which readers are still waiting to be told what they are.
         .route("/power", post(power))
         .route("/settings", put(settings))
+        .route("/pin/verify", post(verify_pin))
+        .route("/pin/change", post(change_pin))
         .route("/logo", post(upload_logo).delete(remove_logo))
         // Demo data (M6 follow-up). Present on every build; whether it does anything is
         // the machine's answer, not this router's.
@@ -186,9 +194,7 @@ where
 /// Voids one interpretation and lets everything derived from it be recomputed
 /// (CLAUDE.md 20). The raw read is untouched (CLAUDE.md 19).
 ///
-/// Destructive, so the use case demands a reason and answers 422 without one. *Accept
-/// as-is* and *reinterpret*, D4's other two actions, have no use case yet: see
-/// `docs/open-issues.md`. They are missing rather than half-built here.
+/// Destructive, so the use case demands a reason and answers 422 without one.
 async fn void<S>(
     State(operator): State<Operator<S>>,
     Path(interpreted_event_id): Path<i64>,
@@ -223,6 +229,31 @@ where
     let cmd = command(device, now, request.reason);
     operator
         .accept_exception(interpreted_event_id, &cmd)
+        .await?;
+    exceptions(State(operator)).await
+}
+
+/// Reinterprets one exception into a valid station reading (ADR 0001 D4; CLAUDE.md 20).
+async fn reinterpret<S>(
+    State(operator): State<Operator<S>>,
+    Path(interpreted_event_id): Path<i64>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<ReinterpretRequest>,
+) -> Result<Json<ExceptionsResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let now = operator.read().now();
+    let cmd = command(device, now, request.reason);
+    let spec = application::ReinterpretSpec {
+        station: request.station,
+        mode: request.mode,
+        athlete_id: request.athlete_id,
+        at: request.at.map(domain::Instant),
+    };
+    operator
+        .reinterpret_exception(interpreted_event_id, spec, &cmd)
         .await?;
     exceptions(State(operator)).await
 }
@@ -684,4 +715,47 @@ where
         freshness: crate::read::freshness(operator.read()).await,
         loaded: false,
     }))
+}
+
+/// Verifies whether the candidate PIN matches the venue's active PIN.
+async fn verify_pin<S>(
+    State(operator): State<Operator<S>>,
+    Body(request): Body<VerifyPinRequest>,
+) -> Result<Json<VerifyPinResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let ok = operator
+        .verify_pin(&request.pin)
+        .await
+        .map_err(crate::error::storage)?;
+    if !ok {
+        return Err(ApiError::pin_invalid());
+    }
+    Ok(Json(VerifyPinResponse { ok: true }))
+}
+
+/// Changes the venue's PIN after validating knowledge of the current PIN.
+async fn change_pin<S>(
+    State(operator): State<Operator<S>>,
+    OperatorDevice(device): OperatorDevice,
+    Body(request): Body<ChangePinRequest>,
+) -> Result<Json<VerifyPinResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    let ok = operator
+        .verify_pin(&request.current_pin)
+        .await
+        .map_err(crate::error::storage)?;
+    if !ok {
+        return Err(ApiError::pin_invalid());
+    }
+    let cmd = command(device, operator.read().now(), None);
+    operator
+        .save_setting(application::SECURITY_PIN, &request.new_pin, &cmd)
+        .await?;
+    Ok(Json(VerifyPinResponse { ok: true }))
 }

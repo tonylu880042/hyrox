@@ -11,8 +11,6 @@
 //!
 //! ## Known gaps
 //!
-//! * Being finished by a class-duration rule is derived on each tick, never stored. That is
-//!   deliberate (see [`finish`]), but it means a finish is only as durable as the policy.
 //! * `Session::interpreted_event_count` is read back from the session row rather than
 //!   re-counted from the log, so a crash between writing an interpretation and saving the
 //!   session can leave it one behind. It gates only ARMED -> DRAFT (ADR 0001 D2); athlete
@@ -39,6 +37,7 @@ pub mod templates;
 pub use checkin::{enter, Entrant};
 pub use config::configure;
 pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceReport};
+pub use exceptions::{accept, list, reinterpret, void, ReinterpretSpec};
 pub use finish::{apply_finish_policy, end_class};
 pub use health::{health, health_with_version, Blocker, Health};
 pub use ingest::{ingest_read, IngestError, IngestOutcome, Ingested};
@@ -62,8 +61,9 @@ pub mod settings;
 pub use recover::{resume_or_start, Recovery, RosterEntry, SessionPlan};
 pub use results::{live_results, results, Ordering, ResultRow, SessionResults, SplitRow};
 pub use settings::{
-    save_venue_setting, venue_settings, SettingError, VenueSettings, DEFAULT_LIVE_PAGE_MS,
-    DEFAULT_LIVE_PAGE_SIZE, LIVE_PAGE_LAYOUTS, LIVE_PAGE_MS, LIVE_PAGE_SIZE,
+    is_valid_pin, save_venue_setting, venue_settings, verify_pin, SettingError, VenueSettings,
+    DEFAULT_LIVE_PAGE_MS, DEFAULT_LIVE_PAGE_SIZE, DEFAULT_SECURITY_PIN, LIVE_PAGE_LAYOUTS,
+    LIVE_PAGE_MS, LIVE_PAGE_SIZE, SECURITY_PIN,
 };
 pub use stages::{current_expectation, current_stage, stages, StageStatus, StageView};
 pub use templates::{
