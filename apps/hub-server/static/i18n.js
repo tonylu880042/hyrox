@@ -186,6 +186,15 @@
       "checkin.codeNotFound": "找不到編號 {0}。",
       // --- self sign-up (ADR 0011)
       "signup.title": "賽事報名",
+      "signup.checking": "正在確認報名編號…",
+      "signup.notFound": "查無此報名編號，請重新輸入或請櫃檯協助。",
+      "signup.lookupFailed": "無法連線確認，請稍後重新查詢。",
+      "signup.stale": "連線中斷，保留已確認的報名憑證；以下進度尚未更新。",
+      "result.notStarted": "尚未出發",
+      "result.inProgress": "進行中",
+      "result.didNotStart": "課程已結束，未出發",
+      "result.cancelled": "課程已取消",
+
       "signup.lead": "填名字就好。報名完成後會給你一組六碼編號和 QR，用來領腳環、查成績。",
       "signup.name": "姓名",
       "signup.namePlaceholder": "請輸入姓名",
@@ -403,6 +412,15 @@
       "checkin.codeNotFound": "找不到编号 {0}。",
       // --- self sign-up (ADR 0011)
       "signup.title": "赛事报名",
+      "signup.checking": "正在确认报名编号…",
+      "signup.notFound": "查无此报名编号，请重新输入或请柜台协助。",
+      "signup.lookupFailed": "无法连接确认，请稍后重新查询。",
+      "signup.stale": "连接中断，保留已确认的报名凭证；以下进度尚未更新。",
+      "result.notStarted": "尚未出发",
+      "result.inProgress": "进行中",
+      "result.didNotStart": "课程已结束，未出发",
+      "result.cancelled": "课程已取消",
+
       "signup.lead": "填名字就好。报名完成后会给你一组六码编号和 QR，用来领脚环、查成绩。",
       "signup.name": "姓名",
       "signup.namePlaceholder": "请输入姓名",
@@ -617,6 +635,15 @@
       "checkin.codeNotFound": "No entrant with code {0}.",
       // --- self sign-up (ADR 0011)
       "signup.title": "Race entry",
+      "signup.checking": "Checking entry code…",
+      "signup.notFound": "Entry code not found. Try again or ask the check-in desk.",
+      "signup.lookupFailed": "Unable to connect. Please try your lookup again.",
+      "signup.stale": "Connection lost. Keeping your verified pass; progress below has not been updated.",
+      "result.notStarted": "Not started",
+      "result.inProgress": "In progress",
+      "result.didNotStart": "Session ended; did not start",
+      "result.cancelled": "Session cancelled",
+
       "signup.lead": "Your name is all we need. You get a six-character code and a QR to collect your band and look up your result.",
       "signup.name": "Name",
       "signup.namePlaceholder": "Your name",

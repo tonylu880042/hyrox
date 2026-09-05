@@ -94,6 +94,8 @@
 
 let DEVICE = localStorage.getItem("hyrox.device") || "";
 let VIEW = { pending: [], athletes: [] };
+let SELECTED_ATHLETE = "";
+const BAND_SELECTIONS = new Map();
 
 function ask(title, value = "") {
   const dialog = document.getElementById("ask");
@@ -229,6 +231,10 @@ function findByCode(raw) {
     .replace(/O/g, "0").replace(/[IL]/g, "1");
   const found = VIEW.athletes.find((a) => a.athlete_id === code);
   const out = document.getElementById("code-found");
+  // Keep the lookup even when the band has not arrived yet.
+  SELECTED_ATHLETE = found && !found.tag_id ? found.athlete_id : "";
+  BAND_SELECTIONS.clear();
+  document.querySelectorAll("#pending select.who").forEach(sel => { sel.value = SELECTED_ATHLETE; });
   if (!found) {
     out.className = "mt-3 text-error";
     out.textContent = I18N.t("checkin.codeNotFound").replace("{0}", code);
@@ -236,8 +242,6 @@ function findByCode(raw) {
   }
   out.className = "mt-3";
   out.textContent = `${found.bib ?? ""} ${found.name} — ${I18N.t(found.tag_id ? "checkin.bound" : "checkin.unbound")}`;
-  // Pre-select them on every band waiting to be claimed, so the next tap binds to them.
-  document.querySelectorAll("#pending select.who").forEach((sel) => (sel.value = found.athlete_id));
   return found;
 }
 
@@ -247,6 +251,12 @@ document.getElementById("code").addEventListener("keydown", (e) => {
 });
 document.getElementById("code").addEventListener("input", (e) => {
   if (e.target.value.replace(/[\s_-]/g, "").length >= 6) findByCode(e.target.value);
+  else {
+    SELECTED_ATHLETE = "";
+    BAND_SELECTIONS.clear();
+    document.getElementById("code-found").textContent = "";
+    document.querySelectorAll("#pending select.who").forEach(sel => { sel.value = ""; });
+  }
 });
 
 // Camera scanning uses the browser's own BarcodeDetector -- no library to vendor, nothing
@@ -292,6 +302,10 @@ document.getElementById("scan").onclick = async () => {
 // ── Bands nobody owns yet ─────────────────────────────────────────────────────
 function renderPending() {
   const host = document.getElementById("pending");
+  for (const tag of BAND_SELECTIONS.keys()) {
+    if (!VIEW.pending.includes(tag)) BAND_SELECTIONS.delete(tag);
+  }
+  if (!VIEW.athletes.some(a => a.athlete_id === SELECTED_ATHLETE && !a.tag_id)) SELECTED_ATHLETE = "";
   host.innerHTML = "";
   if (!VIEW.pending.length) {
     host.innerHTML = '<li class="text-on-surface-variant">' + esc(I18N.t("checkin.noPending")) + "</li>";
@@ -311,11 +325,19 @@ function renderPending() {
       </select>
       <button class="bind bg-primary text-on-primary font-semibold px-4 py-2 rounded" data-tag="${esc(tag)}">
         ${esc(I18N.t("checkin.bindTo"))}</button>`;
+    const select = li.querySelector(".who");
+    const selected = BAND_SELECTIONS.has(tag) ? BAND_SELECTIONS.get(tag) : SELECTED_ATHLETE;
+    select.value = VIEW.athletes.some(a => a.athlete_id === selected && !a.tag_id) ? selected : "";
+    select.onchange = () => BAND_SELECTIONS.set(tag, select.value);
     li.querySelector(".bind").onclick = () => guard(async () => {
       const athlete_id = li.querySelector(".who").value;
       if (!athlete_id) return toast(I18N.t("checkin.pick"), true);
       const res = await api("POST", "/api/checkin/bind", { tag_id: tag, athlete_id });
       const who = VIEW.athletes.find((a) => a.athlete_id === athlete_id);
+      SELECTED_ATHLETE = "";
+      BAND_SELECTIONS.clear();
+      document.getElementById("code").value = "";
+      document.getElementById("code-found").textContent = "";
       // Reads that happened before anyone owned the band are claimed retroactively; saying
       // so matters, because those splits appear on the screen a moment later.
       const claimed = (res.claimed || []).length;

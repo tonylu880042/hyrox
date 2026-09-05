@@ -56,6 +56,12 @@ keyed, so nothing accumulates and a coach's own templates are never touched.
 cargo test
 ```
 
+Frontend flow regressions (Node.js 22+, no extra packages):
+
+```
+node --test apps/hub-server/tests/ui/member-flows.test.cjs
+```
+
 Everything runs with no broker, no database and no hardware (CLAUDE.md 24) — except
 `crates/transport/tests/broker.rs`, which needs Mosquitto and **skips itself** when nothing
 answers on `127.0.0.1:1883`. To actually run it:

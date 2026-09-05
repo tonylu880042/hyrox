@@ -27,6 +27,7 @@
 </header>
 
 <main class="max-w-xl mx-auto px-4 py-6 space-y-6">
+  <p id="lookup-status" role="status" aria-live="polite" class="hidden text-on-surface-variant"></p>
 
   <!-- Before entering. -->
   <section id="view-form" class="space-y-4">
@@ -79,6 +80,7 @@
 const $ = (id) => document.getElementById(id);
 let CODE = null;
 let TIMER = null;
+let LOOKUP = 0;
 
 function toast(message, bad) {
   const el = $("toast");
@@ -94,7 +96,7 @@ async function api(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(I18N.t("err." + data.error) || data.message || "");
+  if (!response.ok) throw Object.assign(new Error(I18N.t("err." + data.error)), { status: response.status });
   return data;
 }
 
@@ -102,22 +104,27 @@ $("submit").onclick = async () => {
   const name = $("name").value.trim();
   if (!name) return toast(I18N.t("signup.namePlaceholder"), true);
   try {
+    $("submit").disabled = true;
     const entry = await api("POST", "/api/checkin/signup", { display_name: name });
+    ++LOOKUP;
+    lookupStatus(null);
     showPass(entry.code, entry.display_name, entry.bib);
   } catch (e) {
     toast(e.message || I18N.t("err.unknown"), true);
+  } finally {
+    $("submit").disabled = false;
   }
 };
 
 $("lookup").onclick = () => {
   const code = $("lookup-code").value.trim();
-  if (code) location.search = "?code=" + encodeURIComponent(code);
+  if (code) openPass(code);
 };
 
 /// The pass: code, QR, and how the class is going. The URL carries the code so the entrant
 /// can bookmark it, screenshot it, or reopen it after closing the tab -- their phone is the
 /// only place this lives, because the hub has no accounts to log back into (ADR 0011).
-function showPass(code, name, bib) {
+function showPass(code, name, bib, entry) {
   CODE = code;
   history.replaceState(null, "", "?code=" + encodeURIComponent(code));
   $("view-form").classList.add("hidden");
@@ -126,19 +133,58 @@ function showPass(code, name, bib) {
   $("pass-qr").src = "/api/entry/" + encodeURIComponent(code) + "/qr.svg";
   if (name) $("pass-name").textContent = name;
   if (bib) $("pass-bib").textContent = I18N.t("signup.bib") + " " + bib;
-  refresh();
+  if (entry) renderEntry(entry);
+  else refresh();
   if (TIMER) clearInterval(TIMER);
   TIMER = setInterval(refresh, 5000);
 }
 
-async function refresh() {
-  if (!CODE) return;
-  let entry;
+function lookupStatus(key) {
+  $("lookup-status").textContent = key ? I18N.t(key) : "";
+  $("lookup-status").classList.toggle("hidden", !key);
+}
+
+async function openPass(code) {
+  const request = ++LOOKUP;
+  if (TIMER) clearInterval(TIMER);
+  CODE = null;
+  $("view-pass").classList.add("hidden");
+  $("view-form").classList.remove("hidden");
+  $("lookup-code").value = code;
+  lookupStatus("signup.checking");
   try {
-    entry = await api("GET", "/api/entry/" + encodeURIComponent(CODE));
+    const entry = await api("GET", "/api/entry/" + encodeURIComponent(code));
+    if (request !== LOOKUP) return;
+    showPass(entry.code, entry.row.name, entry.row.bib, entry);
+    lookupStatus(null);
   } catch (e) {
-    return;                            // The class may not have started; keep the pass up.
+    if (request !== LOOKUP) return;
+    lookupStatus(e.status === 404 || e.status === 400 ? "signup.notFound" : "signup.lookupFailed");
+    $("lookup-code").closest("details").open = true;
+    $("lookup-code").focus();
   }
+}
+
+async function refresh() {
+  const code = CODE;
+  if (!code) return;
+  try {
+    const entry = await api("GET", "/api/entry/" + encodeURIComponent(code));
+    if (code !== CODE) return;
+    renderEntry(entry);
+    lookupStatus(null);
+  } catch (e) {
+    if (code !== CODE) return;
+    if (e.status === 404 || e.status === 400) {
+      openPass(code);
+    } else {
+      // Keep the already verified pass, but never imply these are live results.
+      lookupStatus("signup.stale");
+    }
+  }
+}
+
+function renderEntry(entry) {
   const row = entry.row;
   $("pass-name").textContent = row.name;
   if (row.bib) $("pass-bib").textContent = I18N.t("signup.bib") + " " + row.bib;
@@ -167,6 +213,6 @@ I18N.apply();
 I18N.switcher($("lang"));
 $("name").placeholder = I18N.t("signup.namePlaceholder");
 const asked = new URLSearchParams(location.search).get("code");
-if (asked) showPass(asked.toUpperCase(), "", null);
+if (asked) openPass(asked.toUpperCase());
 </script>
 </body></html>

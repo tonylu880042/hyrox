@@ -71,9 +71,21 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
 
+let RESULT_STATUS = "";
+function resultTime(row) {
+  if (row.finished_at != null) return clock(row.elapsed_ms, true);
+  if (RESULT_STATUS === "CANCELLED") return I18N.t("result.cancelled");
+  if (row.status === "READY") {
+    return I18N.t(RESULT_STATUS === "COMPLETED" ? "result.didNotStart" : "result.notStarted");
+  }
+  if (RESULT_STATUS === "COMPLETED") return I18N.t("result.dnf");
+  return I18N.t("result.inProgress");
+}
+
 function card(row) {
   const el = document.createElement("details");
   el.className = "bg-surface-container rounded-lg border border-outline-variant";
+  el.dataset.athleteId = row.athlete_id;
   const splits = row.splits.map((s, i) => `
     <tr class="border-b border-outline-variant">
       <td class="px-3 py-2 text-on-surface-variant num">${i + 1}</td>
@@ -88,7 +100,7 @@ function card(row) {
       <span class="num text-on-surface-variant w-10 text-right">${row.bib}</span>
       <span class="text-2xl flex-1" style="min-width:8rem">${esc(row.name)}</span>
       <span class="text-sm text-on-surface-variant">${row.stations_completed} ${esc(I18N.t("board.stations"))}</span>
-      <span class="num text-2xl">${row.finished_at == null ? esc(I18N.t("result.dnf")) : clock(row.elapsed_ms, true)}</span>
+      <span class="num text-2xl">${esc(resultTime(row))}</span>
       <button type="button" class="btn-share border border-primary text-primary hover:bg-primary hover:text-black rounded px-3 py-1 text-xs font-bold transition ml-1" style="min-height:32px;">
         ${esc(I18N.t("share.btn"))}
       </button>
@@ -203,7 +215,7 @@ function renderStoryCard(row, sessionName) {
 
   ctx.fillStyle = "#FEE400";
   ctx.font = "bold 84px 'JetBrains Mono', monospace";
-  const timeText = row.finished_at == null ? "DNF" : clock(row.elapsed_ms, true);
+  const timeText = resultTime(row);
   ctx.fillText(timeText, 115, 510);
 
   // Stations badge
@@ -312,7 +324,7 @@ function openShareModal(row) {
           const file = new File([activeBlob], `hyrox_${cleanName}.png`, { type: "image/png" });
           await navigator.share({
             title: I18N.t("share.title"),
-            text: `${row.name} - ${clock(row.elapsed_ms, true)} (HYROX)`,
+            text: `${row.name} - ${resultTime(row)} (HYROX)`,
             files: [file],
           });
         } catch (err) {
@@ -348,6 +360,31 @@ function updateNetStatus(online) {
   }
 }
 
+// Keep native details/summary/button nodes alive so polling preserves disclosure
+// state, keyboard focus and scroll position while the actual results still update.
+function renderRows(rows) {
+  const host = document.getElementById("rows");
+  const existing = new Map(Array.from(host.children, el => [el.dataset.athleteId, el]));
+  rows.forEach((row, index) => {
+    const fresh = card(row);
+    const current = existing.get(row.athlete_id);
+    const el = current || fresh;
+    if (current) {
+      const values = fresh.querySelectorAll("summary > span");
+      current.querySelectorAll("summary > span").forEach((span, i) => {
+        if (span.textContent !== values[i].textContent) span.textContent = values[i].textContent;
+      });
+      const body = current.querySelector("tbody");
+      const html = fresh.querySelector("tbody").innerHTML;
+      if (body.innerHTML !== html) body.innerHTML = html;
+      current.querySelector(".btn-share").onclick = fresh.querySelector(".btn-share").onclick;
+    }
+    if (host.children[index] !== el) host.insertBefore(el, host.children[index] || null);
+    existing.delete(row.athlete_id);
+  });
+  for (const el of existing.values()) el.remove();
+}
+
 async function load() {
   const id = new URLSearchParams(location.search).get("session");
   const path = id ? `/api/result/${encodeURIComponent(id)}` : "/api/leaderboard";
@@ -365,9 +402,8 @@ async function load() {
     document.getElementById("unranked").classList.toggle("hidden", r.ordering === "FINISH_TIME");
     document.getElementById("empty").classList.toggle("hidden", r.rows.length > 0);
 
-    const host = document.getElementById("rows");
-    host.innerHTML = "";
-    for (const row of r.rows) host.appendChild(card(row));
+    RESULT_STATUS = r.status;
+    renderRows(r.rows);
   } catch (err) {
     updateNetStatus(false);
   }
