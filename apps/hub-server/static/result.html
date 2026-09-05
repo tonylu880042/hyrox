@@ -28,6 +28,24 @@
   </div>
 </header>
 
+<div id="net-banner" class="hidden text-center text-xs py-1 px-3" style="background-color:#d97706; color:#ffffff;">
+  <span data-i18n="net.reconnecting"></span>
+</div>
+
+<dialog id="share-modal" class="bg-surface-container text-on-surface border border-outline-variant rounded-lg p-4" style="max-width:440px; width:95vw;">
+  <div class="flex justify-between items-center mb-3">
+    <h2 class="text-xl font-bold" data-i18n="share.title"></h2>
+    <button type="button" id="share-close" class="text-on-surface-variant hover:text-primary text-2xl font-bold leading-none">&times;</button>
+  </div>
+  <div class="flex justify-center mb-4 bg-black rounded p-2" style="max-height:60vh; overflow:hidden;">
+    <img id="share-img" alt="Workout Card Preview" style="max-height:56vh; width:auto; object-fit:contain; border-radius:8px; border:1px solid #333;" />
+  </div>
+  <div class="flex flex-wrap gap-2 justify-end">
+    <button type="button" id="share-native" class="border border-outline px-4 py-2 rounded font-semibold text-sm hidden" data-i18n="share.native"></button>
+    <a id="share-download" class="bg-primary text-on-primary font-bold px-4 py-2 rounded text-sm inline-flex items-center" download="hyrox_workout.png" data-i18n="share.download"></a>
+  </div>
+</dialog>
+
 <main class="max-w-5xl mx-auto p-4">
   <p id="unranked" class="hidden mb-4 text-sm bg-surface-container border border-outline-variant rounded p-3">
     <b data-i18n="board.unranked"></b> <span data-i18n="board.unrankedWhy"></span>
@@ -65,12 +83,15 @@ function card(row) {
     </tr>`).join("");
 
   el.innerHTML = `
-    <summary class="flex flex-wrap items-baseline gap-3 px-4 py-3 cursor-pointer">
+    <summary class="flex flex-wrap items-baseline gap-3 px-4 py-3 cursor-pointer select-none">
       <span class="display text-3xl text-primary w-10">${row.place ?? ""}</span>
       <span class="num text-on-surface-variant w-10 text-right">${row.bib}</span>
       <span class="text-2xl flex-1" style="min-width:8rem">${esc(row.name)}</span>
       <span class="text-sm text-on-surface-variant">${row.stations_completed} ${esc(I18N.t("board.stations"))}</span>
       <span class="num text-2xl">${row.finished_at == null ? esc(I18N.t("result.dnf")) : clock(row.elapsed_ms, true)}</span>
+      <button type="button" class="btn-share border border-primary text-primary hover:bg-primary hover:text-black rounded px-3 py-1 text-xs font-bold transition ml-1" style="min-height:32px;">
+        ${esc(I18N.t("share.btn"))}
+      </button>
     </summary>
     <div class="px-4 pb-4 overflow-x-auto">
       <table class="w-full text-sm" style="min-width:24rem">
@@ -85,31 +106,276 @@ function card(row) {
         <tbody>${splits}</tbody>
       </table>
     </div>`;
-  // The header cells are built here rather than in the page, so they are translated with
-  // the same dictionary rather than a second copy of the words.
   el.querySelectorAll("[data-t]").forEach((n) => (n.textContent = I18N.t(n.dataset.t)));
+
+  const shareBtn = el.querySelector(".btn-share");
+  shareBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openShareModal(row);
+  };
+
   return el;
 }
 
+let CURRENT_SESSION_NAME = "";
+
+function renderStoryCard(row, sessionName) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1920;
+  const ctx = canvas.getContext("2d");
+
+  // Dark background
+  ctx.fillStyle = "#0B0C0E";
+  ctx.fillRect(0, 0, 1080, 1920);
+
+  // Gradient header aura
+  const grad = ctx.createLinearGradient(0, 0, 1080, 450);
+  grad.addColorStop(0, "rgba(254, 228, 0, 0.12)");
+  grad.addColorStop(1, "rgba(11, 12, 14, 0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 1080, 450);
+
+  // Yellow top stripe
+  ctx.fillStyle = "#FEE400";
+  ctx.fillRect(0, 0, 1080, 16);
+
+  // Brand header
+  ctx.fillStyle = "#FEE400";
+  ctx.font = "bold 76px 'Bebas Neue', sans-serif";
+  ctx.fillText("HYROX", 80, 120);
+
+  ctx.fillStyle = "#9CA3AF";
+  ctx.font = "600 24px 'Archivo Narrow', sans-serif";
+  ctx.fillText("OFFICIAL WORKOUT RECAP", 80, 165);
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
+  ctx.font = "22px 'JetBrains Mono', monospace";
+  ctx.fillStyle = "#6B7280";
+  ctx.textAlign = "right";
+  ctx.fillText(dateStr, 1000, 120);
+  ctx.fillText(sessionName || "TRAINING SESSION", 1000, 160);
+  ctx.textAlign = "left";
+
+  // Separator
+  ctx.strokeStyle = "#232733";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(80, 200);
+  ctx.lineTo(1000, 200);
+  ctx.stroke();
+
+  // Hero Card
+  ctx.fillStyle = "#141721";
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(80, 230, 920, 310, 20);
+    ctx.fill();
+  } else {
+    ctx.fillRect(80, 230, 920, 310);
+  }
+  ctx.strokeStyle = "#2A3042";
+  ctx.stroke();
+
+  // Left stripe
+  ctx.fillStyle = "#FEE400";
+  ctx.fillRect(80, 250, 10, 270);
+
+  // Place & Bib
+  if (row.place) {
+    ctx.fillStyle = "#FEE400";
+    ctx.font = "bold 32px 'JetBrains Mono', monospace";
+    ctx.fillText(`RANK #${row.place}`, 115, 290);
+  }
+  ctx.fillStyle = "#8E94A5";
+  ctx.font = "26px 'JetBrains Mono', monospace";
+  ctx.fillText(`BIB #${row.bib || "—"}`, 320, 290);
+
+  // Name
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = "bold 60px 'Archivo Narrow', sans-serif";
+  ctx.fillText(row.name || "ATHLETE", 115, 365);
+
+  // Time label & clock
+  ctx.fillStyle = "#8E94A5";
+  ctx.font = "22px 'Archivo Narrow', sans-serif";
+  ctx.fillText("FINISH TIME", 115, 425);
+
+  ctx.fillStyle = "#FEE400";
+  ctx.font = "bold 84px 'JetBrains Mono', monospace";
+  const timeText = row.finished_at == null ? "DNF" : clock(row.elapsed_ms, true);
+  ctx.fillText(timeText, 115, 510);
+
+  // Stations badge
+  ctx.fillStyle = "#7DF4FF";
+  ctx.font = "bold 24px 'JetBrains Mono', monospace";
+  ctx.textAlign = "right";
+  ctx.fillText(`${row.stations_completed} STATIONS COMPLETED`, 960, 508);
+  ctx.textAlign = "left";
+
+  // Splits Table
+  const tableY = 590;
+  ctx.fillStyle = "#181C28";
+  ctx.fillRect(80, tableY, 920, 52);
+
+  ctx.fillStyle = "#8E94A5";
+  ctx.font = "bold 22px 'JetBrains Mono', monospace";
+  ctx.fillText("#", 110, tableY + 34);
+  ctx.fillText("STATION", 180, tableY + 34);
+  ctx.textAlign = "right";
+  ctx.fillText("WORK", 760, tableY + 34);
+  ctx.fillText("TRANSITION", 960, tableY + 34);
+  ctx.textAlign = "left";
+
+  let curY = tableY + 52;
+  const splits = row.splits || [];
+  const maxRows = Math.min(splits.length, 12);
+  const rowHeight = 72;
+
+  for (let i = 0; i < maxRows; i++) {
+    const s = splits[i];
+    if (i % 2 === 1) {
+      ctx.fillStyle = "#10131B";
+      ctx.fillRect(80, curY, 920, rowHeight);
+    }
+    ctx.strokeStyle = "#1D2230";
+    ctx.beginPath();
+    ctx.moveTo(80, curY + rowHeight);
+    ctx.lineTo(1000, curY + rowHeight);
+    ctx.stroke();
+
+    ctx.fillStyle = "#6B7280";
+    ctx.font = "22px 'JetBrains Mono', monospace";
+    ctx.fillText(String(i + 1), 110, curY + 44);
+
+    ctx.fillStyle = "#F3F4F6";
+    ctx.font = "bold 26px 'Archivo Narrow', sans-serif";
+    ctx.fillText(s.station || `Station ${i + 1}`, 180, curY + 44);
+
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = "26px 'JetBrains Mono', monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(clock(s.work_ms, true), 760, curY + 44);
+
+    ctx.fillStyle = "#8E94A5";
+    ctx.fillText(s.transition_ms == null ? "—" : clock(s.transition_ms, true), 960, curY + 44);
+    ctx.textAlign = "left";
+
+    curY += rowHeight;
+  }
+
+  // Footer
+  ctx.fillStyle = "#141721";
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(80, 1740, 920, 100, 16);
+    ctx.fill();
+  } else {
+    ctx.fillRect(80, 1740, 920, 100);
+  }
+  ctx.strokeStyle = "#2A3042";
+  ctx.stroke();
+
+  ctx.fillStyle = "#FEE400";
+  ctx.font = "bold 32px 'Bebas Neue', sans-serif";
+  ctx.fillText("HYROX CENTRAL HUB", 120, 1800);
+
+  ctx.fillStyle = "#8E94A5";
+  ctx.font = "20px 'JetBrains Mono', monospace";
+  ctx.textAlign = "right";
+  ctx.fillText("uCareMedi.com", 960, 1798);
+  ctx.textAlign = "left";
+
+  return canvas;
+}
+
+let activeBlob = null;
+
+function openShareModal(row) {
+  const modal = document.getElementById("share-modal");
+  const img = document.getElementById("share-img");
+  const downloadLink = document.getElementById("share-download");
+  const nativeBtn = document.getElementById("share-native");
+
+  const canvas = renderStoryCard(row, CURRENT_SESSION_NAME);
+  canvas.toBlob((blob) => {
+    activeBlob = blob;
+    const url = URL.createObjectURL(blob);
+    img.src = url;
+    downloadLink.href = url;
+    const cleanName = (row.name || "athlete").replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, "_");
+    downloadLink.download = `hyrox_${cleanName}_workout.png`;
+
+    if (navigator.canShare && navigator.canShare({ files: [new File([blob], "workout.png", { type: "image/png" })] })) {
+      nativeBtn.classList.remove("hidden");
+      nativeBtn.onclick = async () => {
+        try {
+          const file = new File([activeBlob], `hyrox_${cleanName}.png`, { type: "image/png" });
+          await navigator.share({
+            title: I18N.t("share.title"),
+            text: `${row.name} - ${clock(row.elapsed_ms, true)} (HYROX)`,
+            files: [file],
+          });
+        } catch (err) {
+          if (err.name !== "AbortError") console.warn("Share failed:", err);
+        }
+      };
+    } else {
+      nativeBtn.classList.add("hidden");
+    }
+
+    if (typeof modal.showModal === "function") {
+      modal.showModal();
+    }
+  }, "image/png");
+}
+
+document.getElementById("share-close").onclick = () => {
+  const modal = document.getElementById("share-modal");
+  if (modal) modal.close();
+};
+
+function updateNetStatus(online) {
+  const banner = document.getElementById("net-banner");
+  if (!banner) return;
+  if (!online) {
+    banner.classList.remove("hidden");
+    banner.style.backgroundColor = "#d97706";
+    banner.textContent = I18N.t("net.reconnecting");
+  } else if (!banner.classList.contains("hidden")) {
+    banner.style.backgroundColor = "#059669";
+    banner.textContent = I18N.t("net.restored");
+    setTimeout(() => banner.classList.add("hidden"), 2500);
+  }
+}
+
 async function load() {
-  // `?session=` shows a class that finished hours ago; with no id, whatever is on now.
   const id = new URLSearchParams(location.search).get("session");
   const path = id ? `/api/result/${encodeURIComponent(id)}` : "/api/leaderboard";
-  const res = await fetch(path);
-  if (!res.ok) { document.getElementById("empty").classList.remove("hidden"); return; }
-  const r = (await res.json()).results;
+  try {
+    const res = await fetch(path);
+    if (!res.ok) {
+      document.getElementById("empty").classList.remove("hidden");
+      updateNetStatus(false);
+      return;
+    }
+    updateNetStatus(true);
+    const r = (await res.json()).results;
+    CURRENT_SESSION_NAME = r.session_name || "";
+    document.getElementById("session").textContent = CURRENT_SESSION_NAME;
+    document.getElementById("unranked").classList.toggle("hidden", r.ordering === "FINISH_TIME");
+    document.getElementById("empty").classList.toggle("hidden", r.rows.length > 0);
 
-  document.getElementById("session").textContent = r.session_name;
-  document.getElementById("unranked").classList.toggle("hidden", r.ordering === "FINISH_TIME");
-  document.getElementById("empty").classList.toggle("hidden", r.rows.length > 0);
-
-  const host = document.getElementById("rows");
-  host.innerHTML = "";
-  for (const row of r.rows) host.appendChild(card(row));
+    const host = document.getElementById("rows");
+    host.innerHTML = "";
+    for (const row of r.rows) host.appendChild(card(row));
+  } catch (err) {
+    updateNetStatus(false);
+  }
 }
 
 I18N.apply();
 I18N.switcher(document.getElementById("lang"));
 load();
+setInterval(load, 10000);
 </script>
 </body></html>

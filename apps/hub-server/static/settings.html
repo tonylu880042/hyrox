@@ -113,6 +113,9 @@
     </div>
   </div>
   <div id="toast" class="hidden px-4 py-2 text-sm"></div>
+  <div id="net-banner" class="hidden text-center text-xs py-1 px-3" style="background-color:#d97706; color:#ffffff;">
+    <span data-i18n="net.reconnecting"></span>
+  </div>
 </header>
 
 <dialog id="pin-modal">
@@ -332,16 +335,37 @@ async function device() {
   return DEVICE;
 }
 
+function updateNetStatus(online) {
+  const banner = document.getElementById("net-banner");
+  if (!banner) return;
+  if (!online) {
+    banner.classList.remove("hidden");
+    banner.style.backgroundColor = "#d97706";
+    banner.textContent = I18N.t("net.reconnecting");
+  } else if (!banner.classList.contains("hidden")) {
+    banner.style.backgroundColor = "#059669";
+    banner.textContent = I18N.t("net.restored");
+    setTimeout(() => banner.classList.add("hidden"), 2500);
+  }
+}
+
 async function api(method, path, body) {
   const headers = { "content-type": "application/json" };
   // `fetch` throws on a header value outside ISO-8859-1, so a device named 「櫃檯平板」
   // would never leave the tab. Escaped here, decoded back by the hub (ADR 0001 D1).
   if (method !== "GET") headers["x-operator-device"] = encodeURIComponent(await device());
-  const response = await fetch(path, {
-    method,
-    headers,
-    body: method === "GET" ? undefined : JSON.stringify(body || {}),
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method,
+      headers,
+      body: method === "GET" ? undefined : JSON.stringify(body || {}),
+    });
+    updateNetStatus(true);
+  } catch (err) {
+    updateNetStatus(false);
+    throw err;
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const known = I18N.t("err." + data.error);
@@ -457,6 +481,42 @@ document.getElementById("add-reader").onclick = () => guard(async () => {
 });
 
 // ── Devices ───────────────────────────────────────────────────────────────────
+function signalBars(d) {
+  const bad = d.warning && d.warning !== "HEALTHY";
+  const age = d.last_seen_age_ms ?? 999999;
+  let level = 4;
+  let color = "#10b981";
+  let labelKey = "dev.signalStrong";
+
+  if (age > 60000) {
+    level = 0;
+    color = "#6b7280";
+    labelKey = "dev.signalOffline";
+  } else if (age > 30000 || (bad && d.warning === "JOURNAL_FULL")) {
+    level = 1;
+    color = "#ef4444";
+    labelKey = "dev.signalWeak";
+  } else if (age > 15000 || bad) {
+    level = 2;
+    color = "#f59e0b";
+    labelKey = "dev.signalFair";
+  } else if (age > 5000) {
+    level = 3;
+    color = "#84cc16";
+    labelKey = "dev.signalGood";
+  }
+
+  const bars = [4, 8, 12, 16].map((h, i) => {
+    const fill = i < level ? color : "#374151";
+    return `<rect x="${i * 5}" y="${16 - h}" width="3.5" height="${h}" rx="1" fill="${fill}"/>`;
+  }).join("");
+
+  return `<span class="inline-flex items-center gap-1.5" title="${esc(I18N.t(labelKey))}">
+    <svg width="20" height="16" viewBox="0 0 20 16">${bars}</svg>
+    <span class="text-xs" style="color:${color}">${esc(I18N.t(labelKey))}</span>
+  </span>`;
+}
+
 function renderDevices() {
   const host = document.getElementById("devices");
   host.innerHTML = "";
@@ -471,7 +531,10 @@ function renderDevices() {
     li.className = "flex flex-wrap items-center gap-3 rounded border px-3 py-2 "
       + (bad ? "border-error bg-surface-container-high" : "border-outline-variant bg-surface-container-high");
     li.innerHTML = `
-      <span class="mono text-sm flex-1" style="min-width:12rem">${esc(d.device_id)}</span>
+      <div class="flex items-center gap-2 flex-1" style="min-width:14rem">
+        ${signalBars(d)}
+        <span class="mono text-sm">${esc(d.device_id)}</span>
+      </div>
       <span class="text-xs text-on-surface-variant">${esc(I18N.t("set.boot"))} ${esc(d.boot_id ?? "—")}</span>
       <span class="text-xs ${bad ? "text-error" : "text-on-surface-variant"}">
         ${esc(I18N.t("set.pending"))} ${esc(d.pending_events ?? "—")}${d.journal_capacity ? " / " + esc(d.journal_capacity) : ""}</span>

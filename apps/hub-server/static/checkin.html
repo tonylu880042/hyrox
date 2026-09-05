@@ -28,6 +28,9 @@
     </div>
   </div>
   <div id="toast" class="hidden px-4 py-2 text-sm"></div>
+  <div id="net-banner" class="hidden text-center text-xs py-1 px-3" style="background-color:#d97706; color:#ffffff;">
+    <span data-i18n="net.reconnecting"></span>
+  </div>
 </header>
 
 <dialog id="ask" class="bg-surface-container text-on-surface border border-outline-variant rounded-lg p-0 backdrop:bg-black/60">
@@ -112,6 +115,47 @@ async function device() {
   return DEVICE;
 }
 
+function updateNetStatus(online) {
+  const banner = document.getElementById("net-banner");
+  if (!banner) return;
+  if (!online) {
+    banner.classList.remove("hidden");
+    banner.style.backgroundColor = "#d97706";
+    banner.textContent = I18N.t("net.reconnecting");
+  } else if (!banner.classList.contains("hidden")) {
+    banner.style.backgroundColor = "#059669";
+    banner.textContent = I18N.t("net.restored");
+    setTimeout(() => banner.classList.add("hidden"), 2500);
+  }
+}
+
+let audioCtx = null;
+function playChime(success = false) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    if (success) {
+      osc.frequency.setValueAtTime(587.33, now);
+      osc.frequency.setValueAtTime(880, now + 0.1);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+      osc.start(now);
+      osc.stop(now + 0.35);
+    } else {
+      osc.frequency.setValueAtTime(880, now);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+      osc.start(now);
+      osc.stop(now + 0.15);
+    }
+  } catch (e) {}
+}
+
 async function api(method, path, body) {
   const headers = {};
   if (method !== "GET") {
@@ -120,7 +164,14 @@ async function api(method, path, body) {
     // would never leave the tab. Escaped here, decoded back by the hub (ADR 0001 D1).
     headers["x-operator-device"] = encodeURIComponent(await device());
   }
-  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let res;
+  try {
+    res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    updateNetStatus(true);
+  } catch (err) {
+    updateNetStatus(false);
+    throw err;
+  }
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw Object.assign(new Error(json.error || "unknown"), { code: json.error, detail: json.message });
@@ -268,6 +319,7 @@ function renderPending() {
       // Reads that happened before anyone owned the band are claimed retroactively; saying
       // so matters, because those splits appear on the screen a moment later.
       const claimed = (res.claimed || []).length;
+      playChime(true);
       toast(I18N.t("checkin.boundOk", who ? who.name : athlete_id) +
             (claimed ? " " + I18N.t("checkin.claimed", claimed) : ""));
       await refresh();
@@ -294,8 +346,15 @@ document.getElementById("entrant-form").onsubmit = (ev) => {
   });
 };
 
+let PREV_PENDING = [];
+
 async function refresh() {
   const res = await api("GET", "/api/checkin");
+  const newPending = (res.pending || []).filter((t) => !PREV_PENDING.includes(t));
+  if (newPending.length > 0 && PREV_PENDING.length > 0) {
+    playChime(false);
+  }
+  PREV_PENDING = res.pending || [];
   VIEW = { pending: res.pending, athletes: res.athletes };
   const f = res.freshness;
   document.getElementById("freshness").textContent =

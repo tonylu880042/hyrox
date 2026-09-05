@@ -157,14 +157,15 @@
 </div>
 </div>
 </header>
+<div id="page-progress" style="position:fixed; top:0; left:0; height:6px; background:#FEE400; width:0%; z-index:999; transition:width 0.1s linear;"></div>
 <main id="grid" class="w-full flex-grow min-h-0 overflow-hidden px-margin-edge py-[16px] class-grid bg-background"></main>
+<main id="podium-view" class="hidden w-full flex-grow min-h-0 overflow-hidden px-margin-edge py-[16px] bg-background" style="display:none; flex-direction:column; justify-content:space-between;"></main>
 <footer class="relative w-full shrink-0 flex items-center gap-10 px-margin-edge bg-surface-container-lowest border-t border-outline-variant h-[56px]">
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">groups</span> <span data-i18n="live.inClass">IN CLASS</span> <span id="f-in">--</span></span>
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">flag</span> <span data-i18n="live.finished">FINISHED</span> <span id="f-done">--</span></span>
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">route</span> <span data-i18n="live.course">COURSE</span> <span id="f-course">--</span> <span data-i18n="live.stations">STATIONS</span></span>
 <span class="font-label-sm text-label-sm uppercase tracking-widest text-on-surface foot-stat"><span class="material-symbols-outlined" style="font-size:22px;">report</span> <span data-i18n="live.exceptions">EXCEPTIONS</span> <span id="f-exc">--</span></span>
-<!-- Whose system this is. Right-hand end of the footer, in the muted colour: a projector
-     screen belongs to the class on it, not to us, so the mark is present and quiet. -->
+<button type="button" id="btn-toggle-view" class="text-xs px-3 py-1 rounded border border-outline-variant text-on-surface-variant hover:text-primary transition uppercase tracking-wider" style="cursor:pointer; background:transparent;" data-i18n="live.switchPodium"></button>
 <span class="ml-auto font-label-sm text-label-sm tracking-widest text-on-surface-variant">uCareMedi.com</span>
 </footer>
 <script>
@@ -328,39 +329,59 @@ function render(s) {
   }
 
   SNAPSHOT = s;
-  renderPage();
+  if (VIEW_MODE === "PODIUM") {
+    renderPodium();
+  } else {
+    renderPage();
+  }
 }
 
-/// The grid holds one page. More athletes than that and the screen rotates rather than
-/// shrinking the cards: this is read from across a gym, and a card small enough to fit
-/// thirty people is a card nobody can read (M6 follow-up, decided with the user).
-///
-/// Order is the roster's own, never "most interesting first": a projector that reorders
-/// itself makes an athlete's card move while their coach is looking at it.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
 let PAGE_SIZE = 12;
 let LAYOUT = { columns: 4, rows: 3 };
-/// How long a page is held. The venue sets it on /settings -- a long thin gym reads slower
-/// than a studio -- and this is only the value used until that answer arrives.
 let PAGE_MS = 10000;
 let SNAPSHOT = null;
 let PAGE = 0;
+let pageTurnStart = Date.now();
+let VIEW_MODE = (new URLSearchParams(location.search).get("view") || "").toUpperCase() === "PODIUM" ? "PODIUM" : "GRID";
 
 function pages() {
   if (!SNAPSHOT || !SNAPSHOT.athletes.length) return 1;
   return Math.max(1, Math.ceil(SNAPSHOT.athletes.length / PAGE_SIZE));
 }
 
+function updatePageProgress() {
+  const bar = $("page-progress");
+  if (!bar) return;
+  if (pages() > 1 && VIEW_MODE === "GRID") {
+    const elapsed = Date.now() - pageTurnStart;
+    const pct = Math.min(100, (elapsed / PAGE_MS) * 100);
+    bar.style.width = pct + "%";
+  } else {
+    bar.style.width = "0%";
+  }
+}
+setInterval(updatePageProgress, 100);
+
 function renderPage() {
+  const host = $("podium-view");
+  if (host) {
+    host.style.display = "none";
+    host.classList.add("hidden");
+  }
+  $("grid").style.display = "grid";
+  $("grid").classList.remove("hidden");
+
   const s = SNAPSHOT;
   if (!s) return;
-  // Clamped rather than wrapped: people leaving the roster must not silently skip a page.
   if (PAGE >= pages()) PAGE = 0;
   const from = PAGE * PAGE_SIZE;
   const shown = s.athletes.slice(from, from + PAGE_SIZE);
   $("grid").innerHTML = s.course.length ? shown.map((a) => card(a, s.course)).join("") : "";
 
-  // The indicator is only drawn when there is something to page through. "1 / 1" on a
-  // twelve-person class is noise that makes an operator wonder what they are missing.
   const label = $("page-indicator");
   if (pages() > 1) {
     label.textContent = `${PAGE + 1} / ${pages()}`;
@@ -370,13 +391,122 @@ function renderPage() {
   }
 }
 
-/// The rotation runs on its own timer rather than inside the snapshot loop: snapshots
-/// arrive four times a second, and a page that turned on data arriving would flicker.
+function renderPodium() {
+  const host = $("podium-view");
+  $("grid").style.display = "none";
+  $("grid").classList.add("hidden");
+  host.style.display = "flex";
+  host.classList.remove("hidden");
+
+  if (!SNAPSHOT || !SNAPSHOT.athletes.length) {
+    host.innerHTML = `<div class="flex items-center justify-center h-full text-2xl text-on-surface-variant">NO ATHLETES IN SESSION</div>`;
+    return;
+  }
+
+  const ranked = [...SNAPSHOT.athletes].sort((a, b) => {
+    const aDone = a.finished_at != null;
+    const bDone = b.finished_at != null;
+    if (aDone && !bDone) return -1;
+    if (!aDone && bDone) return 1;
+    if (aDone && bDone) return (a.elapsed_ms || 0) - (b.elapsed_ms || 0);
+    const aStations = a.stages ? a.stages.filter((st) => st.status === "COMPLETED").length : 0;
+    const bStations = b.stages ? b.stages.filter((st) => st.status === "COMPLETED").length : 0;
+    if (aStations !== bStations) return bStations - aStations;
+    return (a.elapsed_ms || 0) - (b.elapsed_ms || 0);
+  });
+
+  const p1 = ranked[0];
+  const p2 = ranked[1];
+  const p3 = ranked[2];
+  const rest = ranked.slice(3, 15);
+
+  function podiumCol(athlete, place, color, height, label) {
+    if (!athlete) return `<div style="flex:1;"></div>`;
+    const timeText = athlete.finished_at != null ? clock(athlete.elapsed_ms, true) : (athlete.elapsed_ms ? clock(athlete.elapsed_ms, false) : "--:--");
+    const stationsDone = athlete.stages ? athlete.stages.filter((st) => st.status === "COMPLETED").length : 0;
+    return `
+      <div style="flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center;">
+        <div style="text-align:center; margin-bottom:12px; width:100%;">
+          <div style="font-size:32px; font-weight:bold; color:${color}; margin-bottom:4px;">BIB #${esc(athlete.bib || "—")}</div>
+          <div style="font-size:40px; font-weight:bold; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 12px;">${esc(athlete.name)}</div>
+          <div style="font-family:'JetBrains Mono', monospace; font-size:48px; font-weight:bold; color:${color}; margin-top:6px;">${timeText}</div>
+          <div style="font-size:22px; color:#A0A5B5; margin-top:4px;">${stationsDone} / ${SNAPSHOT.course.length} STATIONS</div>
+        </div>
+        <div style="width:100%; height:${height}px; background:#141722; border:2px solid ${color}; border-bottom:none; border-radius:16px 16px 0 0; display:flex; flex-direction:column; align-items:center; justify-content:center; box-shadow:0 -10px 30px rgba(0,0,0,0.5);">
+          <div style="font-size:72px; font-weight:bold; color:${color}; line-height:1;">${place}</div>
+          <div style="font-size:20px; font-weight:bold; color:#8E94A5; letter-spacing:2px; margin-top:6px;">${label}</div>
+        </div>
+      </div>`;
+  }
+
+  const top3Html = `
+    <div style="display:flex; gap:24px; align-items:flex-end; height:440px; padding:0 40px; margin-top:50px;">
+      ${podiumCol(p2, "2", "#E0E0E0", 190, "2ND PLACE")}
+      ${podiumCol(p1, "1", "#FEE400", 270, "1ST PLACE")}
+      ${podiumCol(p3, "3", "#CD7F32", 140, "3RD PLACE")}
+    </div>`;
+
+  const restHtml = rest.length ? `
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; padding:0 40px; margin-top:20px;">
+      ${rest.map((a, idx) => {
+        const timeText = a.finished_at != null ? clock(a.elapsed_ms, true) : (a.elapsed_ms ? clock(a.elapsed_ms, false) : "--:--");
+        const doneCount = a.stages ? a.stages.filter((st) => st.status === "COMPLETED").length : 0;
+        return `
+          <div style="background:#13151D; border:1px solid #2B3040; border-radius:8px; padding:12px 18px; display:flex; align-items:center; justify-content:space-between;">
+            <div style="display:flex; align-items:center; gap:16px;">
+              <span style="font-size:28px; font-weight:bold; color:#FEE400; width:36px; text-align:right;">#${idx + 4}</span>
+              <span style="font-size:22px; color:#8E94A5; font-family:'JetBrains Mono', monospace;">#${esc(a.bib || "")}</span>
+              <span style="font-size:26px; font-weight:bold; color:#FFFFFF;">${esc(a.name)}</span>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-family:'JetBrains Mono', monospace; font-size:26px; font-weight:bold; color:#FEE400;">${timeText}</div>
+              <div style="font-size:16px; color:#7DF4FF;">${doneCount} STATIONS</div>
+            </div>
+          </div>`;
+      }).join("")}
+    </div>` : "";
+
+  host.innerHTML = top3Html + restHtml;
+}
+
+function toggleView() {
+  VIEW_MODE = VIEW_MODE === "GRID" ? "PODIUM" : "GRID";
+  const btn = $("btn-toggle-view");
+  if (btn) {
+    btn.textContent = I18N.t(VIEW_MODE === "GRID" ? "live.switchPodium" : "live.switchGrid");
+  }
+  $("grid").style.display = VIEW_MODE === "GRID" ? "grid" : "none";
+  $("podium-view").style.display = VIEW_MODE === "PODIUM" ? "flex" : "none";
+  const indicator = $("page-indicator");
+  if (indicator) {
+    if (VIEW_MODE === "PODIUM") indicator.classList.add("hidden");
+    else if (pages() > 1) indicator.classList.remove("hidden");
+  }
+  if (VIEW_MODE === "PODIUM") {
+    renderPodium();
+  } else {
+    pageTurnStart = Date.now();
+    renderPage();
+  }
+}
+
+const toggleBtn = $("btn-toggle-view");
+if (toggleBtn) {
+  toggleBtn.onclick = toggleView;
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "l" || e.key === "L") {
+    toggleView();
+  }
+});
+
 let pageTimer = setInterval(turnPage, PAGE_MS);
 
 function turnPage() {
-  if (pages() > 1) {
+  if (pages() > 1 && VIEW_MODE === "GRID") {
     PAGE = (PAGE + 1) % pages();
+    pageTurnStart = Date.now();
     renderPage();
   }
 }
