@@ -4,8 +4,8 @@ mod support;
 
 use application::{
     checkin::{bind_tag, enter, rebind_tag},
-    register_reader, resume_or_start, Entrant, HubStore, LiveSession, OperatorCommand,
-    OperatorError, Recovery, RosterEntry, SessionPlan,
+    register_reader, resume_or_start, Entrant, HubStore, InterpretedWrite, LiveSession,
+    OperatorCommand, OperatorError, Recovery, RosterEntry, SessionPlan,
 };
 use domain::{
     AthleteState, Duration, FinishPolicy, Instant, MemberRef, MembershipStatus, ReaderKey,
@@ -218,12 +218,122 @@ async fn a_resumed_session_keeps_counting_from_its_stored_event_count() {
     existing.mark_ready().expect("arm");
     existing.start().expect("arm");
     existing.interpreted_event_count = 4;
-    let store = FakeStore::new().with_session(existing, Instant(500_000));
+    let events = (0..4)
+        .map(|index| {
+            (
+                "a1".to_string(),
+                None,
+                domain::Interpreted::Entered {
+                    station: format!("S{index}"),
+                    at: Instant(500_000 + index as i64),
+                    transition: None,
+                    started_timing: index == 0,
+                },
+            )
+        })
+        .collect();
+    let store = FakeStore::new()
+        .with_session(existing, Instant(500_000))
+        .with_interpreted_events(events);
 
     let (state, _): (LiveSession, _) = resume_or_start(&store, plan()).await.expect("resume");
 
     // Gates ARMED -> DRAFT after a restart just as it did before (ADR 0001 D2).
     assert_eq!(state.session.interpreted_event_count, 4);
+}
+
+#[tokio::test]
+async fn recovery_rebuilds_the_event_count_after_interpretation_commit_before_session_save() {
+    let mut store = FakeStore::new().with_session(armed("s-old"), Instant(500_000));
+    let (state, _) = resume_or_start(&store, plan()).await.expect("resume");
+    let event = domain::Interpreted::Entered {
+        station: "SKIERG".into(),
+        at: Instant(500_100),
+        transition: None,
+        started_timing: true,
+    };
+    store
+        .commit_interpreted(InterpretedWrite {
+            session_id: "s-old",
+            athlete_id: "a1",
+            raw_event_id: Some(1),
+            event: &event,
+        })
+        .await
+        .expect("the interpretation commit is durable");
+    store.fail_save_session = true;
+    assert!(store
+        .save_session(&state.session, Instant(500_000))
+        .await
+        .is_err());
+
+    // A crash here leaves the durable interpretation ahead of the session snapshot. Startup
+    // must trust the event log so the return-to-draft gate cannot be bypassed.
+    store.fail_save_session = false;
+    let (recovered, _) = resume_or_start(&store, plan()).await.expect("recover");
+    assert_eq!(recovered.session.interpreted_event_count, 1);
+}
+
+#[tokio::test]
+async fn startup_replays_a_pending_interpretation_without_a_redelivery() {
+    let existing = armed("s-old");
+    let initial_athlete = AthleteState::ready("a1", "CHEN YU-TING");
+    let mut live = LiveSession::new(
+        existing.clone(),
+        SessionConfig::new("s-old"),
+        Instant(500_000),
+    )
+    .with_athletes(vec![initial_athlete.clone()]);
+    let mut store = FakeStore::new()
+        .with_session(existing.clone(), Instant(500_000))
+        .with_rebuilt_athletes(vec![initial_athlete]);
+    store.fail_interpreted = true;
+    let event = contract::ReceivedEvent::new(
+        contract::EdgeEvent {
+            device_id: contract::DeviceId::from_mac_str("a4:cf:12:8b:3d:91").unwrap(),
+            reader_id: contract::ReaderId::parse("rfid-01").unwrap(),
+            boot_id: 7,
+            sequence: 1,
+            tag_id: vec!["TAG-A1".into()],
+            detected_at: 501_000,
+            uptime_ms: 1_000,
+        },
+        501_250,
+    );
+    live.bindings
+        .bind(
+            "s-old",
+            &TagId::parse("TAG-A1").unwrap(),
+            "a1",
+            Instant(500_000),
+        )
+        .unwrap();
+    live.readers.register(ReaderRegistration::new(
+        ReaderKey::parse("a4cf128b3d91", "rfid-01").unwrap(),
+        "SKIERG",
+        ReaderMode::Entry,
+    ));
+    application::ingest_read(&mut live, &store, &event)
+        .await
+        .expect_err("the interpretation fails after the raw commit");
+    drop(live);
+
+    store.fail_interpreted = false;
+    let plan = SessionPlan {
+        session: Session::new_draft("new", "unused", SessionMode::Training),
+        config: SessionConfig::new("new"),
+        roster: Vec::new(),
+        class_start: Instant(500_000),
+        start_now: true,
+    };
+    let (recovered, _) = resume_or_start(&store, plan)
+        .await
+        .expect("startup recovery");
+    assert_eq!(recovered.session.interpreted_event_count, 1);
+    assert_eq!(
+        recovered.athlete("a1").unwrap().status,
+        domain::AthleteStatus::Active
+    );
 }
 
 // --- what a restart must bring back (ADR 0004) ----------------------------------------
@@ -295,6 +405,47 @@ async fn a_resumed_session_keeps_the_finish_policy_it_was_armed_with() {
         "the rule the class started under, not the caller's"
     );
     assert_eq!(state.config.course.as_ref(), Some(&class_course()));
+}
+
+#[tokio::test]
+async fn recovery_does_not_apply_course_completion_under_a_different_finish_policy() {
+    let mut athlete = AthleteState::ready("a1", "CHEN YU-TING");
+    for event in [
+        domain::Interpreted::Entered {
+            station: "SKIERG".into(),
+            at: Instant(500_100),
+            transition: None,
+            started_timing: true,
+        },
+        domain::Interpreted::Exited {
+            station: "SKIERG".into(),
+            at: Instant(500_200),
+        },
+        domain::Interpreted::Entered {
+            station: "WALL BALLS".into(),
+            at: Instant(500_300),
+            transition: None,
+            started_timing: false,
+        },
+        domain::Interpreted::Exited {
+            station: "WALL BALLS".into(),
+            at: Instant(500_400),
+        },
+    ] {
+        domain::apply(&mut athlete, &event);
+    }
+    let config = SessionConfig::new("s-old")
+        .with_course(class_course())
+        .with_finish_policy(FinishPolicy::ClassDuration {
+            limit: Duration(3_600_000),
+        });
+    let store = FakeStore::new()
+        .with_session_config(armed("s-old"), Instant(500_000), Some(config.clone()))
+        .with_rebuilt_athletes(vec![athlete]);
+
+    let (state, _) = resume_or_start(&store, plan()).await.expect("resume");
+    assert_eq!(state.config.finish_policy, config.finish_policy);
+    assert_eq!(state.athlete("a1").unwrap().finished_at, None);
 }
 
 #[tokio::test]

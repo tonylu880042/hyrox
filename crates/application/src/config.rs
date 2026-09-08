@@ -11,7 +11,7 @@
 
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, HubStore};
+use crate::ports::{AuditEntry, AuditedWrite, HubStore};
 use domain::{Course, FinishPolicy, SessionConfig};
 
 /// Replaces the live session's course and finish rule, in the store first and then in
@@ -26,6 +26,9 @@ pub async fn configure<S: HubStore>(
     finish_policy: FinishPolicy,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     if !state.session.accepts_config_edits() {
         return Err(OperatorError::NotEditable {
             status: state.session.status,
@@ -36,26 +39,24 @@ pub async fn configure<S: HubStore>(
     config.course = course;
     config.finish_policy = finish_policy;
 
-    store
-        .save_session_config(&config)
-        .await
-        .map_err(OperatorError::Storage)?;
     let before = describe(&state.config);
     let after = describe(&config);
-    state.config = config;
-
     store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "SESSION_CONFIGURE".to_string(),
-            subject: state.session.id.clone(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: Some(before),
-            after: Some(after),
+        .apply_audited(AuditedWrite::SessionConfig {
+            config: config.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "SESSION_CONFIGURE".to_string(),
+                subject: state.session.id.clone(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: Some(before),
+                after: Some(after),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    state.config = config;
     Ok(())
 }
 

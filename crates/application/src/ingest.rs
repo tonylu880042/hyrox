@@ -22,9 +22,9 @@
 //! the check-in list (ADR 0001 D3, D4).
 
 use crate::live_session::LiveSession;
-use crate::ports::{HubStore, InterpretedWrite, RawRead};
-use contract::{Ack, AckStatus, CommitOutcome, EventStore, ReceivedEvent, WireError};
-use domain::{ExceptionReason, Instant, Interpreted, ReaderKey, TagId};
+use crate::ports::{HubStore, InterpretedWrite, RawInterpretationContext, RawRead, StoredRawRead};
+use contract::{Ack, AckStatus, CommitOutcome, EdgeEvent, EventStore, ReceivedEvent, WireError};
+use domain::{ExceptionReason, Instant, Interpreted, ReaderBinding, ReaderKey, TagId};
 use std::sync::Mutex;
 
 /// What one committed read turned out to mean.
@@ -83,9 +83,17 @@ pub async fn ingest_read<S: HubStore>(
     store: &S,
     received: &ReceivedEvent,
 ) -> Result<Ingested, IngestError<S::Error>> {
+    // Finish any earlier raw/interpretation handoff before deciding a later read. This keeps
+    // an EXIT from being planned against the pre-ENTRY state after a transient write failure.
+    let reconciled_pending = reconcile_pending(state, store)
+        .await
+        .map_err(IngestError::Storage)?;
+    let contexts = plan_contexts(state, received.event());
     let sink = RawSink {
         store,
         raw_event_ids: Mutex::new(Vec::new()),
+        raw_outcomes: Mutex::new(Vec::new()),
+        contexts: Mutex::new(contexts.clone()),
     };
     // Routed through `contract::ingest` on purpose: it is the only place an `Ack` can be
     // minted, and only on the line after a successful commit (ADR 0002). Doing the commit here
@@ -98,6 +106,10 @@ pub async fn ingest_read<S: HubStore>(
         })?;
     let raw_event_ids = sink
         .raw_event_ids
+        .into_inner()
+        .expect("the sink is not poisoned");
+    let raw_outcomes = sink
+        .raw_outcomes
         .into_inner()
         .expect("the sink is not poisoned");
 
@@ -114,6 +126,33 @@ pub async fn ingest_read<S: HubStore>(
             }
         }
         if all_interpreted {
+            if !reconciled_pending.is_empty() {
+                // This redelivery was the trigger that completed a durable handoff. Report the
+                // recovered interpretation once to the caller; a later redelivery, with no
+                // recovery work left, takes the ordinary Duplicate path below.
+                let mut recovered = Vec::new();
+                for &id in &raw_event_ids {
+                    if !reconciled_pending.contains(&id) {
+                        continue;
+                    }
+                    let Some(context) = store
+                        .raw_interpretation_context(id)
+                        .await
+                        .map_err(IngestError::Storage)?
+                    else {
+                        continue;
+                    };
+                    if let (Some(athlete_id), Some(event)) = (context.athlete_id, context.planned) {
+                        recovered.push(IngestOutcome::Interpreted { athlete_id, event });
+                    }
+                }
+                if !recovered.is_empty() {
+                    return Ok(Ingested {
+                        ack,
+                        outcomes: recovered,
+                    });
+                }
+            }
             return Ok(Ingested {
                 ack,
                 outcomes: vec![IngestOutcome::Duplicate],
@@ -121,16 +160,24 @@ pub async fn ingest_read<S: HubStore>(
         }
     }
 
+    // A redelivery must use the context stored with the original raw row. Re-planning it from
+    // today's reader/binding map would turn an ACKed pending row into a different event after
+    // a reconfiguration or rebind. A missing context is a legacy row, so it remains explicit
+    // and unattributable rather than being guessed into history.
     let edge = received.event();
     // Official timing, always (CLAUDE.md 11, 17). Every tag in a round was in the field at
     // the same instant, so they share it.
-    let at = Instant(edge.detected_at);
-
     // Each tag is interpreted on its own: they are different people, and one of them being
     // unbound says nothing about the next. `raw_event_ids` is in the order the tags were
     // committed, which is the order they arrived in.
     let mut outcomes = Vec::with_capacity(edge.tag_id.len());
-    for (raw_tag, raw_event_id) in edge.tag_id.iter().zip(raw_event_ids) {
+    for (((raw_tag, raw_event_id), fresh_context), outcome) in edge
+        .tag_id
+        .iter()
+        .zip(raw_event_ids)
+        .zip(contexts)
+        .zip(raw_outcomes)
+    {
         if store
             .raw_event_has_interpretation(raw_event_id)
             .await
@@ -139,48 +186,61 @@ pub async fn ingest_read<S: HubStore>(
             outcomes.push(IngestOutcome::Duplicate);
             continue;
         }
+        let context = match outcome {
+            CommitOutcome::Stored => fresh_context,
+            CommitOutcome::AlreadyStored => {
+                let Some(context) = store
+                    .raw_interpretation_context(raw_event_id)
+                    .await
+                    .map_err(IngestError::Storage)?
+                else {
+                    outcomes.push(IngestOutcome::Unattributable);
+                    continue;
+                };
+                context
+            }
+        };
         let Ok(tag) = TagId::parse(raw_tag) else {
             outcomes.push(IngestOutcome::Unattributable);
             continue;
         };
 
-        // Tag resolution across every session, not just this one: one band is on one wrist
-        // (ADR 0001 D3), so a tag held elsewhere is "someone else's", not "unbound".
-        let holder = state
-            .bindings
-            .active()
-            .find(|b| b.tag_id == tag)
-            .map(|b| (b.session_id.clone(), b.athlete_id.clone()));
-        let Some((bound_session, athlete_id)) = holder else {
+        let Some(athlete_id) = context.athlete_id.clone() else {
             state.note_pending_tag(tag.clone());
             outcomes.push(IngestOutcome::PendingBinding { tag_id: tag });
             continue;
         };
 
-        let on_roster = bound_session == state.session.id && state.athlete(&athlete_id).is_some();
-        let event = match attribute_read(
+        // The event was decided before raw commit and stored with it. Reusing this exact
+        // decision is what makes a retry safe after a reader reconfiguration or a rebind.
+        let Some(event) = context.planned.clone() else {
+            // A context with an owner but no plan is a legacy row. Keep the raw read visible
+            // and require an explicit operator correction instead of guessing a historical
+            // station from today's map.
+            outcomes.push(IngestOutcome::Unattributable);
+            continue;
+        };
+        let session_id = state.session.id.clone();
+        match commit_and_apply(
             state,
             store,
-            ReadContext {
-                athlete_id: &athlete_id,
-                on_roster,
-                device_id: edge.device_id.as_str(),
-                reader_id: edge.reader_id.as_str(),
-                raw_event_id: Some(raw_event_id),
-                at,
-            },
+            &session_id,
+            &athlete_id,
+            Some(raw_event_id),
+            &event,
         )
         .await
         {
-            Ok(event) => event,
+            Ok(()) => {}
             Err(source) => return Err(IngestError::Interpretation { ack, source }),
-        };
+        }
         outcomes.push(IngestOutcome::Interpreted { athlete_id, event });
     }
 
     if let Err(source) = store.save_session(&state.session, state.class_start).await {
         return Err(IngestError::Interpretation { ack, source });
     }
+    state.session_save_dirty = false;
 
     Ok(Ingested { ack, outcomes })
 }
@@ -193,6 +253,12 @@ pub(crate) struct ReadContext<'a> {
     pub reader_id: &'a str,
     pub raw_event_id: Option<i64>,
     pub at: Instant,
+    /// A persisted reader snapshot used by retroactive claims. Live reads leave this `None`
+    /// and resolve the current venue map once while deciding the event.
+    /// `None` means resolve the current venue map (a live read or a legacy row). `Some(None)`
+    /// means the original context explicitly saw an unknown reader and must not be re-resolved
+    /// after a later reader registration.
+    pub reader: Option<Option<ReaderBinding>>,
 }
 
 /// Interprets one read for a known athlete and folds it in -- but only after the store has
@@ -215,9 +281,11 @@ pub(crate) async fn attribute_read<S: HubStore>(
     // Reader resolution (CLAUDE.md 8). A pair that parses but is not registered, and a pair
     // that does not even parse, are the same thing to an operator: hardware the hub has no
     // mapping for.
-    let reader = ReaderKey::parse(ctx.device_id, ctx.reader_id)
-        .ok()
-        .and_then(|key| state.readers.resolve(&key).ok().map(|r| r.binding()));
+    let reader = ctx.reader.clone().unwrap_or_else(|| {
+        ReaderKey::parse(ctx.device_id, ctx.reader_id)
+            .ok()
+            .and_then(|key| state.readers.resolve(&key).ok().map(|r| r.binding()))
+    });
 
     let event = match (ctx.on_roster, reader) {
         (false, _) => Interpreted::Exception {
@@ -236,12 +304,36 @@ pub(crate) async fn attribute_read<S: HubStore>(
         }
     };
 
+    let session_id = state.session.id.clone();
+    commit_and_apply(
+        state,
+        store,
+        &session_id,
+        ctx.athlete_id,
+        ctx.raw_event_id,
+        &event,
+    )
+    .await?;
+    Ok(event)
+}
+
+/// Commits an already-decided event and folds it into the live aggregate. Deciding before the
+/// write is important for recovery; applying only after the write keeps memory and the log in
+/// sync when a store fails.
+async fn commit_and_apply<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+    session_id: &str,
+    athlete_id: &str,
+    raw_event_id: Option<i64>,
+    event: &Interpreted,
+) -> Result<(), S::Error> {
     store
         .commit_interpreted(InterpretedWrite {
-            session_id: &state.session.id,
-            athlete_id: ctx.athlete_id,
-            raw_event_id: ctx.raw_event_id,
-            event: &event,
+            session_id,
+            athlete_id,
+            raw_event_id,
+            event,
         })
         .await?;
 
@@ -251,10 +343,162 @@ pub(crate) async fn attribute_read<S: HubStore>(
         Interpreted::Exception { .. } => state.exception_count += 1,
         _ => state.session.interpreted_event_count += 1,
     }
-    if let Some(athlete) = state.athlete_mut(ctx.athlete_id) {
-        domain::apply(athlete, &event);
+    if let Some(athlete) = state.athlete_mut(athlete_id) {
+        domain::apply(athlete, event);
     }
-    Ok(event)
+    state.session_save_dirty = true;
+    Ok(())
+}
+
+/// Rebuilds derived athlete state and the exception badge after a durable correction. The dirty
+/// bit is deliberately cleared only after every read succeeds, so a transient failure can be
+/// retried by the next tick or operator boundary without trying to void/reinterpret twice.
+pub(crate) async fn rebuild_projection<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+) -> Result<(), S::Error> {
+    // Read the complete projection before changing any live field. A correction is already
+    // durable when this runs, so a later read failure must leave the old projection marked
+    // dirty and retryable rather than exposing a half-rebuilt aggregate.
+    let mut athletes = store.rebuild_athletes(&state.session.id).await?;
+    let exception_count = store.exception_count(&state.session.id).await?;
+    let interpreted_event_count = store.interpreted_event_count(&state.session.id).await?;
+    if state.config.finish_policy == domain::FinishPolicy::CourseComplete {
+        crate::finish::apply_course_completion(&mut athletes, state.config.course.as_ref());
+    }
+
+    state.athletes = athletes;
+    state.exception_count = exception_count;
+    if state.session.interpreted_event_count != interpreted_event_count {
+        state.session.interpreted_event_count = interpreted_event_count;
+        state.session_save_dirty = true;
+    }
+    state.projection_dirty = false;
+    Ok(())
+}
+
+/// Computes the immutable context for every tag before the raw rows are written. A temporary
+/// athlete vector lets two tags in one UHF round for the same athlete be decided in arrival
+/// order without mutating the live state before any interpretation is durable.
+fn plan_contexts(state: &LiveSession, edge: &EdgeEvent) -> Vec<RawInterpretationContext> {
+    let at = Instant(edge.detected_at);
+    let mut planning_athletes = state.athletes.clone();
+    edge.tag_id
+        .iter()
+        .map(|raw_tag| {
+            let reader = ReaderKey::parse(edge.device_id.as_str(), edge.reader_id.as_str())
+                .ok()
+                .and_then(|key| state.readers.resolve(&key).ok().map(|r| r.binding()));
+            let Ok(tag) = TagId::parse(raw_tag) else {
+                return RawInterpretationContext {
+                    session_id: state.session.id.clone(),
+                    athlete_id: None,
+                    bound_session_id: None,
+                    on_roster: false,
+                    reader,
+                    planned: None,
+                };
+            };
+            // Tag resolution across every session is timestamp-aware. A read before a rebind
+            // belongs to the old owner; a read before the first bind stays pending for check-in.
+            let holder = state
+                .bindings
+                .binding_at(&tag, at)
+                .map(|b| (b.session_id.clone(), b.athlete_id.clone()));
+            let (athlete_id, bound_session_id, on_roster, planned) = match holder.as_ref() {
+                None => (None, None, false, None),
+                Some((bound_session_id, athlete_id)) => {
+                    let on_roster = bound_session_id == &state.session.id
+                        && planning_athletes
+                            .iter()
+                            .any(|a| a.athlete_id == *athlete_id);
+                    let planned = if !on_roster {
+                        Some(Interpreted::Exception {
+                            reason: ExceptionReason::AthleteNotInSession,
+                            at,
+                        })
+                    } else {
+                        let athlete = planning_athletes
+                            .iter()
+                            .find(|a| a.athlete_id == *athlete_id)
+                            .expect("on_roster was checked above");
+                        let event = match reader.as_ref() {
+                            Some(reader) => domain::decide(athlete, reader, at, &state.session),
+                            None => Interpreted::Exception {
+                                reason: ExceptionReason::UnknownReader,
+                                at,
+                            },
+                        };
+                        if let Some(athlete) = planning_athletes
+                            .iter_mut()
+                            .find(|a| a.athlete_id == *athlete_id)
+                        {
+                            domain::apply(athlete, &event);
+                        }
+                        Some(event)
+                    };
+                    (
+                        Some(athlete_id.clone()),
+                        Some(bound_session_id.clone()),
+                        on_roster,
+                        planned,
+                    )
+                }
+            };
+            RawInterpretationContext {
+                session_id: state.session.id.clone(),
+                athlete_id,
+                bound_session_id,
+                on_roster,
+                reader,
+                planned,
+            }
+        })
+        .collect()
+}
+
+/// Completes raw rows whose interpretation write was interrupted after the ACK-worthy commit.
+/// Only precomputed plans are replayed; unbound rows remain available for a later check-in.
+pub async fn reconcile_pending<S: HubStore>(
+    state: &mut LiveSession,
+    store: &S,
+) -> Result<Vec<i64>, S::Error> {
+    if state.projection_dirty {
+        rebuild_projection(state, store).await?;
+    }
+    let pending = store.pending_raw_reads(&state.session.id).await?;
+    let mut repaired = Vec::new();
+    for StoredRawRead {
+        raw_event_id,
+        context,
+        ..
+    } in pending
+    {
+        let Some(context) = context else { continue };
+        let Some(event) = context.planned else {
+            continue;
+        };
+        let Some(athlete_id) = context.athlete_id else {
+            continue;
+        };
+        commit_and_apply(
+            state,
+            store,
+            &context.session_id,
+            &athlete_id,
+            Some(raw_event_id),
+            &event,
+        )
+        .await?;
+        repaired.push(raw_event_id);
+    }
+    if !repaired.is_empty() || state.session_save_dirty {
+        store
+            .save_session(&state.session, state.class_start)
+            .await?;
+        state.session_save_dirty = false;
+    }
+    Ok(repaired)
 }
 
 /// Adapts the hub's store to `contract::EventStore` so the ACK keeps its type-level guarantee,
@@ -266,6 +510,8 @@ pub(crate) async fn attribute_read<S: HubStore>(
 struct RawSink<'a, S: HubStore> {
     store: &'a S,
     raw_event_ids: Mutex<Vec<i64>>,
+    raw_outcomes: Mutex<Vec<CommitOutcome>>,
+    contexts: Mutex<Vec<RawInterpretationContext>>,
 }
 
 impl<S: HubStore> EventStore for RawSink<'_, S> {
@@ -276,27 +522,39 @@ impl<S: HubStore> EventStore for RawSink<'_, S> {
     /// ACK, and the resend finds them by their key (CLAUDE.md 16).
     async fn commit(&self, event: &ReceivedEvent) -> Result<CommitOutcome, S::Error> {
         let edge = event.event();
+        let contexts = self
+            .contexts
+            .lock()
+            .expect("the sink is not poisoned")
+            .clone();
         let mut ids = Vec::with_capacity(edge.tag_id.len());
         // `AlreadyStored` only when the *whole* round was already here. A partially stored
         // round is a resend of one the hub never finished, so it still has work to do.
         let mut every_tag_already_stored = true;
-        for tag in &edge.tag_id {
+        for (tag, context) in edge.tag_id.iter().zip(contexts.iter()) {
             let committed = self
                 .store
-                .commit_raw(&RawRead {
-                    device_id: edge.device_id.as_str().to_string(),
-                    reader_id: edge.reader_id.as_str().to_string(),
-                    boot_id: edge.boot_id,
-                    sequence: edge.sequence,
-                    tag_id: tag.clone(),
-                    detected_at: Instant(edge.detected_at),
-                    received_at: Instant(event.received_at()),
-                })
+                .commit_raw_with_context(
+                    &RawRead {
+                        device_id: edge.device_id.as_str().to_string(),
+                        reader_id: edge.reader_id.as_str().to_string(),
+                        boot_id: edge.boot_id,
+                        sequence: edge.sequence,
+                        tag_id: tag.clone(),
+                        detected_at: Instant(edge.detected_at),
+                        received_at: Instant(event.received_at()),
+                    },
+                    context,
+                )
                 .await?;
             if committed.outcome == CommitOutcome::Stored {
                 every_tag_already_stored = false;
             }
             ids.push(committed.raw_event_id);
+            self.raw_outcomes
+                .lock()
+                .expect("the sink is not poisoned")
+                .push(committed.outcome);
         }
         *self.raw_event_ids.lock().expect("the sink is not poisoned") = ids;
         Ok(if every_tag_already_stored {

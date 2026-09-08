@@ -90,8 +90,12 @@ pub struct SessionResults {
 /// would answer 404 for a session that is plainly on the floor.
 pub fn live_results(state: &crate::live_session::LiveSession) -> SessionResults {
     let policy = state.config.finish_policy;
+    let mut athletes = state.athletes.clone();
+    if policy == FinishPolicy::CourseComplete {
+        crate::finish::apply_course_completion(&mut athletes, state.config.course.as_ref());
+    }
     let bib_of = |id: &str| state.bib_of(id).unwrap_or(0) as usize;
-    let (ordering, rows) = rank(policy, &state.athletes, &bib_of);
+    let (ordering, rows) = rank(policy, &athletes, &bib_of);
     SessionResults {
         session_id: state.session.id.clone(),
         session_name: state.session.name.clone(),
@@ -113,8 +117,14 @@ pub async fn results<S: HubStore>(
         return Ok(None);
     };
     let config = store.session_config(session_id).await?;
-    let athletes = store.rebuild_athletes(session_id).await?;
+    let mut athletes = store.rebuild_athletes(session_id).await?;
     let policy = config.as_ref().map(|c| c.finish_policy).unwrap_or_default();
+    if policy == FinishPolicy::CourseComplete {
+        crate::finish::apply_course_completion(
+            &mut athletes,
+            config.as_ref().and_then(|c| c.course.as_ref()),
+        );
+    }
     let bibs = store.athlete_bibs(session_id).await?;
     let bib_of = |id: &str| {
         bibs.iter()

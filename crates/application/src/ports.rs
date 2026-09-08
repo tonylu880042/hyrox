@@ -18,8 +18,8 @@
 use contract::CommitOutcome;
 use domain::{
     AthleteState, BindingLedger, ExceptionReason, ExerciseLibrary, Instant, Interpreted, MemberRef,
-    PhysicalStation, ReaderRegistration, ReaderRegistry, Session, SessionConfig, StationMap,
-    TagBinding, WorkoutTemplate,
+    PhysicalStation, ReaderBinding, ReaderRegistration, ReaderRegistry, Session, SessionConfig,
+    StationMap, TagBinding, WorkoutTemplate,
 };
 use std::future::Future;
 
@@ -51,6 +51,109 @@ pub struct RawCommit {
     pub outcome: CommitOutcome,
 }
 
+/// Why a roster finish was written. Course completion is derived from the interpreted log,
+/// while a coach ending a class is an explicit correction/decision and must survive replay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinishOrigin {
+    Policy,
+    Manual,
+}
+
+/// A durable domain mutation and its audit record as one unit. Adapters must commit both or
+/// neither; application use cases update memory only after this call succeeds.
+#[derive(Clone, Debug)]
+pub struct AuditedInterpretedWrite {
+    pub session_id: String,
+    pub athlete_id: String,
+    pub raw_event_id: Option<i64>,
+    pub event: Interpreted,
+}
+
+#[derive(Clone, Debug)]
+pub enum AuditedWrite {
+    Session {
+        session: Session,
+        created_at: Instant,
+        audit: AuditEntry,
+    },
+    SessionConfig {
+        config: SessionConfig,
+        audit: AuditEntry,
+    },
+    Athlete {
+        session_id: String,
+        athlete_id: String,
+        display_name: String,
+        bib: i64,
+        member_id: Option<String>,
+        audit: AuditEntry,
+    },
+    Bindings {
+        bindings: Vec<TagBinding>,
+        audit: AuditEntry,
+    },
+    ReaderSave {
+        registration: ReaderRegistration,
+        audit: AuditEntry,
+    },
+    ReaderDelete {
+        device_id: String,
+        reader_id: String,
+        audit: AuditEntry,
+    },
+    ExceptionAccept {
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: String,
+        reason: Option<String>,
+        audit: AuditEntry,
+    },
+    ExceptionVoid {
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: String,
+        reason: String,
+        audit: AuditEntry,
+    },
+    ExceptionReinterpret {
+        interpreted_event_id: i64,
+        at: Instant,
+        operator: String,
+        reason: String,
+        replacement: AuditedInterpretedWrite,
+        audit: AuditEntry,
+    },
+    EndClass {
+        session: Session,
+        created_at: Instant,
+        finishes: Vec<(String, Instant)>,
+        audit: AuditEntry,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditedResult {
+    Applied(bool),
+    Interpreted(i64),
+}
+
+/// The interpretation decision made at the moment a raw read arrived.
+///
+/// Raw rows are durable before an ACK is issued, so a process can die between that commit and
+/// the interpretation write. Keeping the decision beside the raw row lets recovery commit the
+/// exact event later, even if a reader is reconfigured or a band is rebound in the meantime.
+/// `planned` is `None` for an unbound or malformed tag; those rows remain on the check-in or
+/// diagnostics path and must not be guessed into a historical result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawInterpretationContext {
+    pub session_id: String,
+    pub athlete_id: Option<String>,
+    pub bound_session_id: Option<String>,
+    pub on_roster: bool,
+    pub reader: Option<ReaderBinding>,
+    pub planned: Option<Interpreted>,
+}
+
 /// One interpretation on its way to the store. Borrowed rather than owned: the caller
 /// already holds all of it and this crosses the port once.
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +177,9 @@ pub struct StoredRawRead {
     pub reader_id: String,
     /// Official timing (CLAUDE.md 11, 17). Claiming replays in this order.
     pub detected_at: Instant,
+    /// Snapshot captured when the raw row was first committed. `None` means this raw row
+    /// predates the context table and callers must keep the legacy fallback explicit.
+    pub context: Option<RawInterpretationContext>,
 }
 
 /// One live exception, as the operator's inbox lists it (ADR 0001 D4).
@@ -139,6 +245,16 @@ pub trait HubStore {
     fn commit_raw(
         &self,
         raw: &RawRead,
+    ) -> impl Future<Output = Result<RawCommit, Self::Error>> + Send;
+
+    /// Commits a raw read together with the interpretation context that was observed at its
+    /// timestamp. Every adapter must implement this as one atomic operation: returning
+    /// success makes the raw row eligible for ACK and recovery, so silently dropping the
+    /// context would make the contract unsafe.
+    fn commit_raw_with_context(
+        &self,
+        raw: &RawRead,
+        context: &RawInterpretationContext,
     ) -> impl Future<Output = Result<RawCommit, Self::Error>> + Send;
 
     fn commit_interpreted(
@@ -270,6 +386,35 @@ pub trait HubStore {
         since: Instant,
     ) -> impl Future<Output = Result<Vec<StoredRawRead>, Self::Error>> + Send;
 
+    /// Raw rows whose interpretation was not committed yet, scoped to the session snapshot
+    /// captured at ingestion. Recovery processes these in detected-time order.
+    fn pending_raw_reads(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Vec<StoredRawRead>, Self::Error>> + Send;
+
+    /// The interpretation context captured with one raw row, regardless of which session is
+    /// active now. Redeliveries must consult this before considering any current binding or
+    /// reader configuration; `None` is an old row written before the context migration.
+    fn raw_interpretation_context(
+        &self,
+        raw_event_id: i64,
+    ) -> impl Future<Output = Result<Option<RawInterpretationContext>, Self::Error>> + Send;
+
+    /// Persist all finish decisions as one logical batch. Implementations must commit the
+    /// whole batch or none of it; a partial policy write would make retries non-deterministic.
+    fn save_athlete_finishes(
+        &self,
+        session_id: &str,
+        finishes: &[(String, Instant)],
+        origin: FinishOrigin,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn apply_audited(
+        &self,
+        write: AuditedWrite,
+    ) -> impl Future<Output = Result<AuditedResult, Self::Error>> + Send;
+
     /// `(athlete_id, bib)` for one session's roster.
     ///
     /// Separate from `rebuild_athletes` because a bib is not replayed: `AthleteState` is
@@ -299,6 +444,13 @@ pub trait HubStore {
         &self,
         session_id: &str,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send;
+
+    /// Rebuilds the lifecycle gate from durable, non-voided progress events. This repairs a
+    /// session row left one write behind by a crash after `commit_interpreted`.
+    fn interpreted_event_count(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<u64, Self::Error>> + Send;
 
     /// The live exceptions themselves, oldest first, for the operator's inbox (ADR 0001 D4).
     /// Voided ones are excluded: clearing one in the inbox clears it from the list as well

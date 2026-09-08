@@ -182,6 +182,18 @@ impl BindingLedger {
             .map(|b| b.athlete_id.as_str())
     }
 
+    /// The binding that was in force when a read was detected.
+    ///
+    /// Live ingestion must use the event's timestamp rather than today's active binding:
+    /// a band can be rebound after a read was received, and replaying that old read through
+    /// the new owner would silently move a split between athletes. The half-open window
+    /// makes a rebind at `unbound_at` take effect for reads detected at that instant.
+    pub fn binding_at(&self, tag_id: &TagId, at: Instant) -> Option<&TagBinding> {
+        self.entries.iter().rev().find(|b| {
+            &b.tag_id == tag_id && b.bound_at <= at && b.unbound_at.is_none_or(|until| at < until)
+        })
+    }
+
     pub fn tag_for_athlete(&self, session_id: &str, athlete_id: &str) -> Option<&TagId> {
         self.active_for_athlete(session_id, athlete_id)
             .map(|b| &b.tag_id)

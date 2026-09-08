@@ -8,7 +8,7 @@
 
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, HubStore, SeenReader};
+use crate::ports::{AuditEntry, AuditedResult, AuditedWrite, HubStore, SeenReader};
 use domain::{ReaderKey, ReaderRegistration};
 
 /// Registers or reconfigures one reader, in the store first and then in memory.
@@ -23,32 +23,33 @@ pub async fn register_reader<S: HubStore>(
     registration: &ReaderRegistration,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     let previous = state.readers.resolve(&registration.key).ok().cloned();
     if previous.as_ref() == Some(registration) {
         return Ok(());
     }
 
     store
-        .save_reader(registration)
-        .await
-        .map_err(OperatorError::Storage)?;
-    state.readers.register(registration.clone());
-
-    store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "READER_REGISTER".to_string(),
-            subject: format!(
-                "{}/{}",
-                registration.key.device_id, registration.key.reader_id
-            ),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: previous.map(|p| describe(&p)),
-            after: Some(describe(registration)),
+        .apply_audited(AuditedWrite::ReaderSave {
+            registration: registration.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "READER_REGISTER".to_string(),
+                subject: format!(
+                    "{}/{}",
+                    registration.key.device_id, registration.key.reader_id
+                ),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: previous.map(|p| describe(&p)),
+                after: Some(describe(registration)),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    state.readers.register(registration.clone());
     Ok(())
 }
 
@@ -95,32 +96,43 @@ pub async fn unregister_reader<S: HubStore>(
     key: &ReaderKey,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     let Some(reason) = cmd.stated_reason() else {
         return Err(OperatorError::ReasonRequired);
     };
-    let Some(existing) = state.readers.remove(key) else {
+    let Some(existing) = state.readers.resolve(key).ok().cloned() else {
         return Err(OperatorError::UnknownReader {
             device_id: key.device_id.to_string(),
             reader_id: key.reader_id.to_string(),
         });
     };
 
-    store
-        .delete_reader(&key.device_id.to_string(), key.reader_id.as_str())
-        .await
-        .map_err(OperatorError::Storage)?;
-    store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "READER_REMOVE".to_string(),
-            subject: format!("{} {}", key.device_id, key.reader_id),
-            reason: Some(reason.to_string()),
-            before: Some(format!("{} {}", existing.station, mode_name(existing.mode))),
-            after: None,
+    let applied = store
+        .apply_audited(AuditedWrite::ReaderDelete {
+            device_id: key.device_id.to_string(),
+            reader_id: key.reader_id.to_string(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "READER_REMOVE".to_string(),
+                subject: format!("{} {}", key.device_id, key.reader_id),
+                reason: Some(reason.to_string()),
+                before: Some(format!("{} {}", existing.station, mode_name(existing.mode))),
+                after: None,
+            },
         })
         .await
-        .map_err(OperatorError::Storage)
+        .map_err(OperatorError::Storage)?;
+    if !matches!(applied, AuditedResult::Applied(true)) {
+        return Err(OperatorError::UnknownReader {
+            device_id: key.device_id.to_string(),
+            reader_id: key.reader_id.to_string(),
+        });
+    }
+    state.readers.remove(key);
+    Ok(())
 }
 
 /// The mode as the audit trail spells it. Not `Debug`: a record somebody reads a year later

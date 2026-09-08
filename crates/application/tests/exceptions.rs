@@ -3,8 +3,8 @@
 mod support;
 
 use application::{
-    reinterpret, resume_or_start, HubStore, InterpretedWrite, OperatorCommand, OperatorError,
-    ReinterpretSpec, SessionPlan,
+    accept, reinterpret, resume_or_start, void, HubStore, InterpretedWrite, OperatorCommand,
+    OperatorError, ReinterpretSpec, SessionPlan,
 };
 use domain::{
     AthleteStatus, ExceptionReason, Instant, Interpreted, ReaderMode, Session, SessionConfig,
@@ -134,4 +134,44 @@ async fn reinterpret_can_reattribute_to_another_athlete() {
     assert_eq!(a2.status, AthleteStatus::Active);
     assert_eq!(a2.current_station.as_deref(), Some("ROWING"));
     assert_eq!(a2.runs[0].entered_at, Instant(1_000_150));
+}
+
+#[tokio::test]
+async fn a_durable_void_with_a_failed_rebuild_is_retried_before_the_next_action() {
+    let mut store = FakeStore::new();
+    let (mut state, _) = resume_or_start(&store, running_plan()).await.unwrap();
+    let event_id = seed_exception(&store, "a1", Instant(1_000_100)).await;
+    state.exception_count = 1;
+
+    store.fail_rebuild_athletes = true;
+    let cmd = OperatorCommand::new(OP, Instant(1_000_200)).with_reason("誤讀");
+    let result = void(&mut state, &store, event_id, &cmd).await;
+    assert!(matches!(result, Err(OperatorError::Storage(_))));
+
+    // The durable void is not replayed a second time. The next operator boundary first
+    // repairs the dirty projection, then reports that the already-voided row is unknown.
+    store.fail_rebuild_athletes = false;
+    let result = void(&mut state, &store, event_id, &cmd).await;
+    assert!(matches!(result, Err(OperatorError::UnknownEvent(id)) if id == event_id));
+    assert_eq!(state.exception_count, 0);
+}
+
+#[tokio::test]
+async fn an_accepted_exception_badge_read_failure_is_retried_without_reaccepting() {
+    let mut store = FakeStore::new();
+    let (mut state, _) = resume_or_start(&store, running_plan()).await.unwrap();
+    let first = seed_exception(&store, "a1", Instant(1_000_100)).await;
+    let second = seed_exception(&store, "a2", Instant(1_000_110)).await;
+    state.exception_count = 2;
+
+    store.fail_exception_count = true;
+    let cmd = OperatorCommand::new(OP, Instant(1_000_200));
+    let result = accept(&mut state, &store, first, &cmd).await;
+    assert!(matches!(result, Err(OperatorError::Storage(_))));
+
+    store.fail_exception_count = false;
+    accept(&mut state, &store, second, &cmd)
+        .await
+        .expect("retry should rebuild the badge before accepting");
+    assert_eq!(state.exception_count, 0);
 }

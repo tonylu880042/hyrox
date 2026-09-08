@@ -11,7 +11,9 @@
 
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, HubStore, InterpretedWrite, StoredException};
+use crate::ports::{
+    AuditEntry, AuditedInterpretedWrite, AuditedResult, AuditedWrite, HubStore, StoredException,
+};
 use domain::{AthleteStatus, Instant, Interpreted, ReaderMode};
 
 /// What the operator wants to reinterpret an exception into (ADR 0001 D4; CLAUDE.md 20).
@@ -58,39 +60,40 @@ pub async fn accept<S: HubStore>(
     interpreted_event_id: i64,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    let accepted = store
-        .acknowledge_interpreted(
-            interpreted_event_id,
-            cmd.at,
-            &cmd.operator,
-            cmd.stated_reason(),
-        )
+    crate::ingest::reconcile_pending(state, store)
         .await
         .map_err(OperatorError::Storage)?;
-    if !accepted {
-        return Err(OperatorError::UnknownEvent(interpreted_event_id));
-    }
-
-    store
-        .record_audit(&AuditEntry {
+    let accepted = store
+        .apply_audited(AuditedWrite::ExceptionAccept {
+            interpreted_event_id,
             at: cmd.at,
             operator: cmd.operator.clone(),
-            action: "EXCEPTION_ACCEPT".to_string(),
-            subject: interpreted_event_id.to_string(),
             reason: cmd.stated_reason().map(str::to_string),
-            before: None,
-            after: Some("ACCEPTED".to_string()),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "EXCEPTION_ACCEPT".to_string(),
+                subject: interpreted_event_id.to_string(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: None,
+                after: Some("ACCEPTED".to_string()),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    if !matches!(accepted, AuditedResult::Applied(true)) {
+        return Err(OperatorError::UnknownEvent(interpreted_event_id));
+    }
 
     // Only the badge moves. Athlete state is not rebuilt, because nothing that replays has
     // changed -- and rebuilding the whole class to clear one notification would be the
     // expensive way to do nothing.
+    state.projection_dirty = true;
     state.exception_count = store
         .exception_count(&state.session.id)
         .await
         .map_err(OperatorError::Storage)?;
+    state.projection_dirty = false;
     Ok(())
 }
 
@@ -109,30 +112,34 @@ pub async fn void<S: HubStore>(
     interpreted_event_id: i64,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     let Some(reason) = cmd.stated_reason() else {
         return Err(OperatorError::ReasonRequired);
     };
 
     let voided = store
-        .void_interpreted(interpreted_event_id, cmd.at, &cmd.operator, reason)
-        .await
-        .map_err(OperatorError::Storage)?;
-    if !voided {
-        return Err(OperatorError::UnknownEvent(interpreted_event_id));
-    }
-
-    store
-        .record_audit(&AuditEntry {
+        .apply_audited(AuditedWrite::ExceptionVoid {
+            interpreted_event_id,
             at: cmd.at,
             operator: cmd.operator.clone(),
-            action: "EVENT_VOID".to_string(),
-            subject: interpreted_event_id.to_string(),
-            reason: Some(reason.to_string()),
-            before: None,
-            after: Some("VOIDED".to_string()),
+            reason: reason.to_string(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "EVENT_VOID".to_string(),
+                subject: interpreted_event_id.to_string(),
+                reason: Some(reason.to_string()),
+                before: None,
+                after: Some("VOIDED".to_string()),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    if !matches!(voided, AuditedResult::Applied(true)) {
+        return Err(OperatorError::UnknownEvent(interpreted_event_id));
+    }
 
     recalculate(state, store).await
 }
@@ -146,6 +153,9 @@ pub async fn reinterpret<S: HubStore>(
     spec: ReinterpretSpec,
     cmd: &OperatorCommand,
 ) -> Result<i64, OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     let Some(reason) = cmd.stated_reason() else {
         return Err(OperatorError::ReasonRequired);
     };
@@ -187,39 +197,36 @@ pub async fn reinterpret<S: HubStore>(
         },
     };
 
-    let voided = store
-        .void_interpreted(interpreted_event_id, cmd.at, &cmd.operator, reason)
-        .await
-        .map_err(OperatorError::Storage)?;
-    if !voided {
-        return Err(OperatorError::UnknownEvent(interpreted_event_id));
-    }
-
-    let new_id = store
-        .commit_interpreted(InterpretedWrite {
-            session_id: &state.session.id,
-            athlete_id: target_athlete_id,
-            raw_event_id: exception.raw_event_id,
-            event: &new_event,
-        })
-        .await
-        .map_err(OperatorError::Storage)?;
-
-    store
-        .record_audit(&AuditEntry {
+    let result = store
+        .apply_audited(AuditedWrite::ExceptionReinterpret {
+            interpreted_event_id,
             at: cmd.at,
             operator: cmd.operator.clone(),
-            action: "EVENT_REINTERPRET".to_string(),
-            subject: interpreted_event_id.to_string(),
-            reason: Some(reason.to_string()),
-            before: Some(format!("EXCEPTION: {:?}", exception.reason)),
-            after: Some(format!(
-                "INTERPRETED: {new_id}, {target_athlete_id}, {}, {:?}",
-                spec.station, spec.mode
-            )),
+            reason: reason.to_string(),
+            replacement: AuditedInterpretedWrite {
+                session_id: state.session.id.clone(),
+                athlete_id: target_athlete_id.to_string(),
+                raw_event_id: exception.raw_event_id,
+                event: new_event.clone(),
+            },
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "EVENT_REINTERPRET".to_string(),
+                subject: interpreted_event_id.to_string(),
+                reason: Some(reason.to_string()),
+                before: Some(format!("EXCEPTION: {:?}", exception.reason)),
+                after: Some(format!(
+                    "INTERPRETED: {}, {}, {:?}",
+                    target_athlete_id, spec.station, spec.mode,
+                )),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    let AuditedResult::Interpreted(new_id) = result else {
+        return Err(OperatorError::UnknownEvent(interpreted_event_id));
+    };
 
     recalculate(state, store).await?;
     Ok(new_id)
@@ -235,13 +242,8 @@ pub(crate) async fn recalculate<S: HubStore>(
     state: &mut LiveSession,
     store: &S,
 ) -> Result<(), OperatorError<S::Error>> {
-    state.athletes = store
-        .rebuild_athletes(&state.session.id)
+    state.projection_dirty = true;
+    crate::ingest::rebuild_projection(state, store)
         .await
-        .map_err(OperatorError::Storage)?;
-    state.exception_count = store
-        .exception_count(&state.session.id)
-        .await
-        .map_err(OperatorError::Storage)?;
-    Ok(())
+        .map_err(OperatorError::Storage)
 }

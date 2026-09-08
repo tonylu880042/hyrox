@@ -11,8 +11,8 @@
 
 use api::{Clock, Hub};
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, LiveSession, RawCommit, RawRead, SeenReader,
-    StoredException, StoredRawRead,
+    AuditEntry, AuditedResult, AuditedWrite, FinishOrigin, HubStore, InterpretedWrite, LiveSession,
+    RawCommit, RawInterpretationContext, RawRead, SeenReader, StoredException, StoredRawRead,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -52,6 +52,7 @@ impl Clock for FixedClock {
 #[derive(Default)]
 struct Inner {
     raw: Vec<RawRead>,
+    raw_contexts: Vec<(i64, RawInterpretationContext)>,
     interpreted: Vec<(String, Option<i64>, Interpreted)>,
     voided: Vec<i64>,
     accepted: Vec<i64>,
@@ -204,6 +205,38 @@ impl HubStore for FakeStore {
         })
     }
 
+    async fn commit_raw_with_context(
+        &self,
+        raw: &RawRead,
+        context: &RawInterpretationContext,
+    ) -> Result<RawCommit, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let existing = inner.raw.iter().position(|r| {
+            r.device_id == raw.device_id
+                && r.boot_id == raw.boot_id
+                && r.sequence == raw.sequence
+                && r.tag_id == raw.tag_id
+        });
+        let (id, inserted) = match existing {
+            Some(i) => (i as i64 + 1, false),
+            None => {
+                inner.raw.push(raw.clone());
+                (inner.raw.len() as i64, true)
+            }
+        };
+        if !inner.raw_contexts.iter().any(|(raw_id, _)| *raw_id == id) {
+            inner.raw_contexts.push((id, context.clone()));
+        }
+        Ok(RawCommit {
+            raw_event_id: id,
+            outcome: if inserted {
+                CommitOutcome::Stored
+            } else {
+                CommitOutcome::AlreadyStored
+            },
+        })
+    }
+
     async fn commit_interpreted(&self, w: InterpretedWrite<'_>) -> Result<i64, FakeError> {
         let mut inner = self.inner.lock().unwrap();
         inner
@@ -268,6 +301,190 @@ impl HubStore for FakeStore {
             }
         }
         Ok(())
+    }
+
+    async fn save_athlete_finishes(
+        &self,
+        _session_id: &str,
+        finishes: &[(String, Instant)],
+        _origin: FinishOrigin,
+    ) -> Result<(), FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        for (athlete_id, at) in finishes {
+            if let Some(a) = inner
+                .athletes
+                .iter_mut()
+                .find(|a| a.athlete_id == *athlete_id)
+            {
+                domain::finish(a, *at);
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_audited(&self, write: AuditedWrite) -> Result<AuditedResult, FakeError> {
+        let mut inner = self.inner.lock().unwrap();
+        let audit = match &write {
+            AuditedWrite::Session { audit, .. }
+            | AuditedWrite::SessionConfig { audit, .. }
+            | AuditedWrite::Athlete { audit, .. }
+            | AuditedWrite::Bindings { audit, .. }
+            | AuditedWrite::ReaderSave { audit, .. }
+            | AuditedWrite::ReaderDelete { audit, .. }
+            | AuditedWrite::ExceptionAccept { audit, .. }
+            | AuditedWrite::ExceptionVoid { audit, .. }
+            | AuditedWrite::ExceptionReinterpret { audit, .. }
+            | AuditedWrite::EndClass { audit, .. } => audit.clone(),
+        };
+        let result = match write {
+            AuditedWrite::Session { session, .. } => {
+                match inner.sessions.iter_mut().find(|s| s.id == session.id) {
+                    Some(existing) => *existing = session,
+                    None => inner.sessions.push(session),
+                }
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::EndClass {
+                session, finishes, ..
+            } => {
+                for (athlete_id, at) in finishes {
+                    if let Some(athlete) = inner
+                        .athletes
+                        .iter_mut()
+                        .find(|athlete| athlete.athlete_id == athlete_id)
+                    {
+                        domain::finish(athlete, at);
+                    }
+                }
+                match inner.sessions.iter_mut().find(|s| s.id == session.id) {
+                    Some(existing) => *existing = session,
+                    None => inner.sessions.push(session),
+                }
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::SessionConfig { config, .. } => {
+                match inner
+                    .configs
+                    .iter_mut()
+                    .find(|c| c.session_id == config.session_id)
+                {
+                    Some(existing) => *existing = config,
+                    None => inner.configs.push(config),
+                }
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::Athlete {
+                athlete_id,
+                display_name,
+                bib,
+                member_id,
+                ..
+            } => {
+                inner
+                    .athletes
+                    .push(AthleteState::ready(&athlete_id, &display_name));
+                inner.roster.push(SavedAthlete {
+                    athlete_id,
+                    display_name,
+                    bib,
+                    member_id,
+                });
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::Bindings { bindings, .. } => {
+                for binding in bindings {
+                    if let Some(existing) = inner.bindings.iter_mut().find(|existing| {
+                        existing.session_id == binding.session_id
+                            && existing.tag_id == binding.tag_id
+                            && existing.bound_at == binding.bound_at
+                    }) {
+                        existing.unbound_at = binding.unbound_at;
+                    } else {
+                        inner.bindings.push(binding);
+                    }
+                }
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::ReaderSave { registration, .. } => {
+                match inner.readers.iter_mut().find(|r| r.key == registration.key) {
+                    Some(existing) => *existing = registration,
+                    None => inner.readers.push(registration),
+                }
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::ReaderDelete {
+                device_id,
+                reader_id,
+                ..
+            } => {
+                let before = inner.readers.len();
+                inner.readers.retain(|r| {
+                    r.key.device_id.as_str() != device_id || r.key.reader_id.as_str() != reader_id
+                });
+                if inner.readers.len() != before {
+                    inner
+                        .deleted_readers
+                        .push((device_id.clone(), reader_id.clone()));
+                }
+                AuditedResult::Applied(inner.readers.len() != before)
+            }
+            AuditedWrite::ExceptionAccept {
+                interpreted_event_id,
+                ..
+            } => {
+                if matches!(
+                    inner
+                        .interpreted
+                        .get(interpreted_event_id as usize - 1)
+                        .map(|(_, _, event)| event),
+                    Some(Interpreted::Exception { .. })
+                ) {
+                    inner.accepted.push(interpreted_event_id);
+                    AuditedResult::Applied(true)
+                } else {
+                    AuditedResult::Applied(false)
+                }
+            }
+            AuditedWrite::ExceptionVoid {
+                interpreted_event_id,
+                ..
+            } => {
+                if interpreted_event_id < 1
+                    || interpreted_event_id as usize > inner.interpreted.len()
+                    || inner.voided.contains(&interpreted_event_id)
+                {
+                    AuditedResult::Applied(false)
+                } else {
+                    inner.voided.push(interpreted_event_id);
+                    AuditedResult::Applied(true)
+                }
+            }
+            AuditedWrite::ExceptionReinterpret {
+                interpreted_event_id,
+                replacement,
+                ..
+            } => {
+                if matches!(
+                    inner
+                        .interpreted
+                        .get(interpreted_event_id as usize - 1)
+                        .map(|(_, _, event)| event),
+                    Some(Interpreted::Exception { .. })
+                ) {
+                    inner.voided.push(interpreted_event_id);
+                    inner.interpreted.push((
+                        replacement.athlete_id,
+                        replacement.raw_event_id,
+                        replacement.event,
+                    ));
+                    AuditedResult::Interpreted(inner.interpreted.len() as i64)
+                } else {
+                    AuditedResult::Applied(false)
+                }
+            }
+        };
+        inner.audits.push(audit);
+        Ok(result)
     }
 
     async fn active_session(&self) -> Result<Option<Session>, FakeError> {
@@ -383,10 +600,56 @@ impl HubStore for FakeStore {
                 device_id: r.device_id.clone(),
                 reader_id: r.reader_id.clone(),
                 detected_at: r.detected_at,
+                context: inner
+                    .raw_contexts
+                    .iter()
+                    .find(|(raw_id, _)| *raw_id == i as i64 + 1)
+                    .map(|(_, c)| c.clone()),
             })
             .collect();
         out.sort_by_key(|r| (r.detected_at, r.raw_event_id));
         Ok(out)
+    }
+
+    async fn pending_raw_reads(&self, session_id: &str) -> Result<Vec<StoredRawRead>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .raw_contexts
+            .iter()
+            .filter(|(raw_id, context)| {
+                context.session_id == session_id
+                    && !inner
+                        .interpreted
+                        .iter()
+                        .any(|(_, raw, _)| *raw == Some(*raw_id))
+            })
+            .filter_map(|(raw_id, context)| {
+                inner
+                    .raw
+                    .get(*raw_id as usize - 1)
+                    .map(|raw| StoredRawRead {
+                        raw_event_id: *raw_id,
+                        device_id: raw.device_id.clone(),
+                        reader_id: raw.reader_id.clone(),
+                        detected_at: raw.detected_at,
+                        context: Some(context.clone()),
+                    })
+            })
+            .collect())
+    }
+
+    async fn raw_interpretation_context(
+        &self,
+        raw_event_id: i64,
+    ) -> Result<Option<RawInterpretationContext>, FakeError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .raw_contexts
+            .iter()
+            .find(|(id, _)| *id == raw_event_id)
+            .map(|(_, context)| context.clone()))
     }
 
     async fn athlete_bibs(&self, _session_id: &str) -> Result<Vec<(String, i64)>, FakeError> {
@@ -442,6 +705,19 @@ impl HubStore for FakeStore {
                     && !inner.accepted.contains(&(*i as i64 + 1))
             })
             .count())
+    }
+
+    async fn interpreted_event_count(&self, _session_id: &str) -> Result<u64, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .interpreted
+            .iter()
+            .enumerate()
+            .filter(|(i, (_, _, event))| {
+                !matches!(event, Interpreted::Exception { .. })
+                    && !inner.voided.contains(&(*i as i64 + 1))
+            })
+            .count() as u64)
     }
 
     async fn exceptions(&self, _session_id: &str) -> Result<Vec<StoredException>, FakeError> {

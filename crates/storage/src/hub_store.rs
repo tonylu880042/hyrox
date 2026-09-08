@@ -6,8 +6,8 @@
 
 use crate::{RawEvent, Store, StoreError};
 use application::{
-    AuditEntry, HubStore, InterpretedWrite, RawCommit, RawRead, SeenReader, StoredException,
-    StoredRawRead, VenueAsset,
+    AuditEntry, AuditedResult, AuditedWrite, FinishOrigin, HubStore, InterpretedWrite, RawCommit,
+    RawInterpretationContext, RawRead, SeenReader, StoredException, StoredRawRead, VenueAsset,
 };
 use contract::CommitOutcome;
 use domain::{
@@ -32,6 +32,35 @@ impl HubStore for Store {
                 detected_at: raw.detected_at,
                 received_at: raw.received_at,
             })
+            .await?;
+        Ok(RawCommit {
+            raw_event_id: id,
+            outcome: if inserted {
+                CommitOutcome::Stored
+            } else {
+                CommitOutcome::AlreadyStored
+            },
+        })
+    }
+
+    async fn commit_raw_with_context(
+        &self,
+        raw: &RawRead,
+        context: &RawInterpretationContext,
+    ) -> Result<RawCommit, StoreError> {
+        let (id, inserted) = self
+            .save_raw_with_context(
+                &RawEvent {
+                    device_id: raw.device_id.clone(),
+                    reader_id: raw.reader_id.clone(),
+                    boot_id: raw.boot_id,
+                    sequence: raw.sequence,
+                    tag_id: raw.tag_id.clone(),
+                    detected_at: raw.detected_at,
+                    received_at: raw.received_at,
+                },
+                context,
+            )
             .await?;
         Ok(RawCommit {
             raw_event_id: id,
@@ -88,6 +117,19 @@ impl HubStore for Store {
         Store::save_athlete_finish(self, session_id, athlete_id, finished_at).await
     }
 
+    async fn save_athlete_finishes(
+        &self,
+        session_id: &str,
+        finishes: &[(String, Instant)],
+        origin: FinishOrigin,
+    ) -> Result<(), StoreError> {
+        Store::save_athlete_finishes(self, session_id, finishes, origin).await
+    }
+
+    async fn apply_audited(&self, write: AuditedWrite) -> Result<AuditedResult, StoreError> {
+        Store::apply_audited(self, write).await
+    }
+
     async fn rebuild_athletes(&self, session_id: &str) -> Result<Vec<AthleteState>, StoreError> {
         Store::rebuild_athletes(self, session_id).await
     }
@@ -98,6 +140,10 @@ impl HubStore for Store {
 
     async fn exception_count(&self, session_id: &str) -> Result<usize, StoreError> {
         Ok(Store::exception_count(self, session_id).await? as usize)
+    }
+
+    async fn interpreted_event_count(&self, session_id: &str) -> Result<u64, StoreError> {
+        Store::interpreted_event_count(self, session_id).await
     }
 
     async fn exceptions(&self, session_id: &str) -> Result<Vec<StoredException>, StoreError> {
@@ -207,6 +253,17 @@ impl HubStore for Store {
         since: Instant,
     ) -> Result<Vec<StoredRawRead>, StoreError> {
         Store::unclaimed_reads_for_tag(self, tag_id, since).await
+    }
+
+    async fn pending_raw_reads(&self, session_id: &str) -> Result<Vec<StoredRawRead>, StoreError> {
+        Store::pending_raw_reads(self, session_id).await
+    }
+
+    async fn raw_interpretation_context(
+        &self,
+        raw_event_id: i64,
+    ) -> Result<Option<RawInterpretationContext>, StoreError> {
+        Store::raw_interpretation_context(self, raw_event_id).await
     }
 
     // --- the workout library (ADR 0008) --------------------------------------------------

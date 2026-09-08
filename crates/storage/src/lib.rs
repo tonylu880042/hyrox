@@ -6,10 +6,13 @@
 mod hub_store;
 mod workout;
 
-use application::{AuditEntry, SeenReader, StoredException, StoredRawRead, VenueAsset};
+use application::{
+    AuditEntry, FinishOrigin, RawInterpretationContext, SeenReader, StoredException, StoredRawRead,
+    VenueAsset,
+};
 use domain::{
-    AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, ReaderKey,
-    ReaderMode, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
+    AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, ReaderBinding,
+    ReaderKey, ReaderMode, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
     SessionStatus, TagBinding, TagId,
 };
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
@@ -62,6 +65,233 @@ pub struct Store {
 }
 
 impl Store {
+    /// Applies one domain mutation and its audit row in the same SQLite transaction. The
+    /// regular single-purpose methods remain for non-audited ingestion/derived writes; operator
+    /// mutations use this boundary so a failed audit cannot leave memory and durable state
+    /// disagreeing.
+    pub async fn apply_audited(
+        &self,
+        write: application::AuditedWrite,
+    ) -> Result<application::AuditedResult, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let result = match write {
+            application::AuditedWrite::Session {
+                session,
+                created_at,
+                audit,
+            } => {
+                save_session_tx(&mut tx, &session, created_at).await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::SessionConfig { config, audit } => {
+                let json = serde_json::to_string(&config)
+                    .map_err(|e| StoreError::Corrupt(format!("session config: {e}")))?;
+                sqlx::query(
+                    "INSERT INTO session_configs (session_id, config_json) VALUES (?1, ?2)
+                     ON CONFLICT(session_id) DO UPDATE SET config_json = excluded.config_json",
+                )
+                .bind(&config.session_id)
+                .bind(json)
+                .execute(&mut *tx)
+                .await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::Athlete {
+                session_id,
+                athlete_id,
+                display_name,
+                bib,
+                member_id,
+                audit,
+            } => {
+                sqlx::query(
+                    "INSERT INTO session_athletes
+                        (session_id, athlete_id, display_name, bib, member_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(session_id, athlete_id) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        bib = excluded.bib,
+                        member_id = excluded.member_id",
+                )
+                .bind(session_id)
+                .bind(athlete_id)
+                .bind(display_name)
+                .bind(bib)
+                .bind(member_id)
+                .execute(&mut *tx)
+                .await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::Bindings { bindings, audit } => {
+                for binding in bindings {
+                    sqlx::query(
+                        "INSERT INTO tag_bindings
+                            (session_id, tag_id, athlete_id, bound_at, unbound_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)
+                         ON CONFLICT(session_id, tag_id, bound_at) DO UPDATE SET
+                            unbound_at = excluded.unbound_at",
+                    )
+                    .bind(binding.session_id)
+                    .bind(binding.tag_id.to_string())
+                    .bind(binding.athlete_id)
+                    .bind(binding.bound_at.0)
+                    .bind(binding.unbound_at.map(|at| at.0))
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::ReaderSave {
+                registration,
+                audit,
+            } => {
+                sqlx::query(
+                    "INSERT INTO readers (device_id, reader_id, station, zone, mode)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(device_id, reader_id) DO UPDATE SET
+                        station = excluded.station,
+                        zone = excluded.zone,
+                        mode = excluded.mode",
+                )
+                .bind(registration.key.device_id.as_str())
+                .bind(registration.key.reader_id.as_str())
+                .bind(&registration.station)
+                .bind(registration.zone.as_deref())
+                .bind(reader_mode_str(registration.mode))
+                .execute(&mut *tx)
+                .await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::ReaderDelete {
+                device_id,
+                reader_id,
+                audit,
+            } => {
+                let changed =
+                    sqlx::query("DELETE FROM readers WHERE device_id = ?1 AND reader_id = ?2")
+                        .bind(device_id)
+                        .bind(reader_id)
+                        .execute(&mut *tx)
+                        .await?
+                        .rows_affected()
+                        > 0;
+                if changed {
+                    audit_tx(&mut tx, &audit).await?;
+                }
+                application::AuditedResult::Applied(changed)
+            }
+            application::AuditedWrite::ExceptionAccept {
+                interpreted_event_id,
+                at,
+                operator,
+                reason,
+                audit,
+            } => {
+                let changed = sqlx::query(
+                    "UPDATE interpreted_events
+                        SET acknowledged_at = ?2, acknowledged_by = ?3,
+                            acknowledge_reason = ?4
+                      WHERE id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+                )
+                .bind(interpreted_event_id)
+                .bind(at.0)
+                .bind(operator)
+                .bind(reason)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+                if changed {
+                    audit_tx(&mut tx, &audit).await?;
+                }
+                application::AuditedResult::Applied(changed)
+            }
+            application::AuditedWrite::ExceptionVoid {
+                interpreted_event_id,
+                at,
+                operator,
+                reason,
+                audit,
+            } => {
+                let changed = sqlx::query(
+                    "UPDATE interpreted_events
+                        SET voided_at = ?2, voided_by = ?3, void_reason = ?4
+                      WHERE id = ?1 AND voided_at IS NULL",
+                )
+                .bind(interpreted_event_id)
+                .bind(at.0)
+                .bind(operator)
+                .bind(reason)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+                if changed {
+                    audit_tx(&mut tx, &audit).await?;
+                }
+                application::AuditedResult::Applied(changed)
+            }
+            application::AuditedWrite::ExceptionReinterpret {
+                interpreted_event_id,
+                at,
+                operator,
+                reason,
+                replacement,
+                audit,
+            } => {
+                let changed = sqlx::query(
+                    "UPDATE interpreted_events
+                        SET voided_at = ?2, voided_by = ?3, void_reason = ?4
+                      WHERE id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+                )
+                .bind(interpreted_event_id)
+                .bind(at.0)
+                .bind(&operator)
+                .bind(&reason)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+                if !changed {
+                    application::AuditedResult::Applied(false)
+                } else {
+                    let id = insert_interpreted_tx(&mut tx, &replacement).await?;
+                    audit_tx(&mut tx, &audit).await?;
+                    application::AuditedResult::Interpreted(id)
+                }
+            }
+            application::AuditedWrite::EndClass {
+                session,
+                created_at,
+                finishes,
+                audit,
+            } => {
+                for (athlete_id, at) in finishes {
+                    sqlx::query(
+                        "UPDATE session_athletes
+                            SET finished_at = ?3, finish_origin = 'MANUAL'
+                          WHERE session_id = ?1 AND athlete_id = ?2",
+                    )
+                    .bind(&session.id)
+                    .bind(athlete_id)
+                    .bind(at.0)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                save_session_tx(&mut tx, &session, created_at).await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+        };
+        tx.commit().await?;
+        Ok(result)
+    }
+
     /// Opens (creating if needed) the database at `path` and applies migrations.
     /// WAL keeps readers unblocked while ingestion writes (CLAUDE.md 19).
     pub async fn open(path: &str) -> Result<Self, StoreError> {
@@ -258,6 +488,73 @@ impl Store {
         Ok((id, true))
     }
 
+    /// Commits a raw row and the interpretation context that was observed for it in one
+    /// transaction. The context is insert-once: a redelivery must not overwrite the original
+    /// reader/binding decision with a newer venue configuration.
+    pub async fn save_raw_with_context(
+        &self,
+        e: &RawEvent,
+        context: &RawInterpretationContext,
+    ) -> Result<(i64, bool), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM raw_events
+             WHERE device_id = ?1 AND boot_id = ?2 AND sequence = ?3 AND tag_id = ?4",
+        )
+        .bind(&e.device_id)
+        .bind(e.boot_id)
+        .bind(e.sequence)
+        .bind(&e.tag_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let (id, inserted) = if let Some(id) = existing {
+            (id, false)
+        } else {
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO raw_events
+                    (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+            )
+            .bind(&e.device_id)
+            .bind(&e.reader_id)
+            .bind(e.boot_id)
+            .bind(e.sequence)
+            .bind(&e.tag_id)
+            .bind(e.detected_at.0)
+            .bind(e.received_at.0)
+            .fetch_one(&mut *tx)
+            .await?;
+            (id, true)
+        };
+
+        if inserted {
+            let planned_json = context
+                .planned
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
+            sqlx::query(
+                "INSERT INTO raw_interpretation_context
+                    (raw_event_id, session_id, athlete_id, bound_session_id, on_roster,
+                     reader_station, reader_mode, planned_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(raw_event_id) DO NOTHING",
+            )
+            .bind(id)
+            .bind(&context.session_id)
+            .bind(context.athlete_id.as_deref())
+            .bind(context.bound_session_id.as_deref())
+            .bind(context.on_roster as i64)
+            .bind(context.reader.as_ref().map(|r| r.station.as_str()))
+            .bind(context.reader.as_ref().map(|r| reader_mode_str(r.mode)))
+            .bind(planned_json)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok((id, inserted))
+    }
+
     pub async fn save_interpreted(
         &self,
         session_id: &str,
@@ -423,7 +720,7 @@ impl Store {
         finished_at: Option<Instant>,
     ) -> Result<(), StoreError> {
         sqlx::query(
-            "UPDATE session_athletes SET finished_at = ?3
+            "UPDATE session_athletes SET finished_at = ?3, finish_origin = 'MANUAL'
              WHERE session_id = ?1 AND athlete_id = ?2",
         )
         .bind(session_id)
@@ -434,12 +731,36 @@ impl Store {
         Ok(())
     }
 
+    pub async fn save_athlete_finishes(
+        &self,
+        session_id: &str,
+        finishes: &[(String, Instant)],
+        origin: FinishOrigin,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        for (athlete_id, at) in finishes {
+            sqlx::query(
+                "UPDATE session_athletes SET finished_at = ?3, finish_origin = ?4
+                 WHERE session_id = ?1 AND athlete_id = ?2",
+            )
+            .bind(session_id)
+            .bind(athlete_id)
+            .bind(at.0)
+            .bind(finish_origin_name(origin))
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn rebuild_athletes(
         &self,
         session_id: &str,
     ) -> Result<Vec<AthleteState>, StoreError> {
+        let config = self.session_config(session_id).await?;
         let roster = sqlx::query(
-            "SELECT athlete_id, display_name, finished_at FROM session_athletes
+            "SELECT athlete_id, display_name, finished_at, finish_origin FROM session_athletes
              WHERE session_id = ?1 ORDER BY bib",
         )
         .bind(session_id)
@@ -451,6 +772,21 @@ impl Store {
                     started_timing, exception_reason
              FROM interpreted_events
              WHERE session_id = ?1 AND voided_at IS NULL
+             ORDER BY detected_at, id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Keep a second replay that includes voided rows only for class-completion legacy
+        // detection. A pre-0013 roster value may have been written by the old
+        // CourseComplete implementation; if its timestamp matches the final exit even after
+        // that exit was voided, it is policy-derived and must not resurrect on rebuild.
+        let historical_rows = sqlx::query(
+            "SELECT athlete_id, kind, station, detected_at, transition_ms,
+                    started_timing, exception_reason
+             FROM interpreted_events
+             WHERE session_id = ?1
              ORDER BY detected_at, id",
         )
         .bind(session_id)
@@ -475,13 +811,45 @@ impl Store {
             domain::apply(state, &row_to_interpreted(r)?);
         }
 
+        let mut historical: Vec<AthleteState> = roster
+            .iter()
+            .map(|r| {
+                AthleteState::ready(
+                    r.get::<String, _>("athlete_id"),
+                    r.get::<String, _>("display_name"),
+                )
+            })
+            .collect();
+        for r in &historical_rows {
+            let aid: String = r.get("athlete_id");
+            let Some(state) = historical.iter_mut().find(|a| a.athlete_id == aid) else {
+                continue;
+            };
+            domain::apply(state, &row_to_interpreted(r)?);
+        }
+
         // After the replay, not before: a finish the clock decided comes at the end of the
-        // class, so applying it first would let a later read reopen a closed result.
+        // class, so applying it first would let a later read reopen a closed result. Course
+        // completion is different: its answer is already in the interpreted exit log, so a
+        // policy-origin finish must not survive a void/replay. Manual end-class finishes do.
         for r in &roster {
             let Some(ms) = r.get::<Option<i64>, _>("finished_at") else {
                 continue;
             };
             let aid: String = r.get("athlete_id");
+            let origin = r.get::<Option<String>, _>("finish_origin");
+            if config
+                .as_ref()
+                .is_some_and(|c| c.finish_policy == domain::FinishPolicy::CourseComplete)
+                && !stored_finish_is_manual(
+                    origin.as_deref(),
+                    Instant(ms),
+                    historical.iter().find(|a| a.athlete_id == aid),
+                    config.as_ref().and_then(|c| c.course.as_ref()),
+                )
+            {
+                continue;
+            }
             if let Some(state) = out.iter_mut().find(|a| a.athlete_id == aid) {
                 domain::finish(state, Instant(ms));
             }
@@ -548,6 +916,17 @@ impl Store {
         .await?)
     }
 
+    pub async fn interpreted_event_count(&self, session_id: &str) -> Result<u64, StoreError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM interpreted_events
+             WHERE session_id = ?1 AND voided_at IS NULL AND kind <> 'EXCEPTION'",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count as u64)
+    }
+
     pub async fn raw_event_count(&self) -> Result<i64, StoreError> {
         Ok(sqlx::query_scalar("SELECT COUNT(*) FROM raw_events")
             .fetch_one(&self.pool)
@@ -585,6 +964,106 @@ fn row_to_interpreted(r: &sqlx::sqlite::SqliteRow) -> Result<Interpreted, StoreE
         }),
         other => Err(StoreError::Corrupt(format!("unknown kind {other}"))),
     }
+}
+
+async fn save_session_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    s: &Session,
+    created_at: Instant,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO sessions
+            (id, name, mode, status, interpreted_event_count, created_at,
+             paused_total_ms, paused_since)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            status = excluded.status,
+            interpreted_event_count = excluded.interpreted_event_count,
+            paused_total_ms = excluded.paused_total_ms,
+            paused_since = excluded.paused_since",
+    )
+    .bind(&s.id)
+    .bind(&s.name)
+    .bind(mode_str(s.mode))
+    .bind(status_str(s.status))
+    .bind(s.interpreted_event_count as i64)
+    .bind(created_at.0)
+    .bind(s.paused_total.millis())
+    .bind(s.paused_since.map(|i| i.0))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn audit_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    entry: &AuditEntry,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO audit_log
+            (at, operator, action, subject, reason, before_state, after_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind(entry.at.0)
+    .bind(&entry.operator)
+    .bind(&entry.action)
+    .bind(&entry.subject)
+    .bind(entry.reason.as_deref())
+    .bind(entry.before.as_deref())
+    .bind(entry.after.as_deref())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn insert_interpreted_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    write: &application::AuditedInterpretedWrite,
+) -> Result<i64, sqlx::Error> {
+    let (kind, station, detected_at, transition_ms, started, reason) = match &write.event {
+        Interpreted::Entered {
+            station,
+            at,
+            transition,
+            started_timing,
+        } => (
+            "ENTERED",
+            Some(station.clone()),
+            at.0,
+            transition.map(|d| d.millis()),
+            *started_timing,
+            None,
+        ),
+        Interpreted::Exited { station, at } => {
+            ("EXITED", Some(station.clone()), at.0, None, false, None)
+        }
+        Interpreted::Exception { reason, at } => (
+            "EXCEPTION",
+            None,
+            at.0,
+            None,
+            false,
+            Some(reason_str(reason)),
+        ),
+    };
+    sqlx::query_scalar(
+        "INSERT INTO interpreted_events
+            (session_id, athlete_id, raw_event_id, kind, station, detected_at,
+             transition_ms, started_timing, exception_reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id",
+    )
+    .bind(&write.session_id)
+    .bind(&write.athlete_id)
+    .bind(write.raw_event_id)
+    .bind(kind)
+    .bind(station)
+    .bind(detected_at)
+    .bind(transition_ms)
+    .bind(started as i64)
+    .bind(reason)
+    .fetch_one(&mut **tx)
+    .await
 }
 
 fn mode_str(m: SessionMode) -> &'static str {
@@ -930,7 +1409,15 @@ impl Store {
         since: Instant,
     ) -> Result<Vec<StoredRawRead>, StoreError> {
         let rows = sqlx::query(
-            "SELECT r.id, r.device_id, r.reader_id, r.detected_at FROM raw_events r
+            "SELECT r.id, r.device_id, r.reader_id, r.detected_at,
+                    c.session_id AS context_session_id, c.athlete_id AS context_athlete_id,
+                    c.bound_session_id AS context_bound_session_id,
+                    c.on_roster AS context_on_roster,
+                    c.reader_station AS context_reader_station,
+                    c.reader_mode AS context_reader_mode,
+                    c.planned_json AS context_planned_json
+             FROM raw_events r
+             LEFT JOIN raw_interpretation_context c ON c.raw_event_id = r.id
              WHERE r.tag_id = ?1 COLLATE NOCASE AND r.detected_at >= ?2
                AND NOT EXISTS (
                    SELECT 1 FROM interpreted_events i WHERE i.raw_event_id = r.id)
@@ -940,16 +1427,111 @@ impl Store {
         .bind(since.0)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .iter()
-            .map(|r| StoredRawRead {
-                raw_event_id: r.get("id"),
-                device_id: r.get("device_id"),
-                reader_id: r.get("reader_id"),
-                detected_at: Instant(r.get::<i64, _>("detected_at")),
+        rows.iter()
+            .map(|r| {
+                Ok(StoredRawRead {
+                    raw_event_id: r.get("id"),
+                    device_id: r.get("device_id"),
+                    reader_id: r.get("reader_id"),
+                    detected_at: Instant(r.get::<i64, _>("detected_at")),
+                    context: context_from_row(r)?,
+                })
             })
-            .collect())
+            .collect()
     }
+
+    /// Raw rows whose context contains a precomputed interpretation but whose interpreted row
+    /// is still absent. The context table is the durable handoff between raw commit and replay.
+    pub async fn pending_raw_reads(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<StoredRawRead>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT r.id, r.device_id, r.reader_id, r.detected_at,
+                    c.session_id AS context_session_id, c.athlete_id AS context_athlete_id,
+                    c.bound_session_id AS context_bound_session_id,
+                    c.on_roster AS context_on_roster,
+                    c.reader_station AS context_reader_station,
+                    c.reader_mode AS context_reader_mode,
+                    c.planned_json AS context_planned_json
+             FROM raw_events r
+             JOIN raw_interpretation_context c ON c.raw_event_id = r.id
+             WHERE c.session_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM interpreted_events i WHERE i.raw_event_id = r.id)
+             ORDER BY r.detected_at, r.id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(StoredRawRead {
+                    raw_event_id: r.get("id"),
+                    device_id: r.get("device_id"),
+                    reader_id: r.get("reader_id"),
+                    detected_at: Instant(r.get::<i64, _>("detected_at")),
+                    context: context_from_row(r)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn raw_interpretation_context(
+        &self,
+        raw_event_id: i64,
+    ) -> Result<Option<RawInterpretationContext>, StoreError> {
+        let row = sqlx::query(
+            "SELECT session_id AS context_session_id,
+                    athlete_id AS context_athlete_id,
+                    bound_session_id AS context_bound_session_id,
+                    on_roster AS context_on_roster,
+                    reader_station AS context_reader_station,
+                    reader_mode AS context_reader_mode,
+                    planned_json AS context_planned_json
+             FROM raw_interpretation_context
+             WHERE raw_event_id = ?1",
+        )
+        .bind(raw_event_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.as_ref().map(context_from_row).transpose()?.flatten())
+    }
+}
+
+fn context_from_row(
+    r: &sqlx::sqlite::SqliteRow,
+) -> Result<Option<RawInterpretationContext>, StoreError> {
+    let Some(session_id) = r.get::<Option<String>, _>("context_session_id") else {
+        return Ok(None);
+    };
+    let reader = match (
+        r.get::<Option<String>, _>("context_reader_station"),
+        r.get::<Option<String>, _>("context_reader_mode"),
+    ) {
+        (Some(station), Some(mode)) => Some(ReaderBinding {
+            station,
+            mode: parse_reader_mode(&mode)?,
+        }),
+        (None, None) => None,
+        _ => {
+            return Err(StoreError::Corrupt(
+                "raw context has incomplete reader".into(),
+            ))
+        }
+    };
+    let planned = r
+        .get::<Option<String>, _>("context_planned_json")
+        .map(|json| serde_json::from_str(&json))
+        .transpose()?;
+    Ok(Some(RawInterpretationContext {
+        session_id,
+        athlete_id: r.get("context_athlete_id"),
+        bound_session_id: r.get("context_bound_session_id"),
+        on_roster: r.get::<i64, _>("context_on_roster") != 0,
+        reader,
+        planned,
+    }))
 }
 
 fn reader_mode_str(m: ReaderMode) -> &'static str {
@@ -961,6 +1543,41 @@ fn reader_mode_str(m: ReaderMode) -> &'static str {
         ReaderMode::Passage => "PASSAGE",
     }
 }
+
+fn finish_origin_name(origin: FinishOrigin) -> &'static str {
+    match origin {
+        FinishOrigin::Policy => "POLICY",
+        FinishOrigin::Manual => "MANUAL",
+    }
+}
+
+/// Legacy rows predate `finish_origin`. Preserve a coach's manual stop, but recognise the
+/// old CourseComplete implementation's stored value when it exactly equals the final exit
+/// that the event log already derives. Future rows always carry an explicit origin.
+fn stored_finish_is_manual(
+    origin: Option<&str>,
+    finished_at: Instant,
+    state: Option<&AthleteState>,
+    course: Option<&domain::Course>,
+) -> bool {
+    match origin {
+        Some("MANUAL") => true,
+        Some("POLICY") => false,
+        Some(_) => true,
+        None => !matches!(
+            state.map(|state| {
+                domain::FinishPolicy::CourseComplete.evaluate(
+                    state,
+                    domain::ClassClock::started_at(Instant(0)),
+                    Instant(0),
+                    course,
+                )
+            }),
+            Some(domain::FinishDecision::Finished { at }) if at == finished_at
+        ),
+    }
+}
+
 fn parse_reader_mode(s: &str) -> Result<ReaderMode, StoreError> {
     match s {
         "ENTRY" => Ok(ReaderMode::Entry),

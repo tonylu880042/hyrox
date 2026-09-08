@@ -394,6 +394,74 @@ mod resumed {
     }
 
     #[tokio::test]
+    async fn a_legacy_course_finish_is_replayed_as_policy_even_when_its_final_exit_is_voided() {
+        let store = Store::open_in_memory().await.unwrap();
+        let (mut state, _) =
+            resume_or_start(&store, plan(FinishPolicy::CourseComplete, Some(course())))
+                .await
+                .unwrap();
+        let device = DEVICE.replace(':', "");
+        for (reader_id, station, mode) in [
+            ("rfid-01", "SKIERG", ReaderMode::Entry),
+            ("rfid-02", "SKIERG", ReaderMode::Exit),
+            ("rfid-03", "WALL BALLS", ReaderMode::Entry),
+            ("rfid-04", "WALL BALLS", ReaderMode::Exit),
+        ] {
+            register_reader(
+                &mut state,
+                &store,
+                &ReaderRegistration::new(
+                    ReaderKey::parse(&device, reader_id).unwrap(),
+                    station,
+                    mode,
+                ),
+                &OperatorCommand::new("OPERATOR TABLET", at(0)),
+            )
+            .await
+            .unwrap();
+        }
+        bind_tag(
+            &mut state,
+            &store,
+            &TagId::parse("TAG-A1").unwrap(),
+            "a1",
+            &OperatorCommand::new("CHECKIN TABLET", at(0)),
+        )
+        .await
+        .unwrap();
+        for (reader_id, sequence, ms) in [
+            ("rfid-01", 1, 1_000),
+            ("rfid-02", 2, 2_000),
+            ("rfid-03", 3, 3_000),
+            ("rfid-04", 4, 4_000),
+        ] {
+            ingest_read(&mut state, &store, &read(reader_id, "TAG-A1", sequence, ms))
+                .await
+                .unwrap();
+        }
+
+        // This is the legacy pre-origin representation of a CourseComplete finish. Its
+        // origin is intentionally NULL, and the final exit is then corrected away.
+        sqlx::query(
+            "UPDATE session_athletes SET finished_at = ?1
+             WHERE session_id = 's1' AND athlete_id = 'a1'",
+        )
+        .bind(at(4_000).0)
+        .execute(store.pool())
+        .await
+        .unwrap();
+        store
+            .void_interpreted(4, at(5_000), "COACH", "誤讀")
+            .await
+            .unwrap();
+
+        let rebuilt = store.rebuild_athletes("s1").await.unwrap();
+        let athlete = &rebuilt[0];
+        assert_eq!(athlete.status, AthleteStatus::Active);
+        assert_eq!(athlete.finished_at, None);
+    }
+
+    #[tokio::test]
     async fn the_reader_map_resolves_the_same_way_after_a_restart() {
         let store = Store::open_in_memory().await.unwrap();
         let (mut state, _) = resume_or_start(&store, plan(FinishPolicy::CoachDecides, None))

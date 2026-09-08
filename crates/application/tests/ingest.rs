@@ -5,7 +5,7 @@
 
 mod support;
 
-use application::{ingest_read, IngestError, IngestOutcome, LiveSession};
+use application::{ingest_read, reconcile_pending, IngestError, IngestOutcome, LiveSession};
 use contract::{AckStatus, EdgeEvent, ReceivedEvent};
 use domain::{
     AthleteState, BindingLedger, ExceptionReason, Instant, Interpreted, ReaderKey, ReaderMode,
@@ -487,6 +487,28 @@ async fn a_redelivery_compensates_and_interprets_a_raw_read_whose_first_interpre
         ingested.outcomes[0],
         IngestOutcome::Interpreted { .. }
     ));
+    assert_eq!(
+        state.athlete("a1").unwrap().station_state,
+        domain::StationState::Inside
+    );
+}
+
+#[tokio::test]
+async fn a_pending_interpretation_is_reconciled_without_waiting_for_redelivery() {
+    let mut store = FakeStore::new();
+    store.fail_interpreted = true;
+    let mut state = armed_session();
+    let event = read("rfid-01", "TAG-A1", 1, 1_010_000);
+    ingest_read(&mut state, &store, &event)
+        .await
+        .expect_err("the first interpretation fails");
+
+    store.fail_interpreted = false;
+    let repaired = reconcile_pending(&mut state, &store)
+        .await
+        .expect("the next tick repairs the handoff");
+    assert_eq!(repaired, [1]);
+    assert_eq!(store.interpreted().len(), 1);
     assert_eq!(
         state.athlete("a1").unwrap().station_state,
         domain::StationState::Inside

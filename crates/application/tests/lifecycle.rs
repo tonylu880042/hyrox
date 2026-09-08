@@ -58,6 +58,19 @@ async fn starting_a_class_persists_each_new_status() {
 }
 
 #[tokio::test]
+async fn a_failed_audit_leaves_the_session_transition_unapplied() {
+    let mut store = FakeStore::new();
+    store.fail_record_audit = true;
+    let mut state = draft();
+
+    let result = mark_ready(&mut state, &store, &tablet()).await;
+    assert!(matches!(result, Err(OperatorError::Storage(_))));
+    assert_eq!(state.session.status, SessionStatus::Draft);
+    assert!(store.saved_sessions().is_empty());
+    assert!(store.audits().is_empty());
+}
+
+#[tokio::test]
 async fn a_draft_cannot_be_started_without_passing_through_ready() {
     let store = FakeStore::new();
     let mut state = draft();

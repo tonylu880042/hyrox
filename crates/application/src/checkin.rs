@@ -6,7 +6,7 @@
 use crate::ingest::{attribute_read, ReadContext};
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, HubStore};
+use crate::ports::{AuditEntry, AuditedWrite, HubStore};
 use domain::{AthleteState, EntryCode, Instant, Interpreted, MemberRef, TagId};
 
 /// Somebody to put on the roster (ADR 0010).
@@ -61,6 +61,9 @@ pub async fn enter<S: HubStore>(
     entrant: Entrant,
     cmd: &OperatorCommand,
 ) -> Result<String, OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     let name = entrant.display_name.trim();
     if name.is_empty() {
         return Err(OperatorError::NameRequired);
@@ -95,33 +98,29 @@ pub async fn enter<S: HubStore>(
     };
 
     store
-        .save_athlete(
-            &state.session.id,
-            &athlete_id,
-            name,
+        .apply_audited(AuditedWrite::Athlete {
+            session_id: state.session.id.clone(),
+            athlete_id: athlete_id.clone(),
+            display_name: name.to_string(),
             bib,
-            entrant.member_id.as_deref(),
-        )
+            member_id: entrant.member_id.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "ATHLETE_ENTER".to_string(),
+                subject: athlete_id.clone(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: None,
+                after: Some(match &entrant.member_id {
+                    Some(m) => format!("{name:?} bib {bib}, member {m}"),
+                    None => format!("{name:?} bib {bib}, walk-in"),
+                }),
+            },
+        })
         .await
         .map_err(OperatorError::Storage)?;
     state.athletes.push(AthleteState::ready(&athlete_id, name));
     state.note_bib(&athlete_id, bib);
-
-    store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "ATHLETE_ENTER".to_string(),
-            subject: athlete_id.clone(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: None,
-            after: Some(match &entrant.member_id {
-                Some(m) => format!("{name:?} bib {bib}, member {m}"),
-                None => format!("{name:?} bib {bib}, walk-in"),
-            }),
-        })
-        .await
-        .map_err(OperatorError::Storage)?;
     Ok(athlete_id)
 }
 
@@ -159,28 +158,33 @@ pub async fn bind_tag<S: HubStore>(
     athlete_id: &str,
     cmd: &OperatorCommand,
 ) -> Result<Vec<Interpreted>, OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     if state.athlete(athlete_id).is_none() {
         return Err(OperatorError::UnknownAthlete(athlete_id.to_string()));
     }
-    state
-        .bindings
+    let mut candidate_bindings = state.bindings.clone();
+    candidate_bindings
         .bind(&state.session.id, tag, athlete_id, cmd.at)
         .map_err(OperatorError::Binding)?;
-    state.clear_pending_tag(tag);
-    persist_bindings(state, store).await?;
-
     store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "TAG_BIND".to_string(),
-            subject: tag.to_string(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: None,
-            after: Some(athlete_id.to_string()),
+        .apply_audited(AuditedWrite::Bindings {
+            bindings: candidate_bindings.history().to_vec(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "TAG_BIND".to_string(),
+                subject: tag.to_string(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: None,
+                after: Some(athlete_id.to_string()),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    state.bindings = candidate_bindings;
+    state.clear_pending_tag(tag);
 
     claim_reads(state, store, tag, athlete_id).await
 }
@@ -197,6 +201,9 @@ pub async fn rebind_tag<S: HubStore>(
     athlete_id: &str,
     cmd: &OperatorCommand,
 ) -> Result<Vec<Interpreted>, OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     if state.athlete(athlete_id).is_none() {
         return Err(OperatorError::UnknownAthlete(athlete_id.to_string()));
     }
@@ -209,25 +216,27 @@ pub async fn rebind_tag<S: HubStore>(
         .bindings
         .tag_for_athlete(&state.session.id, athlete_id)
         .map(|t| t.to_string());
-    state
-        .bindings
+    let mut candidate_bindings = state.bindings.clone();
+    candidate_bindings
         .rebind_athlete(&state.session.id, athlete_id, new_tag, cmd.at)
         .map_err(OperatorError::Binding)?;
-    state.clear_pending_tag(new_tag);
-    persist_bindings(state, store).await?;
-
     store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "TAG_REBIND".to_string(),
-            subject: athlete_id.to_string(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: previous,
-            after: Some(new_tag.to_string()),
+        .apply_audited(AuditedWrite::Bindings {
+            bindings: candidate_bindings.history().to_vec(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "TAG_REBIND".to_string(),
+                subject: athlete_id.to_string(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: previous,
+                after: Some(new_tag.to_string()),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
+    state.bindings = candidate_bindings;
+    state.clear_pending_tag(new_tag);
 
     claim_reads(state, store, new_tag, athlete_id).await
 }
@@ -254,6 +263,13 @@ async fn claim_reads<S: HubStore>(
 
     let mut claimed = Vec::with_capacity(reads.len());
     for read in &reads {
+        if read
+            .context
+            .as_ref()
+            .is_some_and(|context| context.session_id != state.session.id)
+        {
+            continue;
+        }
         let event = attribute_read(
             state,
             store,
@@ -264,6 +280,7 @@ async fn claim_reads<S: HubStore>(
                 reader_id: &read.reader_id,
                 raw_event_id: Some(read.raw_event_id),
                 at: read.detected_at,
+                reader: read.context.as_ref().map(|c| c.reader.clone()),
             },
         )
         .await
@@ -274,25 +291,8 @@ async fn claim_reads<S: HubStore>(
         .save_session(&state.session, state.class_start)
         .await
         .map_err(OperatorError::Storage)?;
+    state.session_save_dirty = false;
     Ok(claimed)
-}
-
-/// Writes the ledger back, closed rows included.
-///
-/// Every row rather than the one that changed: the port's write is an upsert that may only
-/// stamp `unbound_at`, a class-sized ledger is tens of rows, and this way the stored ledger
-/// cannot drift from the domain one whatever combination of bind, unbind and rebind ran.
-async fn persist_bindings<S: HubStore>(
-    state: &LiveSession,
-    store: &S,
-) -> Result<(), OperatorError<S::Error>> {
-    for binding in state.bindings.history() {
-        store
-            .save_binding(binding)
-            .await
-            .map_err(OperatorError::Storage)?;
-    }
-    Ok(())
 }
 
 /// Rebuilds the check-in queue after a restart: tags a reader has seen since the class

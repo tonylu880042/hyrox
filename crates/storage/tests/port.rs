@@ -1,7 +1,7 @@
 //! `Store` seen through the application's ports (ADR 0003), including the two things the
 //! port added to this crate: the audit log (CLAUDE.md 20) and the roster exception reason.
 
-use application::{AuditEntry, HubStore, InterpretedWrite, RawRead};
+use application::{AuditEntry, HubStore, InterpretedWrite, RawInterpretationContext, RawRead};
 use contract::CommitOutcome;
 use domain::{ExceptionReason, Instant, Interpreted, Session, SessionMode};
 use storage::Store;
@@ -46,6 +46,32 @@ async fn a_redelivered_raw_event_reports_the_same_row() {
     assert_eq!(again.outcome, CommitOutcome::AlreadyStored);
     assert_eq!(first.raw_event_id, again.raw_event_id);
     assert_eq!(store.raw_event_count().await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_legacy_raw_redelivery_does_not_gain_a_new_context_snapshot() {
+    let (store, _) = armed_store().await;
+    let original = store.commit_raw(&raw(2)).await.unwrap();
+    let context = RawInterpretationContext {
+        session_id: "s1".into(),
+        athlete_id: Some("a1".into()),
+        bound_session_id: Some("s1".into()),
+        on_roster: true,
+        reader: None,
+        planned: None,
+    };
+
+    let duplicate = store
+        .commit_raw_with_context(&raw(2), &context)
+        .await
+        .unwrap();
+    assert_eq!(duplicate.outcome, CommitOutcome::AlreadyStored);
+    assert_eq!(duplicate.raw_event_id, original.raw_event_id);
+    assert!(store
+        .raw_interpretation_context(original.raw_event_id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

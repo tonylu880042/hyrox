@@ -14,6 +14,8 @@
 //! before one, and a band still belongs to the athlete it was handed to.
 
 use crate::checkin::pending_tags_since;
+use crate::finish::apply_course_completion;
+use crate::ingest::reconcile_pending;
 use crate::live_session::LiveSession;
 use crate::ports::HubStore;
 use domain::{AthleteState, Instant, Session, SessionConfig};
@@ -65,7 +67,18 @@ pub async fn resume_or_start<S: HubStore>(
     plan: SessionPlan,
 ) -> Result<(LiveSession, Recovery), S::Error> {
     if let Some(existing) = store.active_session().await? {
-        if existing.is_live() {
+        // A terminal session can still have an ACKed raw row whose interpretation was
+        // interrupted immediately before the class was closed. Keep that session long enough
+        // to replay the durable context; otherwise starting a new class would strand it.
+        let pending = store.pending_raw_reads(&existing.id).await?;
+        let has_replayable_pending = pending.iter().any(|read| {
+            read.context
+                .as_ref()
+                .is_some_and(|context| context.planned.is_some())
+        });
+        if existing.is_live() || has_replayable_pending {
+            let mut existing = existing;
+            existing.interpreted_event_count = store.interpreted_event_count(&existing.id).await?;
             // The stored creation time is the class clock's origin; falling back to the
             // plan's would restart the class clock at zero on every reboot.
             let class_start = store
@@ -91,6 +104,15 @@ pub async fn resume_or_start<S: HubStore>(
             }
             state.exception_count = exceptions;
             load_venue(store, &mut state).await?;
+            reconcile_pending(&mut state, store).await?;
+            if state.config.finish_policy == domain::FinishPolicy::CourseComplete {
+                apply_course_completion(&mut state.athletes, state.config.course.as_ref());
+            }
+            // Even when there was no pending raw row, this repairs a projection that lagged
+            // behind an interpreted commit before a crash.
+            store
+                .save_session(&state.session, state.class_start)
+                .await?;
             return Ok((state, recovery));
         }
     }
@@ -129,6 +151,9 @@ pub async fn resume_or_start<S: HubStore>(
     }
     // A new class in a venue that already has readers and bands should see them.
     load_venue(store, &mut state).await?;
+    if state.config.finish_policy == domain::FinishPolicy::CourseComplete {
+        apply_course_completion(&mut state.athletes, state.config.course.as_ref());
+    }
     Ok((state, Recovery::Started))
 }
 

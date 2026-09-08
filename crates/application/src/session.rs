@@ -8,7 +8,7 @@
 
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, HubStore};
+use crate::ports::{AuditEntry, AuditedWrite, HubStore};
 use domain::{Instant, Session, SessionError, SessionStatus};
 
 /// DRAFT -> READY. The class is built and can be started; it is still editable, which is
@@ -115,28 +115,32 @@ async fn transition<S: HubStore>(
     action: &str,
     change: fn(&mut Session, Instant) -> Result<(), SessionError>,
 ) -> Result<(), OperatorError<S::Error>> {
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(OperatorError::Storage)?;
     let before = state.session.status.name();
     let mut candidate = state.session.clone();
     change(&mut candidate, cmd.at).map_err(OperatorError::Session)?;
     let after = candidate.status.name();
 
     store
-        .save_session(&candidate, state.class_start)
-        .await
-        .map_err(OperatorError::Storage)?;
-    store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: action.to_string(),
-            subject: candidate.id.clone(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: Some(before.to_string()),
-            after: Some(after.to_string()),
+        .apply_audited(AuditedWrite::Session {
+            session: candidate.clone(),
+            created_at: state.class_start,
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: action.to_string(),
+                subject: candidate.id.clone(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: Some(before.to_string()),
+                after: Some(after.to_string()),
+            },
         })
         .await
         .map_err(OperatorError::Storage)?;
     state.session = candidate;
+    state.session_save_dirty = false;
     Ok(())
 }
 

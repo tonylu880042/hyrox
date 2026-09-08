@@ -48,7 +48,7 @@ fn demo_enabled() -> bool {
 }
 
 use api::{Clock, Hub};
-use application::{apply_finish_policy, snapshot, Recovery, SessionPlan};
+use application::{apply_finish_policy, reconcile_pending, snapshot, Recovery, SessionPlan};
 use axum::{
     response::{Html, Redirect},
     routing::get,
@@ -482,6 +482,14 @@ async fn tick_loop(hub: Hub<Store>) {
         ticker.tick().await;
         let now = hub.now();
         let mut state = hub.lock().await;
+
+        // A raw row can be ACKed while its interpretation write is interrupted, and a quiet
+        // venue may produce no next read to trigger recovery. Poll the durable handoff here so
+        // a failed write is repaired even when the class is otherwise idle.
+        if let Err(e) = reconcile_pending(&mut state, hub.store().as_ref()).await {
+            eprintln!("pending interpretation not reconciled: {e}");
+            continue;
+        }
 
         // A class ends when its time is up (CLAUDE.md 12, as configured on the session).
         // The finish is stored, so it is still there after a restart -- said out loud rather

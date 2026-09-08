@@ -40,7 +40,7 @@ pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceRepo
 pub use exceptions::{accept, list, reinterpret, void, ReinterpretSpec};
 pub use finish::{apply_finish_policy, end_class};
 pub use health::{health, health_with_version, Blocker, Health};
-pub use ingest::{ingest_read, IngestError, IngestOutcome, Ingested};
+pub use ingest::{ingest_read, reconcile_pending, IngestError, IngestOutcome, Ingested};
 pub use live::{
     checkin_view, course_view, last_event_age_ms, reader_views, snapshot, AthleteView,
     CheckInAthlete, CheckInView, CourseStation, ReaderView, Snapshot, SplitView,
@@ -48,7 +48,8 @@ pub use live::{
 pub use live_session::LiveSession;
 pub use operator::{OperatorCommand, OperatorError};
 pub use ports::{
-    AuditEntry, DirectoryError, HubStore, InterpretedWrite, MemberDirectory, RawCommit, RawRead,
+    AuditEntry, AuditedInterpretedWrite, AuditedResult, AuditedWrite, DirectoryError, FinishOrigin,
+    HubStore, InterpretedWrite, MemberDirectory, RawCommit, RawInterpretationContext, RawRead,
     SeenReader, StoredException, StoredRawRead, UnconfiguredDirectory,
 };
 pub use readers::{register_reader, unregister_reader, unregistered_readers};

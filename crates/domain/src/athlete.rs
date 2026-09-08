@@ -33,13 +33,13 @@ pub enum ReaderMode {
     Passage,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReaderBinding {
     pub station: String,
     pub mode: ReaderMode,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExceptionReason {
     SessionNotArmed,
@@ -57,7 +57,7 @@ pub enum ExceptionReason {
 }
 
 /// What the hub decided a raw read means. The raw event is stored regardless (CLAUDE.md 19).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Interpreted {
     Entered {

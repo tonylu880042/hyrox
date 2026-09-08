@@ -28,6 +28,13 @@ pub struct LiveSession {
     pending_tags: Vec<TagId>,
     /// How many interpreted events were exceptions, for the operator's inbox badge (D4).
     pub exception_count: usize,
+    /// An interpreted event was committed but the session projection may still need saving.
+    /// Keeping this bit lets periodic recovery retry a failed session write even after the raw
+    /// handoff itself has disappeared from `pending_raw_reads`.
+    pub(crate) session_save_dirty: bool,
+    /// Durable exception corrections may have committed before rebuilding the projection
+    /// failed. A retrying boundary must rebuild before making another decision.
+    pub(crate) projection_dirty: bool,
     /// Bib per athlete id (ADR 0010). Held beside the roster rather than on `AthleteState`,
     /// because a bib is a label on a vest that the door assigns and a correction may
     /// reassign -- it is not part of what the timing engine replays.
@@ -48,6 +55,8 @@ impl LiveSession {
             class_start,
             pending_tags: Vec::new(),
             exception_count: 0,
+            session_save_dirty: false,
+            projection_dirty: false,
             bibs: Vec::new(),
             devices: Vec::new(),
         }
