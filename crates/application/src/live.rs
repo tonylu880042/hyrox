@@ -39,6 +39,8 @@ pub struct SplitView {
     pub exited_at: Option<i64>,
     pub work_ms: Option<i64>,
     pub transition_ms: Option<i64>,
+    /// Left without the exit being read (ADR 0016): why `work_ms` and the next run are blank.
+    pub exit_missed: bool,
 }
 
 /// One configured reader and how long ago its device was last heard from (ADR 0001 D5).
@@ -52,6 +54,10 @@ pub struct ReaderView {
     /// `None` means the hub has heard nothing from this device since it started. That is
     /// not the same as zero, and a screen must not draw it as fresh.
     pub last_seen_age_ms: Option<i64>,
+    /// When this head last produced a tag read. A board can carry the S and N gates, and
+    /// the board answering says nothing about which antenna is reading. `None` means no
+    /// read this run, not a fresh one.
+    pub last_read_age_ms: Option<i64>,
     /// The device's own journal warning, if it has published one (CLAUDE.md 18).
     pub warning: Option<DeviceWarning>,
 }
@@ -128,7 +134,7 @@ pub fn course_view(course: Option<&Course>) -> Vec<CourseStation> {
 }
 
 pub fn view(bib: usize, a: &AthleteState, course: &[CourseStation], now: Instant) -> AthleteView {
-    let completed = a.runs.iter().filter(|r| r.exited_at.is_some()).count();
+    let completed = a.runs.iter().filter(|r| r.is_complete()).count();
     // Course position, not the first matching name: rounds may repeat an exercise
     // with a different target. Outside retains the just-completed station.
     let current_index = if a.station_state == StationState::Inside {
@@ -178,6 +184,7 @@ fn split_view(run: &StationRun) -> SplitView {
         exited_at: run.exited_at.map(|t| t.0),
         work_ms: run.exited_at.map(|e| e.since(run.entered_at).millis()),
         transition_ms: run.transition_from_prev.map(|d| d.millis()),
+        exit_missed: run.exit_missed,
     }
 }
 
@@ -266,6 +273,9 @@ pub fn reader_views(state: &LiveSession, now: Instant) -> Vec<ReaderView> {
                 zone: r.zone.clone(),
                 mode: r.mode,
                 last_seen_age_ms: health.map(|h| now.since(h.last_seen).millis()),
+                last_read_age_ms: state
+                    .reader_last_read(&r.key)
+                    .map(|t| now.since(t).millis()),
                 warning: health.and_then(|h| h.warning()),
             }
         })

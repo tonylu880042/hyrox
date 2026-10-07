@@ -31,6 +31,8 @@ pub struct SplitRow {
     /// `None` for a station the athlete was still inside when the class ended. No reader
     /// reported them leaving, and inventing an exit would fabricate a split (CLAUDE.md 19).
     pub exited_at: Option<i64>,
+    /// Left without the exit being read (ADR 0016); `exited_at` stays `None` regardless.
+    pub exit_missed: bool,
     /// Time inside the station -- the Workout Split of CLAUDE.md 23.
     pub work_ms: Option<i64>,
     /// Gap since the previous station finished: ROX Zone time in competition, Transition
@@ -198,7 +200,7 @@ fn row(bib: usize, a: &AthleteState) -> ResultRow {
         elapsed_ms: a
             .elapsed(a.last_event_at.unwrap_or(Instant(0)))
             .map(Duration::millis),
-        stations_completed: a.runs.iter().filter(|r| r.exited_at.is_some()).count(),
+        stations_completed: a.runs.iter().filter(|r| r.is_complete()).count(),
         place: None,
         splits: a
             .runs
@@ -207,6 +209,7 @@ fn row(bib: usize, a: &AthleteState) -> ResultRow {
                 station: r.station.clone(),
                 entered_at: r.entered_at.0,
                 exited_at: r.exited_at.map(|t| t.0),
+                exit_missed: r.exit_missed,
                 work_ms: r.exited_at.map(|e| e.since(r.entered_at).millis()),
                 transition_ms: r.transition_from_prev.map(Duration::millis),
             })

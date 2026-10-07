@@ -36,7 +36,9 @@ pub mod templates;
 
 pub use checkin::{enter, Entrant};
 pub use config::configure;
-pub use devices::{note_device_seen, note_device_status, DeviceHealth, DeviceReport};
+pub use devices::{
+    note_device_seen, note_device_status, note_reader_read, DeviceHealth, DeviceReport,
+};
 pub use exceptions::{accept, list, reinterpret, void, ReinterpretSpec};
 pub use finish::{apply_finish_policy, end_class};
 pub use health::{health, health_with_version, Blocker, Health};

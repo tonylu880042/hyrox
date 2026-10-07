@@ -12,7 +12,7 @@
 //! simply unknown until it speaks.
 
 use crate::live_session::LiveSession;
-use domain::{DeviceId, DeviceWarning, Instant};
+use domain::{DeviceId, DeviceWarning, Instant, ReaderKey};
 
 /// What a device last reported on the status topic (CLAUDE.md 18).
 ///
@@ -60,6 +60,14 @@ pub fn note_device_seen(state: &mut LiveSession, device_id: &DeviceId, at: Insta
             report: None,
         }),
     }
+}
+
+/// Records that one reader head produced a read at `at`. A read is also liveness for the
+/// board that carries the head, so this notes both; call it instead of [`note_device_seen`]
+/// for an arriving read.
+pub fn note_reader_read(state: &mut LiveSession, key: &ReaderKey, at: Instant) {
+    note_device_seen(state, &key.device_id, at);
+    state.note_reader_read(key, at);
 }
 
 /// Records a status message: liveness, plus what the device said about its journal.

@@ -129,6 +129,8 @@ const PUSH_INTERVAL_MS: i64 = 250;
 const SNAPSHOT_CHANNEL_CAPACITY: usize = 16;
 
 const TRAINING_HTML: &str = include_str!("../static/training.html");
+// Marshal tablets: the venue drawing with everyone on it (docs/decisions/0016).
+const COURSE_HTML: &str = include_str!("../static/course.html");
 const WORKOUT_HTML: &str = include_str!("../static/workout.html");
 const CHECKIN_HTML: &str = include_str!("../static/checkin.html");
 /// The entrant's own page: sign up, keep the QR, look the result up (ADR 0011).
@@ -363,6 +365,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(|| async { Redirect::temporary("/live") }))
         .route("/live", get(|| async { Html(TRAINING_HTML) }))
+        .route("/course", get(|| async { Html(COURSE_HTML) }))
         .route("/workout", get(|| async { Html(WORKOUT_HTML) }))
         .route("/checkin", get(|| async { Html(CHECKIN_HTML) }))
         .route("/signup", get(|| async { Html(SIGNUP_HTML) }))

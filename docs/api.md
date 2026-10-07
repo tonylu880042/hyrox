@@ -21,6 +21,7 @@ structural — see §5.
 | `/checkin` | binding only | `/api/checkin/**` |
 | `/coach` | no | `/api/coach` |
 | `/live` | no | `/api/live`, `/ws` |
+| `/course` | no | `/ws`, `/api/coach` (readers, every 5 s) |
 | `/result/{id}` | no | `/api/result/{session_id}` |
 | (shared read) | no | `/api/session` |
 
@@ -227,7 +228,13 @@ finish rule.
 
 `/api/coach` and `/api/operator` additionally carry per-reader freshness:
 `readers[].last_seen_age_ms`, again `null` for a board the hub has not heard from since it
-started. `/api/operator` also carries `devices[]` with each board's own journal warning
+started, and `readers[].last_read_age_ms` — when that one head last produced a tag read. A
+board can carry the S and N gates, and the board answering says nothing about which antenna
+is reading; `null` means no read this run.
+
+Each split (`athletes[].splits[]` on the live snapshot, `rows[].splits[]` on results) carries
+`exit_missed`: the athlete left that station without its exit being read (ADR 0016), which is
+why its `work_ms` is `null` and the following run is blank. `/api/operator` also carries `devices[]` with each board's own journal warning
 (CLAUDE.md 18).
 
 This is safety-critical, not decoration: CLAUDE.md 31's first principle is that no event is

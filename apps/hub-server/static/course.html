@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-Hant"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>HYROX</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/fonts.css">
+<script src="/i18n.js"></script>
+<style>
+  /* Self-contained: app.css only holds the classes the older pages use, and a venue with no
+     internet must still read this screen (CLAUDE.md 31). Same palette as /live. */
+  :root { --bg:#0A0A0A; --card:#151515; --line:#2E2E2E; --text:#F3F4F6; --muted:#9CA3AF;
+          --yellow:#FEE400; --cyan:#7DF4FF; --ok:#22DD66; --warn:#FFB300; --bad:#FF4A4A;
+          --s:#1E3A5F; --s-text:#9CC8FF; --n:#5F1E1E; --n-text:#FFB4B4; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:"Archivo Narrow","PingFang TC","Noto Sans TC",system-ui,sans-serif; }
+  button, input { font:inherit; color:inherit; }
+  header { position:sticky; top:0; z-index:5; background:#000; border-bottom:1px solid var(--line);
+           display:flex; flex-wrap:wrap; align-items:center; gap:6px 16px; padding:8px 16px; }
+  h1 { margin:0; font-family:"Bebas Neue",sans-serif; letter-spacing:.04em; font-size:28px; color:var(--yellow); }
+  .muted { color:var(--muted); } .mono { font-family:"JetBrains Mono",monospace; }
+  .stat { font-size:14px; white-space:nowrap; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  .tools { margin-left:auto; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .tools input { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:0 10px; min-height:44px; }
+  #stale { width:64px; text-align:center; }
+  main { padding:12px 16px 32px; max-width:1400px; margin:0 auto; }
+  #map { display:grid; grid-template-columns:minmax(92px,.55fr) 56px minmax(0,1fr) 56px minmax(0,1fr); }
+  .card { display:grid; grid-template-columns:44px minmax(0,1fr) 44px; background:var(--card);
+          border:1px solid var(--line); border-radius:8px; overflow:hidden; min-height:96px; }
+  .card.mat { grid-template-columns:minmax(0,1fr); border-color:var(--warn); }
+  .gate { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+          font-weight:700; font-size:15px; border:0; padding:4px 0; }
+  .gate.s { background:var(--s); color:var(--s-text); } .gate.n { background:var(--n); color:var(--n-text); }
+  .gate.none { background:#1C1C1C; color:var(--muted); font-weight:400; font-size:12px; }
+  .gate small { font-size:11px; font-weight:400; }
+  .gate .miss { color:var(--warn); }
+  .body { padding:8px 10px; min-width:0; }
+  .body h2 { margin:0; font-size:16px; font-weight:700; }
+  .body .count { font-size:13px; color:var(--muted); }
+  .run { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+         font-size:12px; color:var(--cyan); padding:6px 2px; text-align:center; }
+  .run b { font-size:15px; }
+  .run.v { flex-direction:row; gap:8px; padding:10px 0; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+  .chip { min-width:40px; min-height:36px; padding:0 8px; border-radius:6px; border:1px solid var(--line);
+          background:#222; font-family:"JetBrains Mono",monospace; font-size:14px; cursor:pointer; }
+  .chip.stale { background:#4A3300; border-color:var(--warn); color:#FFD27A; }
+  .chip.sel { outline:3px solid var(--yellow); outline-offset:1px; }
+  .chip.dim { opacity:.25; }
+  .chip.more { cursor:default; background:transparent; color:var(--muted); }
+  .panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px; margin-top:16px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .panel h3 { margin:0 0 8px; font-size:14px; color:var(--muted); font-weight:400; }
+  .alert { display:flex; gap:8px; align-items:baseline; padding:6px 0; border-top:1px solid var(--line); font-size:15px; }
+  .alert:first-of-type { border-top:0; }
+  .alert.bad::before, .alert.warn::before { content:""; flex:none; width:10px; height:10px; border-radius:50%; transform:translateY(1px); }
+  .alert.bad::before { background:var(--bad); } .alert.warn::before { background:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td, th { padding:4px 6px; text-align:right; border-top:1px solid var(--line); }
+  td:first-child, th:first-child, td:nth-child(2), th:nth-child(2) { text-align:left; }
+  th { color:var(--muted); font-weight:400; }
+  .warn-text { color:var(--warn); }
+  #lang button { min-height:36px; padding:0 8px; border:0; border-radius:4px; background:none; color:var(--muted); }
+  #lang .bg-primary { background:var(--yellow); color:#000; font-weight:700; }
+  #banner { display:none; background:var(--bad); color:#000; font-weight:700; padding:8px 16px; }
+  #banner.on { display:block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HYROX</h1>
+  <span data-i18n="course.title"></span>
+  <span id="session" class="stat"></span>
+  <span class="stat"><span id="link-dot" class="dot bad"></span> <span id="fresh" class="mono"></span></span>
+  <span id="counts" class="stat muted"></span>
+  <div class="tools">
+    <input id="search" type="search" data-i18n-placeholder="course.search" autocomplete="off">
+    <label class="stat muted"><span data-i18n="course.threshold"></span>
+      <input id="stale" type="number" min="1" max="60" step="1" inputmode="numeric"></label>
+    <span id="lang"></span>
+  </div>
+</header>
+<div id="banner" data-i18n="course.linkDown"></div>
+<main>
+  <div id="map"></div>
+  <div class="panels">
+    <section class="panel"><h3 data-i18n="course.alerts"></h3><div id="alerts"></div></section>
+    <section class="panel"><h3 data-i18n="course.selected"></h3><div id="detail"></div></section>
+  </div>
+</main>
+<script>
+// ── Pure derivations (tested in tests/ui/course.test.cjs) ────────────────────────────────
+// Everything a cell shows is read off the snapshot the hub already computed; the page adds
+// placement and nothing else. In particular it never guesses where on a run someone is:
+// no reader is there (ADR 0016).
+
+const DEFAULT_STALE_MIN = 5;
+const DEVICE_SILENT_MS = 60000; // same line the reader list in /settings draws
+const SHOW_CHIPS = 12;
+
+/// Where each athlete is drawn. Runs are numbered by the station they lead to: run k
+/// (0-based) ends at course station k, and run 0 starts at the mat.
+function place(snap, staleMs) {
+  const n = snap.course.length;
+  const out = { waiting: [], finished: [], toFinish: [], inside: Array.from({ length: n }, () => []),
+                runs: Array.from({ length: n }, () => []) };
+  for (const a of snap.athletes) {
+    const stale = a.status === "ACTIVE" && a.last_event_age_ms != null && a.last_event_age_ms >= staleMs;
+    const item = { ...a, stale, missed: a.splits.some((s) => s.exit_missed) };
+    if (a.status === "READY") out.waiting.push(item);
+    else if (a.status === "FINISHED") out.finished.push(item);
+    else if (a.station_state === "INSIDE" && a.station_index != null && a.station_index < n) out.inside[a.station_index].push(item);
+    else if (a.completed < n) out.runs[a.completed].push(item);
+    else out.toFinish.push(item);
+  }
+  return out;
+}
+
+/// The readers that serve each gate. The S gate is an ENTRY or TOGGLE for the station; the
+/// N gate an EXIT or TOGGLE, or the start/finish mat registered against it (ADR 0016).
+function gates(course, readers) {
+  const same = (a, b) => String(a).toUpperCase() === String(b).toUpperCase();
+  const mat = readers.filter((r) => r.mode === "START_FINISH");
+  return {
+    mat,
+    stations: course.map((c) => ({
+      s: readers.filter((r) => same(r.station, c.name) && (r.mode === "ENTRY" || r.mode === "TOGGLE")),
+      n: readers.filter((r) => same(r.station, c.name) && (r.mode === "EXIT" || r.mode === "TOGGLE")),
+      nIsMat: mat.some((r) => same(r.station, c.name)),
+    })),
+  };
+}
+
+/// One light for a set of readers: the worst of them. Unheard is not fresh (ADR 0001 D5).
+function health(rs) {
+  if (!rs.length) return "none";
+  let worst = "ok";
+  for (const r of rs) {
+    if (r.last_seen_age_ms == null || r.last_seen_age_ms > DEVICE_SILENT_MS) return "bad";
+    if (r.warning && r.warning !== "HEALTHY") worst = "warn";
+  }
+  return worst;
+}
+
+/// How many athletes left station i without its exit being read. Several at one gate points
+/// at the antenna, not the athletes.
+function missedAt(snap) {
+  const counts = new Array(snap.course.length).fill(0);
+  for (const a of snap.athletes) a.splits.forEach((s, i) => { if (s.exit_missed && i < counts.length) counts[i]++; });
+  return counts;
+}
+
+/// Serpentine rows of two, as on the venue drawing: even rows run left to right, odd rows
+/// back. Each entry says which grid cell a station or run occupies.
+function layout(n) {
+  const cells = [];
+  const rows = Math.ceil(n / 2);
+  for (let r = 0; r < rows; r++) {
+    const line = 1 + r * 2;
+    const a = r * 2, b = r * 2 + 1;
+    const ltr = r % 2 === 0;
+    cells.push({ kind: "station", i: a, row: line, col: ltr ? 3 : 5, ltr });
+    if (b < n) {
+      cells.push({ kind: "run", i: b, row: line, col: 4, dir: ltr ? "→" : "←" });
+      cells.push({ kind: "station", i: b, row: line, col: ltr ? 5 : 3, ltr });
+    }
+    const next = r * 2 + 2;
+    if (next < n) cells.push({ kind: "run", i: next, row: line + 1, col: (b < n ? (ltr ? 5 : 3) : (ltr ? 3 : 5)), dir: "↓", vertical: true });
+  }
+  if (n) cells.push({ kind: "run", i: 0, row: 1, col: 2, dir: "→" });
+  return cells;
+}
+
+function alerts(snap, readers, placed, staleMs) {
+  const list = [];
+  const g = gates(snap.course, readers);
+  // One line per kind of reader trouble, not one per gate: when the network drops, sixteen
+  // identical lines would push every athlete off the bottom of the list.
+  const unheard = [], silent = [], warned = [];
+  const check = (label, rs) => {
+    for (const r of rs) {
+      if (r.last_seen_age_ms == null) unheard.push(label);
+      else if (r.last_seen_age_ms > DEVICE_SILENT_MS) silent.push(label);
+      else if (r.warning && r.warning !== "HEALTHY") warned.push(`${label} ${r.warning}`);
+    }
+  };
+  check("1S", g.mat);
+  g.stations.forEach((st, i) => { check(`${i + 2}S`, st.s); if (!st.nIsMat) check(`${i + 2}N`, st.n); });
+  const uniq = (xs) => [...new Set(xs)].join(" ");
+  if (silent.length) list.push({ level: "bad", text: I18N.t("course.readerDown", uniq(silent)) });
+  if (unheard.length) list.push({ level: "bad", text: I18N.t("course.readerUnheard", uniq(unheard)) });
+  for (const w of new Set(warned)) list.push({ level: "warn", text: w });
+  const all = [...placed.inside.flat(), ...placed.runs.flat(), ...placed.toFinish];
+  for (const a of all.filter((a) => a.stale).sort((x, y) => y.last_event_age_ms - x.last_event_age_ms))
+    list.push({ level: "warn", bib: a.bib, text: I18N.t("course.stale", a.bib, a.name, Math.floor(a.last_event_age_ms / 60000)) });
+  for (const a of snap.athletes) a.splits.forEach((s, i) => {
+    if (s.exit_missed) list.push({ level: "warn", bib: a.bib, text: I18N.t("course.exitMissed", a.bib, a.name, stationName(snap.course[i]?.name ?? s.station)) });
+  });
+  return list;
+}
+
+function clock(ms) {
+  if (ms == null) return "--:--";
+  const s = Math.floor(Math.max(0, ms) / 1000);
+  const p = (x) => String(x).padStart(2, "0");
+  const h = Math.floor(s / 3600);
+  return h ? `${h}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}` : `${p(Math.floor(s / 60))}:${p(s % 60)}`;
+}
+function ago(ms) {
+  if (ms == null) return "—";
+  return ms < 60000 ? I18N.t("course.secondsAgo", Math.floor(ms / 1000)) : I18N.t("course.minutesAgo", Math.floor(ms / 60000));
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const STATION_NAME = {};
+function stationName(key) { return STATION_NAME[key] || key || ""; }
+
+// ── Rendering ────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+let SNAP = null, READERS = [], SELECTED = null, QUERY = "";
+
+function staleMs() {
+  const v = Number($("stale").value);
+  return (v >= 1 ? v : DEFAULT_STALE_MIN) * 60000;
+}
+
+function chips(list) {
+  const shown = list.slice(0, SHOW_CHIPS).map((a) => {
+    const hit = !QUERY || String(a.bib) === QUERY || a.name.toLowerCase().includes(QUERY.toLowerCase());
+    const cls = ["chip", a.stale && "stale", SELECTED === a.bib && "sel", !hit && "dim"].filter(Boolean).join(" ");
+    return `<button class="${cls}" data-bib="${a.bib}" aria-label="${esc(a.bib + " " + a.name)}">${a.bib}</button>`;
+  });
+  if (list.length > SHOW_CHIPS) shown.push(`<span class="chip more">+${list.length - SHOW_CHIPS}</span>`);
+  return list.length ? `<div class="chips">${shown.join("")}</div>` : "";
+}
+
+function gateTile(kind, label, rs, missed) {
+  const h = health(rs);
+  if (h === "none") return `<div class="gate none">${label}<small>${esc(I18N.t("course.noReader"))}</small></div>`;
+  const read = Math.min(...rs.map((r) => r.last_read_age_ms ?? Infinity));
+  return `<div class="gate ${kind}" title="${esc(I18N.t("course.lastRead", ago(read === Infinity ? null : read)))}">${label}<span class="dot ${h}"></span>${missed ? `<small class="miss">${esc(I18N.t("course.missedAt", missed))}</small>` : ""}</div>`;
+}
+
+/// Snapshots arrive four times a second. Rewriting the map each time would replace the bib a
+/// marshal's finger is on between touch-down and touch-up, and the tap would be lost; so a
+/// cell is only rewritten when what it says has changed.
+function paint(el, html) {
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+}
+
+function render() {
+  const snap = SNAP;
+  if (!snap) return;
+  const n = snap.course.length;
+  const competition = snap.mode === "COMPETITION";
+  $("session").textContent = `${snap.session_name} · ${clock(snap.class_elapsed_ms)}`;
+  $("counts").textContent = I18N.t("course.counts", snap.finished, snap.in_class, snap.exceptions);
+  const age = snap.last_event_age_ms;
+  $("fresh").textContent = age == null ? I18N.t("course.noReads") : I18N.t("course.lastEvent", ago(age));
+  if (!n) { paint($("map"), `<p class="muted">${esc(I18N.t("course.noCourse"))}</p>`); return; }
+
+  const placed = place(snap, staleMs());
+  const g = gates(snap.course, READERS);
+  const missed = missedAt(snap);
+  const cell = (c, html) => `<div style="grid-row:${c.row};grid-column:${c.col}">${html}</div>`;
+  const parts = [cell({ row: 1, col: 1 }, `<div class="card mat"><div class="body">
+      <h2>${esc(I18N.t("course.mat"))}</h2><div class="count">1S · ${n + 1}N ${g.mat.length ? `<span class="dot ${health(g.mat)}"></span>` : esc(I18N.t("course.noReader"))}</div>
+      <div class="count">${esc(I18N.t("course.waiting"))} ${placed.waiting.length}</div>${chips(placed.waiting)}
+      ${placed.toFinish.length ? `<div class="count">${esc(I18N.t("course.toFinish"))} ${placed.toFinish.length}</div>${chips(placed.toFinish)}` : ""}
+      <div class="count">${esc(I18N.t("course.finished"))} ${placed.finished.length}</div></div></div>`)];
+  for (const c of layout(n)) {
+    if (c.kind === "run") {
+      const who = placed.runs[c.i];
+      const label = I18N.t(competition ? "course.run" : "course.transition", c.i + 1);
+      parts.push(cell(c, `<div class="run${c.vertical ? " v" : ""}"><span>${esc(label)} ${c.dir}</span><b>${esc(I18N.t("course.people", who.length))}</b>${chips(who)}</div>`));
+    } else {
+      const st = g.stations[c.i], who = placed.inside[c.i];
+      const sTile = gateTile("s", `${c.i + 2}S`, st.s, 0);
+      const nTile = st.nIsMat
+        ? `<div class="gate none">${c.i + 2}N<small>= 1S</small></div>`
+        : gateTile("n", `${c.i + 2}N`, st.n, missed[c.i]);
+      const body = `<div class="body"><h2>${String(c.i + 1).padStart(2, "0")} ${esc(stationName(snap.course[c.i].name))}</h2>
+        <div class="count">${esc(I18N.t("course.inside", who.length))}${snap.course[c.i].plan ? " · " + esc(snap.course[c.i].plan) : ""}</div>${chips(who)}</div>`;
+      parts.push(cell(c, `<div class="card">${c.ltr ? sTile + body + nTile : nTile + body + sTile}</div>`));
+    }
+  }
+  paint($("map"), parts.join(""));
+
+  const list = alerts(snap, READERS, placed, staleMs());
+  paint($("alerts"), list.length
+    ? list.map((a) => `<div class="alert ${a.level}"${a.bib != null ? ` data-bib="${a.bib}"` : ""}>${esc(a.text)}</div>`).join("")
+    : `<div class="muted">${esc(I18N.t("course.noAlerts"))}</div>`);
+  renderDetail();
+}
+
+function renderDetail() {
+  const a = SNAP && SNAP.athletes.find((x) => x.bib === SELECTED);
+  if (!a) { $("detail").innerHTML = `<div class="muted">${esc(I18N.t("course.pick"))}</div>`; return; }
+  const competition = SNAP.mode === "COMPETITION";
+  const where = a.status === "FINISHED" ? I18N.t("course.finished")
+    : a.status === "READY" ? I18N.t("course.waiting")
+    : a.station_state === "INSIDE" ? stationName(a.station)
+    : I18N.t(competition ? "course.run" : "course.transition", a.completed + 1);
+  const rows = a.splits.map((s, i) => `<tr><td>${i + 1}</td><td>${esc(stationName(s.station))}</td>
+    <td class="mono">${s.transition_ms == null ? "—" : clock(s.transition_ms)}</td>
+    <td class="mono">${s.exit_missed ? `<span class="warn-text">${esc(I18N.t("course.exitNotRead"))}</span>` : clock(s.work_ms)}</td></tr>`).join("");
+  $("detail").innerHTML = `<div style="font-size:18px"><b class="mono">#${a.bib}</b> ${esc(a.name)}</div>
+    <div class="muted" style="margin:4px 0 8px">${esc(where)} · ${esc(I18N.t("course.leg"))} ${clock(a.leg_ms)} · ${esc(I18N.t("course.total"))} ${clock(a.elapsed_ms)} · ${esc(I18N.t("course.lastEvent", ago(a.last_event_age_ms)))}</div>
+    ${rows ? `<table><thead><tr><th>#</th><th>${esc(I18N.t("result.station"))}</th><th>${esc(I18N.t(competition ? "result.run" : "result.transition"))}</th><th>${esc(I18N.t("result.work"))}</th></tr></thead><tbody>${rows}</tbody></table>` : ""}`;
+}
+
+function pick(e) {
+  const bib = e.target.closest("[data-bib]")?.dataset.bib;
+  if (bib == null) return;
+  SELECTED = SELECTED === Number(bib) ? null : Number(bib);
+  render();
+}
+
+function setLink(up) {
+  $("link-dot").className = "dot " + (up ? "ok" : "bad");
+  // A frozen screen must never be mistaken for a quiet course (ADR 0001 D5).
+  $("banner").classList.toggle("on", !up);
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => setLink(true);
+  ws.onmessage = (e) => { SNAP = JSON.parse(e.data); render(); };
+  ws.onclose = () => { setLink(false); setTimeout(connect, 1000); };
+  ws.onerror = () => ws.close();
+}
+
+// Reader health changes on the scale of a status message, not of a race (live.rs
+// reader_views), so it is fetched slowly rather than pushed with every snapshot.
+async function loadReaders() {
+  try {
+    const res = await fetch("/api/coach");
+    if (res.ok) { READERS = (await res.json()).readers; render(); }
+  } catch (err) { /* the next poll tries again; the link banner covers a dead hub */ }
+}
+
+async function loadStationNames() {
+  try {
+    const res = await fetch("/api/exercises");
+    for (const e of (await res.json()).exercises) {
+      const key = "ex." + e.code, text = I18N.t(key);
+      STATION_NAME[e.station_key] = text === key ? e.display_name : text;
+    }
+    render();
+  } catch (err) { /* station keys are readable on their own */ }
+}
+
+// A per-tablet preference, so localStorage: two marshals may want different alert lines.
+try { $("stale").value = localStorage.getItem("course.staleMin") || DEFAULT_STALE_MIN; } catch (e) { $("stale").value = DEFAULT_STALE_MIN; }
+$("stale").addEventListener("change", () => { try { localStorage.setItem("course.staleMin", $("stale").value); } catch (e) {} render(); });
+$("search").addEventListener("input", () => { QUERY = $("search").value.trim(); render(); });
+$("map").addEventListener("click", pick);
+$("alerts").addEventListener("click", pick);
+
+I18N.apply();
+I18N.switcher($("lang"));
+loadStationNames();
+loadReaders();
+setInterval(loadReaders, 5000);
+connect();
+</script>
+</body></html>

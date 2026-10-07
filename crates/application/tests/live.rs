@@ -218,3 +218,72 @@ fn finished_athletes_have_no_next_action_even_when_class_ends_early() {
     assert_eq!(snap.athletes[0].next_station, None);
     assert_eq!(snap.athletes[0].next_plan, None);
 }
+
+/// ADR 0016: a station whose exit was never read is still done. The screens must count it,
+/// and must say why its split is blank rather than leave a coach guessing.
+#[test]
+fn a_missed_exit_counts_as_done_and_is_flagged_on_its_split() {
+    let mut state = session();
+    let athlete = state.athlete_mut("a1").unwrap();
+    for event in [
+        Interpreted::Entered {
+            station: "SKIERG".into(),
+            at: START,
+            transition: None,
+            started_timing: true,
+        },
+        // The SKIERG exit was never read.
+        Interpreted::Entered {
+            station: "SLED PUSH".into(),
+            at: Instant(START.0 + 300_000),
+            transition: None,
+            started_timing: false,
+        },
+    ] {
+        domain::apply(athlete, &event);
+    }
+
+    let snap = snapshot(&state, Instant(START.0 + 310_000));
+    let a = &snap.athletes[0];
+
+    assert_eq!(a.completed, 1);
+    assert_eq!(a.station_index, Some(1));
+    assert_eq!(a.next_station.as_deref(), Some("WALL BALLS"));
+    assert!(a.splits[0].exit_missed);
+    assert_eq!(a.splits[0].work_ms, None);
+    assert!(!a.splits[1].exit_missed);
+
+    let results = application::live_results(&state);
+    assert_eq!(results.rows[0].stations_completed, 1);
+    assert!(results.rows[0].splits[0].exit_missed);
+}
+
+/// Per-head freshness (CLAUDE.md 23 "Device / Reader Warnings"): one board can carry the
+/// S and N gates, and the board answering says nothing about which antenna is reading.
+#[test]
+fn each_reader_reports_when_it_last_produced_a_read() {
+    let mut state = session();
+    let key = ReaderKey::parse("a4cf128b3d91", "rfid-01").unwrap();
+    let silent = ReaderKey::parse("a4cf128b3d91", "rfid-02").unwrap();
+    state.readers.register(ReaderRegistration::new(
+        silent.clone(),
+        "SKIERG",
+        ReaderMode::Exit,
+    ));
+
+    application::note_reader_read(&mut state, &key, Instant(START.0 + 5_000));
+
+    let views = application::reader_views(&state, Instant(START.0 + 7_000));
+    let view = |id: &str| views.iter().find(|v| v.reader_id == id).unwrap();
+    assert_eq!(view("rfid-01").last_read_age_ms, Some(2_000));
+    assert_eq!(
+        view("rfid-01").last_seen_age_ms,
+        Some(2_000),
+        "a read is also liveness"
+    );
+    assert_eq!(
+        view("rfid-02").last_read_age_ms,
+        None,
+        "never read is not zero, and must not be drawn as fresh"
+    );
+}

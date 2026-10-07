@@ -21,7 +21,7 @@
 
 use crate::wall_clock_ms;
 use api::Hub;
-use application::{ingest_read, note_device_seen, note_device_status, DeviceReport, IngestError};
+use application::{ingest_read, note_device_status, note_reader_read, DeviceReport, IngestError};
 use contract::ReceivedEvent;
 use storage::Store;
 use transport::{
@@ -112,7 +112,9 @@ async fn ingest(hub: &Hub<Store>, client: &AsyncClient, event: contract::EdgeEve
         // the link, not about interpretation, and D5 needs it for every arriving message.
         // Stamped on the hub's own clock -- the same one the screens read -- so an age
         // shown beside a reader is comparable with the ages beside the athletes.
-        note_device_seen(&mut state, &received.event().device_id, hub.now());
+        let event = received.event();
+        let reader = domain::ReaderKey::new(event.device_id.clone(), event.reader_id.clone());
+        note_reader_read(&mut state, &reader, hub.now());
         match ingest_read(&mut state, &**hub.store(), &received).await {
             Ok(ingested) => Some(ingested.ack),
             // Raw read is durable, but interpretation failed. We do NOT acknowledge to the edge

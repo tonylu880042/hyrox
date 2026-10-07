@@ -150,6 +150,6 @@ pub fn current_expectation(course: &Course, athlete: &AthleteState) -> Option<Ex
     // Judged against the plan as it stood *before* this station was entered, which is what
     // "did they come to the right place?" actually asks.
     let mut before = athlete.clone();
-    before.runs.retain(|r| r.exited_at.is_some());
+    before.runs.retain(|r| r.is_complete());
     Some(domain::expectation(course, &before, station))
 }

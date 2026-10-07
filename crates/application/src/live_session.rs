@@ -7,7 +7,7 @@
 
 use crate::devices::DeviceHealth;
 use domain::{
-    AthleteState, BindingLedger, ClassClock, DeviceId, Instant, ReaderRegistry, Session,
+    AthleteState, BindingLedger, ClassClock, DeviceId, Instant, ReaderKey, ReaderRegistry, Session,
     SessionConfig, TagId,
 };
 
@@ -42,6 +42,9 @@ pub struct LiveSession {
     /// When each edge device was last heard from (ADR 0001 D5). In memory only, and
     /// deliberately so -- see [`crate::devices`].
     devices: Vec<DeviceHealth>,
+    /// When each reader head last produced a read. In memory for the same reason as
+    /// `devices`: after a restart the honest answer is "not yet".
+    reader_reads: Vec<(ReaderKey, Instant)>,
 }
 
 impl LiveSession {
@@ -59,6 +62,7 @@ impl LiveSession {
             projection_dirty: false,
             bibs: Vec::new(),
             devices: Vec::new(),
+            reader_reads: Vec::new(),
         }
     }
 
@@ -153,5 +157,19 @@ impl LiveSession {
 
     pub(crate) fn push_device(&mut self, health: DeviceHealth) {
         self.devices.push(health);
+    }
+
+    pub fn reader_last_read(&self, key: &ReaderKey) -> Option<Instant> {
+        self.reader_reads
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, at)| *at)
+    }
+
+    pub(crate) fn note_reader_read(&mut self, key: &ReaderKey, at: Instant) {
+        match self.reader_reads.iter_mut().find(|(k, _)| k == key) {
+            Some((_, last)) => *last = at,
+            None => self.reader_reads.push((key.clone(), at)),
+        }
     }
 }
