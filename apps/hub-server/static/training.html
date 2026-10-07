@@ -324,7 +324,8 @@ function card(a, course, training = false) {
   } else if (!inside) {
     cls += " transition"; colour = "#7DF4FF";
     glyph = '<span class="material-symbols-outlined station-icon" style="color:#7DF4FF;">directions_walk</span>';
-    label = I18N.t("live.transition");
+    // Competition layouts have no Roxzone mats: outside a station is the run (ADR 0016).
+    label = I18N.t(training ? "live.transition" : "live.running");
     const next = training ? I18N.t("live.inTransition") : a.next_station
       ? I18N.t("live.movingTo", stationName(a.next_station))
       : I18N.t("live.moving");

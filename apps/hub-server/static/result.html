@@ -72,6 +72,8 @@ function esc(s) {
 }
 
 let RESULT_STATUS = "";
+// Competition layouts have no Roxzone mats: N -> next S is the run (ADR 0016).
+let RESULT_MODE = "";
 function resultTime(row) {
   if (row.finished_at != null) return clock(row.elapsed_ms, true);
   if (RESULT_STATUS === "CANCELLED") return I18N.t("result.cancelled");
@@ -112,7 +114,7 @@ function card(row) {
             <th class="px-3 py-2 text-left">#</th>
             <th class="px-3 py-2 text-left" data-t="result.station"></th>
             <th class="px-3 py-2 text-right" data-t="result.work"></th>
-            <th class="px-3 py-2 text-right" data-t="result.transition"></th>
+            <th class="px-3 py-2 text-right" data-t="${RESULT_MODE === "COMPETITION" ? "result.run" : "result.transition"}"></th>
           </tr>
         </thead>
         <tbody>${splits}</tbody>
@@ -403,6 +405,7 @@ async function load() {
     document.getElementById("empty").classList.toggle("hidden", r.rows.length > 0);
 
     RESULT_STATUS = r.status;
+    RESULT_MODE = r.mode;
     renderRows(r.rows);
   } catch (err) {
     updateNetStatus(false);

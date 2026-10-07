@@ -211,7 +211,8 @@ fn toggle_uses_athlete_state_not_scan_parity() {
 }
 
 #[test]
-fn toggle_for_a_different_station_while_inside_is_an_exception() {
+fn toggle_for_a_different_station_while_inside_is_a_missed_exit_not_an_exception() {
+    // ADR 0016: the athlete has evidently left SLED PUSH; the exit read was lost.
     let s = armed(SessionMode::Training);
     let mut a = AthleteState::ready("a1", "Chen");
     interpret(&mut a, &reader("SLED PUSH", ReaderMode::Toggle), at(0), &s);
@@ -221,13 +222,8 @@ fn toggle_for_a_different_station_while_inside_is_an_exception() {
         at(10_000),
         &s,
     );
-    assert_eq!(
-        r,
-        Interpreted::Exception {
-            reason: ExceptionReason::ImpossibleTransition,
-            at: at(10_000)
-        }
-    );
+    assert!(matches!(r, Interpreted::Entered { .. }), "got {r:?}");
+    assert!(a.runs[0].exit_missed);
 }
 
 // --- transition / ROX time (CLAUDE.md 13) --------------------------------------------

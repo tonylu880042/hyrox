@@ -312,7 +312,7 @@ let DEVICE = localStorage.getItem("hyrox.device") || "";
 /// tablet, and kept (ADR 0001 D1).
 const DEVICE_CHIPS = ["ask.deviceDefault"];
 let VIEW = { readers: [], devices: [], exceptions: [], unregistered: [], stations: [] };
-const MODES = ["ENTRY", "EXIT", "TOGGLE", "CHECKPOINT", "PASSAGE"];
+const MODES = ["ENTRY", "EXIT", "TOGGLE", "START_FINISH", "CHECKPOINT", "PASSAGE"];
 /// The reasons an exception actually gets cleared for, as one-tap answers.
 const EXCEPTION_CHIPS = ["exc.chip.missed", "exc.chip.wrongStation", "exc.chip.duplicate",
                          "exc.chip.newBand", "exc.chip.coachApproved"];

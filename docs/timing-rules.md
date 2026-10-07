@@ -21,6 +21,11 @@ Session ARMED 之後，該選手的**第一個有效事件**啟動其計時，
 且該讀取在選手當下狀態中可被解讀。Reader 與 Tag 的已知性由上游負責
 （`ReaderRegistry::resolve` 回傳 `UnknownReader`、`BindingLedger` 回傳 `None`）。
 
+**起終點感應墊（ADR 0016）**：`START_FINISH` 讀取器讀到 READY 的選手，產生 `STARTED`，
+計時從這一刻開始。起跑時刻同時記為「上一次出站」，第 1 段跑步因此由下方的 transition
+公式直接算出（2S − 1S）。同一片墊讀到「在其登記站點內」的選手是該站出站（兼完賽）；
+其他情況（跑步路線經過、完賽後逗留）記為 `PASSED`，不改狀態、不進例外收件匣。
+
 測試：`crates/domain/tests/interpretation.rs`
 - `first_valid_event_after_arming_starts_timing_at_detected_at`
 - `only_the_first_event_starts_the_clock`
@@ -32,11 +37,19 @@ Session ARMED 之後，該選手的**第一個有效事件**啟動其計時，
 Transition = 下一個 Entry 的 detected_at - 前一個 Exit 的 detected_at
 ```
 
-第一個站點沒有 transition（沒有可相減的前一筆）。此值為衍生資料，
+第一個站點沒有 transition（沒有可相減的前一筆），除非選手由起終點感應墊起跑（ADR 0016）。
+
+**漏讀出站（ADR 0016）**：選手在站 A 內卻在另一站 B 被讀到進站時，B 正常記錄、
+`transition = None`；A 標記 `exit_missed`，`exited_at` 維持空白，不補任何時刻。
+`exit_missed` 的一趟仍算完成，`CourseComplete` 與站點順序判斷不會因此卡住。
+同一站重複讀到進站仍是例外。
+
+**名稱**：比賽模式的配置沒有 Roxzone 感應墊，「上一站 N → 下一站 S」包含跑步與 Roxzone
+移動，比賽畫面顯示為「跑步」；訓練模式顯示為「轉換」。此值為衍生資料，
 儲存在 `StationRun::transition_from_prev`，可由 interpreted event 重算。
 
-競賽 UI 顯示為 ROX Zone Time，訓練模式顯示為 Transition Time；
-兩者是同一個計算，差別只在名稱。
+兩種模式是同一個計算，差別只在名稱（見上）。若日後加裝 Roxzone 感應墊，
+才有辦法把 ROX Zone Time 與跑步分開。
 
 測試：`transition_is_next_entry_minus_previous_exit`、`first_station_has_no_transition`。
 

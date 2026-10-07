@@ -24,13 +24,16 @@ pub enum StationState {
 /// `Deserialize` as well as `Serialize`: registering a reader is an operator action over
 /// HTTP (ADR 0007), so the mode has to survive the trip in as well as out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ReaderMode {
     Entry,
     Exit,
     Toggle,
     Checkpoint,
     Passage,
+    /// One mat that is both the start line and the exit of the station it is registered
+    /// against (ADR 0016). What a read means depends on the athlete, never on the mat.
+    StartFinish,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +75,17 @@ pub enum Interpreted {
         station: String,
         at: Instant,
     },
+    /// The start mat started this athlete's clock (ADR 0016). Also the left-hand side of
+    /// the first run, exactly as an exit is for every later one.
+    Started {
+        at: Instant,
+    },
+    /// The athlete crossed the start/finish mat without it meaning anything: the route runs
+    /// over it. Kept so the read is accounted for, but it is not an exception (ADR 0016).
+    Passed {
+        station: String,
+        at: Instant,
+    },
     /// Recorded, never dropped. Surfaces in the operator's exception inbox (ADR D4).
     Exception {
         reason: ExceptionReason,
@@ -85,6 +99,17 @@ pub struct StationRun {
     pub entered_at: Instant,
     pub exited_at: Option<Instant>,
     pub transition_from_prev: Option<Duration>,
+    /// The athlete turned up at another station while this one was still open: they left,
+    /// but no reader saw when (ADR 0016). `exited_at` stays `None` rather than inventing a
+    /// time; the step still counts as done.
+    pub exit_missed: bool,
+}
+
+impl StationRun {
+    /// Done with this station, whether or not the exit was read.
+    pub fn is_complete(&self) -> bool {
+        self.exited_at.is_some() || self.exit_missed
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -153,29 +178,40 @@ pub fn decide(
     if !session.accepts_events() {
         return exception(ExceptionReason::SessionNotArmed);
     }
+    let inside = |station: &str| {
+        state.station_state == StationState::Inside
+            && state.current_station.as_deref() == Some(station)
+    };
+    if binding.mode == ReaderMode::StartFinish {
+        // The route runs over this mat, so most reads of it mean nothing (ADR 0016).
+        return match state.status {
+            AthleteStatus::Ready => Interpreted::Started { at },
+            AthleteStatus::Active if inside(&binding.station) => Interpreted::Exited {
+                station: binding.station.clone(),
+                at,
+            },
+            _ => Interpreted::Passed {
+                station: binding.station.clone(),
+                at,
+            },
+        };
+    }
     if state.status == AthleteStatus::Finished {
         return exception(ExceptionReason::AlreadyFinished);
     }
 
-    // The first valid read after ARMED starts this athlete's clock (CLAUDE.md 11).
-    let started_timing = state.status == AthleteStatus::Ready;
-
     let entering = || {
-        if state.station_state == StationState::Inside {
-            return exception(ExceptionReason::ImpossibleTransition);
-        }
-        Interpreted::Entered {
+        let entered = Interpreted::Entered {
             station: binding.station.clone(),
             at,
-            // No transition before the first station: nothing to subtract from.
-            transition: state.last_exit_at.map(|prev| at.since(prev)),
-            started_timing,
-        }
+            transition: None,
+            started_timing: false,
+        };
+        // Same derivation as replay, so the live answer and the rebuilt one cannot differ.
+        rederive(state, entered).unwrap_or_else(|| exception(ExceptionReason::ImpossibleTransition))
     };
     let exiting = || {
-        let inside_this = state.station_state == StationState::Inside
-            && state.current_station.as_deref() == Some(binding.station.as_str());
-        if !inside_this {
+        if !inside(&binding.station) {
             return exception(ExceptionReason::ImpossibleTransition);
         }
         Interpreted::Exited {
@@ -188,15 +224,49 @@ pub fn decide(
         ReaderMode::Entry => entering(),
         ReaderMode::Exit => exiting(),
         // Uses athlete state, never scan parity (CLAUDE.md 10.2).
-        ReaderMode::Toggle => match state.station_state {
-            StationState::Outside => entering(),
-            StationState::Inside => exiting(),
-        },
+        // Inside another station, a toggle here means the exit there was missed (ADR 0016).
+        ReaderMode::Toggle if inside(&binding.station) => exiting(),
+        ReaderMode::Toggle => entering(),
         // Passage/checkpoint readers mark a crossing without owning station occupancy.
         // Modelling them is Milestone 4 work; for now they are recorded, not interpreted.
         ReaderMode::Checkpoint | ReaderMode::Passage => {
             exception(ExceptionReason::ImpossibleTransition)
         }
+        ReaderMode::StartFinish => unreachable!("handled above"),
+    }
+}
+
+/// The derived fields of an event, recomputed from the history that now precedes it.
+///
+/// `transition` and `started_timing` are properties of an event's position in the timeline,
+/// so a correction earlier in the log changes them (CLAUDE.md 20). Live interpretation goes
+/// through here too, which is what keeps a replay identical to the live run (CLAUDE.md 21).
+/// `None` means the event no longer makes sense where it sits and must not be projected; it
+/// stays in the log, auditable.
+pub fn rederive(state: &AthleteState, event: Interpreted) -> Option<Interpreted> {
+    match event {
+        // A second entry into the station the athlete is already in is a re-read.
+        Interpreted::Entered { ref station, .. }
+            if state.station_state == StationState::Inside
+                && state.current_station.as_deref() == Some(station.as_str()) =>
+        {
+            None
+        }
+        Interpreted::Entered { station, at, .. } => Some(Interpreted::Entered {
+            // Inside another station the previous exit was missed: nothing to subtract from
+            // (ADR 0016). No transition before the first station either.
+            transition: match state.station_state {
+                StationState::Inside => None,
+                StationState::Outside => state.last_exit_at.map(|prev| at.since(prev)),
+            },
+            // The first valid read after ARMED starts this athlete's clock (CLAUDE.md 11).
+            started_timing: state.status == AthleteStatus::Ready,
+            station,
+            at,
+        }),
+        // Only the first event can start the clock.
+        Interpreted::Started { .. } if state.status != AthleteStatus::Ready => None,
+        other => Some(other),
     }
 }
 
@@ -218,6 +288,11 @@ pub fn apply(state: &mut AthleteState, event: &Interpreted) {
                 state.status = AthleteStatus::Active;
                 state.started_at = Some(*at);
             }
+            if state.station_state == StationState::Inside {
+                if let Some(open) = state.runs.last_mut() {
+                    open.exit_missed = true;
+                }
+            }
             state.station_state = StationState::Inside;
             state.current_station = Some(station.clone());
             state.runs.push(StationRun {
@@ -225,6 +300,7 @@ pub fn apply(state: &mut AthleteState, event: &Interpreted) {
                 entered_at: *at,
                 exited_at: None,
                 transition_from_prev: *transition,
+                exit_missed: false,
             });
             state.last_event_at = Some(*at);
         }
@@ -237,8 +313,15 @@ pub fn apply(state: &mut AthleteState, event: &Interpreted) {
             state.last_exit_at = Some(*at);
             state.last_event_at = Some(*at);
         }
+        Interpreted::Started { at } => {
+            state.status = AthleteStatus::Active;
+            state.started_at = Some(*at);
+            state.last_exit_at = Some(*at);
+            state.last_event_at = Some(*at);
+        }
         // Recorded for the operator's exception inbox (ADR 0001 D4); changes no state.
-        Interpreted::Exception { .. } => {}
+        // A pass of the start/finish mat changes none either (ADR 0016).
+        Interpreted::Exception { .. } | Interpreted::Passed { .. } => {}
     }
 }
 

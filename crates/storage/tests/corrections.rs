@@ -147,8 +147,10 @@ async fn contradictory_historical_reinterpretation_is_rejected_before_mutation()
             "s1",
             "a1",
             None,
+            // Entering the SAME station the correction would put the athlete in. A different
+            // station would be a missed exit, which is not a contradiction (ADR 0016).
             &Interpreted::Entered {
-                station: "RUN".into(),
+                station: "SKIERG".into(),
                 at: Instant(200),
                 transition: None,
                 started_timing: true,

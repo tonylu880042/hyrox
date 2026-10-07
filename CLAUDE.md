@@ -387,6 +387,7 @@ EXIT
 TOGGLE
 CHECKPOINT
 PASSAGE
+START_FINISH   # one mat: start line, and exit of the station it is registered against (ADR 0016)
 ```
 
 Actual interpretation belongs to Central Hub.

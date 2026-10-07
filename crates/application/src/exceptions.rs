@@ -15,7 +15,7 @@ use crate::ports::{
     AuditEntry, AuditedInterpretedWrite, AuditedResult, AuditedWrite, HubStore, StoredException,
     StoredInterpretation,
 };
-use domain::{AthleteStatus, Instant, Interpreted, ReaderMode};
+use domain::{Instant, Interpreted, ReaderMode};
 
 /// What the operator wants to reinterpret an exception into (ADR 0001 D4; CLAUDE.md 20).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -269,31 +269,26 @@ fn corrected_event(
     for (_, _, event) in events {
         let is_replacement = event.is_none();
         let candidate = match event {
-            Some(event) => normalize_replay_event(&context, event),
-            None => {
-                let started_timing =
-                    context.status == AthleteStatus::Ready && spec.mode != ReaderMode::Exit;
-                let transition = if spec.mode == ReaderMode::Entry {
-                    context.last_exit_at.map(|prev| at.since(prev))
-                } else {
-                    None
-                };
-                match spec.mode {
-                    ReaderMode::Exit => Interpreted::Exited {
-                        station: spec.station.clone(),
-                        at,
-                    },
-                    _ => Interpreted::Entered {
-                        station: spec.station.clone(),
-                        at,
-                        transition,
-                        started_timing,
-                    },
-                }
-            }
+            Some(event) => event,
+            None => match spec.mode {
+                ReaderMode::Exit => Interpreted::Exited {
+                    station: spec.station.clone(),
+                    at,
+                },
+                _ => Interpreted::Entered {
+                    station: spec.station.clone(),
+                    at,
+                    transition: None,
+                    started_timing: false,
+                },
+            },
         };
-
         validate_event(&context, &candidate)?;
+        // Same derivation as live interpretation and replay (ADR 0016); validated above, so
+        // only a superseded start can fall out here, and it falls out of every path alike.
+        let Some(candidate) = domain::rederive(&context, candidate) else {
+            continue;
+        };
         if is_replacement {
             replacement = Some(candidate.clone());
         }
@@ -303,26 +298,15 @@ fn corrected_event(
     replacement.ok_or_else(|| "replacement was not inserted into the timeline".to_string())
 }
 
-fn normalize_replay_event(state: &domain::AthleteState, event: Interpreted) -> Interpreted {
-    match event {
-        Interpreted::Entered { station, at, .. } => Interpreted::Entered {
-            station,
-            at,
-            transition: state.last_exit_at.map(|previous| at.since(previous)),
-            started_timing: state.status == AthleteStatus::Ready,
-        },
-        other => other,
-    }
-}
-
 fn validate_event(state: &domain::AthleteState, event: &Interpreted) -> Result<(), String> {
     match event {
+        // Inside a *different* station is a missed exit, not a contradiction (ADR 0016).
         Interpreted::Entered { station, .. }
-            if state.station_state == domain::StationState::Inside =>
+            if state.station_state == domain::StationState::Inside
+                && state.current_station.as_deref() == Some(station.as_str()) =>
         {
             Err(format!(
-                "ENTRY for {station:?} arrives while athlete is already inside {:?}",
-                state.current_station
+                "ENTRY for {station:?} arrives while athlete is already inside it"
             ))
         }
         Interpreted::Exited { station, .. }
@@ -341,6 +325,8 @@ fn event_at(event: &Interpreted) -> Instant {
     match event {
         Interpreted::Entered { at, .. }
         | Interpreted::Exited { at, .. }
+        | Interpreted::Started { at }
+        | Interpreted::Passed { at, .. }
         | Interpreted::Exception { at, .. } => *at,
     }
 }

@@ -23,6 +23,7 @@ fn run(station: &str, entered: i64, exited: Option<i64>) -> StationRun {
         entered_at: Instant(entered),
         exited_at: exited.map(Instant),
         transition_from_prev: None,
+        exit_missed: false,
     }
 }
 

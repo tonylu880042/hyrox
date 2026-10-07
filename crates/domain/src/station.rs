@@ -141,7 +141,7 @@ pub fn expectation(course: &Course, state: &AthleteState, station: &str) -> Expe
     if course.is_empty() {
         return Expectation::Unknown;
     }
-    let completed = state.runs.iter().filter(|r| r.exited_at.is_some()).count();
+    let completed = state.runs.iter().filter(|r| r.is_complete()).count();
     match course.step(completed) {
         Some(step) if step.station == station => Expectation::Expected,
         _ if course.stations().any(|s| s == station) => Expectation::OutOfOrder,

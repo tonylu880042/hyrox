@@ -402,6 +402,31 @@ async fn a_class_with_a_finish_rule_can_be_ended_by_hand() {
     assert!(store.audits().iter().any(|a| a.action == "CLASS_END"));
 }
 
+/// The start/finish mat is registered against the station it closes (ADR 0016), and its
+/// mode crosses the wire in the same spelling the reader screen offers.
+#[tokio::test]
+async fn a_start_finish_mat_can_be_registered() {
+    let (router, _store) = running();
+
+    let (status, body) = call(
+        &router,
+        post(
+            "/api/operator/readers",
+            DESK,
+            json!({
+                "device_id": "a4cf128b3d91",
+                "reader_id": "mat-1",
+                "station": "WALL_BALLS",
+                "mode": "START_FINISH"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["readers"][0]["mode"], "START_FINISH");
+}
+
 #[tokio::test]
 async fn a_reader_is_registered_and_then_reported_with_its_freshness() {
     let (router, store) = running();

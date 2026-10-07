@@ -85,23 +85,21 @@ impl FinishPolicy {
                     // NotFinished would read as an answer (CLAUDE.md 28).
                     return FinishDecision::Undetermined;
                 };
-                let finished_runs: Vec<_> = state
-                    .runs
-                    .iter()
-                    .filter_map(|r| r.exited_at.map(|at| (&r.station, at)))
-                    .collect();
+                // A station whose exit was missed is still done (ADR 0016).
+                let done: Vec<_> = state.runs.iter().filter(|r| r.is_complete()).collect();
                 let Some(last_step) = course.steps.last() else {
                     return FinishDecision::Undetermined;
                 };
-                if finished_runs.len() < course.steps.len() {
+                if done.len() < course.steps.len() {
                     return FinishDecision::NotFinished;
                 }
-                match finished_runs.last() {
+                match done.last() {
                     // The exit of the final station is the recording point, so that exit's
                     // own timestamp is the result -- not now.
-                    Some((station, at)) if **station == last_step.station => {
-                        FinishDecision::Finished { at: *at }
-                    }
+                    Some(run) if run.station == last_step.station => match run.exited_at {
+                        Some(at) => FinishDecision::Finished { at },
+                        None => FinishDecision::NotFinished,
+                    },
                     _ => FinishDecision::NotFinished,
                 }
             }

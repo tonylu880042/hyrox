@@ -140,5 +140,6 @@ fn finished_run(station: &str) -> domain::StationRun {
         entered_at: domain::Instant(0),
         exited_at: Some(domain::Instant(1)),
         transition_from_prev: None,
+        exit_missed: false,
     }
 }

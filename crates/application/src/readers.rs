@@ -144,5 +144,6 @@ fn mode_name(mode: domain::ReaderMode) -> &'static str {
         domain::ReaderMode::Toggle => "TOGGLE",
         domain::ReaderMode::Checkpoint => "CHECKPOINT",
         domain::ReaderMode::Passage => "PASSAGE",
+        domain::ReaderMode::StartFinish => "START_FINISH",
     }
 }

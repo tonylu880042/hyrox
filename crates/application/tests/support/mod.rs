@@ -1288,6 +1288,8 @@ fn kind_of(e: &Interpreted) -> String {
     match e {
         Interpreted::Entered { .. } => "ENTERED".into(),
         Interpreted::Exited { .. } => "EXITED".into(),
+        Interpreted::Started { .. } => "STARTED".into(),
+        Interpreted::Passed { .. } => "PASSED".into(),
         Interpreted::Exception { reason, .. } => format!("EXCEPTION/{reason:?}"),
     }
 }

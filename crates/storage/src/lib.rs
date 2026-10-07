@@ -698,32 +698,8 @@ impl Store {
         raw_event_id: Option<i64>,
         event: &Interpreted,
     ) -> Result<i64, StoreError> {
-        let (kind, station, detected_at, transition_ms, started, reason) = match event {
-            Interpreted::Entered {
-                station,
-                at,
-                transition,
-                started_timing,
-            } => (
-                "ENTERED",
-                Some(station.clone()),
-                at.0,
-                transition.map(|d| d.millis()),
-                *started_timing,
-                None,
-            ),
-            Interpreted::Exited { station, at } => {
-                ("EXITED", Some(station.clone()), at.0, None, false, None)
-            }
-            Interpreted::Exception { reason, at } => (
-                "EXCEPTION",
-                None,
-                at.0,
-                None,
-                false,
-                Some(reason_str(reason)),
-            ),
-        };
+        let (kind, station, detected_at, transition_ms, started, reason) =
+            interpreted_columns(event);
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO interpreted_events
                 (session_id, athlete_id, raw_event_id, kind, station, detected_at,
@@ -945,7 +921,7 @@ impl Store {
             let Some(state) = out.iter_mut().find(|a| a.athlete_id == aid) else {
                 continue; // event for someone no longer on the roster
             };
-            if let Some(event) = replay_event(state, row_to_interpreted(r)?) {
+            if let Some(event) = domain::rederive(state, row_to_interpreted(r)?) {
                 domain::apply(state, &event);
             }
         }
@@ -964,7 +940,7 @@ impl Store {
             let Some(state) = historical.iter_mut().find(|a| a.athlete_id == aid) else {
                 continue;
             };
-            if let Some(event) = replay_event(state, row_to_interpreted(r)?) {
+            if let Some(event) = domain::rederive(state, row_to_interpreted(r)?) {
                 domain::apply(state, &event);
             }
         }
@@ -1075,25 +1051,46 @@ impl Store {
     }
 }
 
-/// Recompute derived timing fields from the replay prefix instead of trusting values that were
-/// decided before a historical correction. The event kind, station and timestamp remain the
-/// durable interpretation; `started_timing` and `transition` are properties of their position
-/// in the corrected timeline.
-fn replay_event(state: &AthleteState, event: Interpreted) -> Option<Interpreted> {
+type InterpretedColumns = (
+    &'static str,
+    Option<String>,
+    i64,
+    Option<i64>,
+    bool,
+    Option<&'static str>,
+);
+
+/// `kind, station, detected_at, transition_ms, started_timing, exception_reason`.
+fn interpreted_columns(event: &Interpreted) -> InterpretedColumns {
     match event {
-        Interpreted::Entered { .. } if state.station_state == domain::StationState::Inside => {
-            // A historical correction can make a later persisted ENTERED row contradict the
-            // prefix that now precedes it.  It was already recorded in the log, so leave it
-            // auditable, but do not manufacture a second open station run in the projection.
-            None
-        }
-        Interpreted::Entered { station, at, .. } => Some(Interpreted::Entered {
+        Interpreted::Entered {
             station,
             at,
-            transition: state.last_exit_at.map(|previous| at.since(previous)),
-            started_timing: state.status == domain::AthleteStatus::Ready,
-        }),
-        other => Some(other),
+            transition,
+            started_timing,
+        } => (
+            "ENTERED",
+            Some(station.clone()),
+            at.0,
+            transition.map(|d| d.millis()),
+            *started_timing,
+            None,
+        ),
+        Interpreted::Exited { station, at } => {
+            ("EXITED", Some(station.clone()), at.0, None, false, None)
+        }
+        Interpreted::Started { at } => ("STARTED", None, at.0, None, true, None),
+        Interpreted::Passed { station, at } => {
+            ("PASSED", Some(station.clone()), at.0, None, false, None)
+        }
+        Interpreted::Exception { reason, at } => (
+            "EXCEPTION",
+            None,
+            at.0,
+            None,
+            false,
+            Some(reason_str(reason)),
+        ),
     }
 }
 
@@ -1115,6 +1112,13 @@ fn row_to_interpreted(r: &sqlx::sqlite::SqliteRow) -> Result<Interpreted, StoreE
             station: r
                 .get::<Option<String>, _>("station")
                 .ok_or_else(|| StoreError::Corrupt("EXITED without station".into()))?,
+            at,
+        }),
+        "STARTED" => Ok(Interpreted::Started { at }),
+        "PASSED" => Ok(Interpreted::Passed {
+            station: r
+                .get::<Option<String>, _>("station")
+                .ok_or_else(|| StoreError::Corrupt("PASSED without station".into()))?,
             at,
         }),
         "EXCEPTION" => Ok(Interpreted::Exception {
@@ -1248,32 +1252,8 @@ async fn insert_interpreted_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     write: &application::AuditedInterpretedWrite,
 ) -> Result<i64, sqlx::Error> {
-    let (kind, station, detected_at, transition_ms, started, reason) = match &write.event {
-        Interpreted::Entered {
-            station,
-            at,
-            transition,
-            started_timing,
-        } => (
-            "ENTERED",
-            Some(station.clone()),
-            at.0,
-            transition.map(|d| d.millis()),
-            *started_timing,
-            None,
-        ),
-        Interpreted::Exited { station, at } => {
-            ("EXITED", Some(station.clone()), at.0, None, false, None)
-        }
-        Interpreted::Exception { reason, at } => (
-            "EXCEPTION",
-            None,
-            at.0,
-            None,
-            false,
-            Some(reason_str(reason)),
-        ),
-    };
+    let (kind, station, detected_at, transition_ms, started, reason) =
+        interpreted_columns(&write.event);
     sqlx::query_scalar(
         "INSERT INTO interpreted_events
             (session_id, athlete_id, raw_event_id, kind, station, detected_at,
@@ -1797,6 +1777,7 @@ fn reader_mode_str(m: ReaderMode) -> &'static str {
         ReaderMode::Toggle => "TOGGLE",
         ReaderMode::Checkpoint => "CHECKPOINT",
         ReaderMode::Passage => "PASSAGE",
+        ReaderMode::StartFinish => "START_FINISH",
     }
 }
 
@@ -1841,6 +1822,7 @@ fn parse_reader_mode(s: &str) -> Result<ReaderMode, StoreError> {
         "TOGGLE" => Ok(ReaderMode::Toggle),
         "CHECKPOINT" => Ok(ReaderMode::Checkpoint),
         "PASSAGE" => Ok(ReaderMode::Passage),
+        "START_FINISH" => Ok(ReaderMode::StartFinish),
         other => Err(StoreError::Corrupt(format!("reader mode {other}"))),
     }
 }

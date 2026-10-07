@@ -13,8 +13,8 @@ pub mod time;
 pub mod workout;
 
 pub use athlete::{
-    apply, decide, interpret, replay, AthleteState, AthleteStatus, ExceptionReason, Interpreted,
-    ReaderBinding, ReaderMode, StationRun, StationState,
+    apply, decide, interpret, rederive, replay, AthleteState, AthleteStatus, ExceptionReason,
+    Interpreted, ReaderBinding, ReaderMode, StationRun, StationState,
 };
 pub use binding::{BindingError, BindingLedger, TagBinding, TagId, TagIdError};
 pub use config::SessionConfig;
