@@ -30,7 +30,7 @@ fn session(status: SessionStatus) -> LiveSession {
         SessionStatus::Completed => {
             s.mark_ready().unwrap();
             s.start().unwrap();
-            s.complete().unwrap();
+            s.complete(Instant(2_000)).unwrap();
         }
         SessionStatus::Cancelled => s.cancel().unwrap(),
     }

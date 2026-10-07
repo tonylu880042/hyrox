@@ -11,6 +11,7 @@
 
 給讀取器／韌體團隊的實作面摘要（欄位、topic、自測指令、拒收原因對照）：
 [docs/reader-integration.md](reader-integration.md)。
+只講上行訊息格式的單張規格：[docs/mqtt-uplink-format.md](mqtt-uplink-format.md)。
 
 ---
 

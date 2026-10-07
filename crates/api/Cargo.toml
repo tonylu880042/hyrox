@@ -19,6 +19,8 @@ tokio = { version = "1", features = ["sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+getrandom = "0.3"
+sha2 = "0.10"
 
 [dev-dependencies]
 # The tests drive the router in-process with `tower::ServiceExt::oneshot`: no listener, no

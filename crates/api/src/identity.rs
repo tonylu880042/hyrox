@@ -34,6 +34,14 @@ impl<S: Send + Sync> FromRequestParts<S> for OperatorDevice {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
+        Self::parse(parts)
+    }
+}
+
+impl OperatorDevice {
+    /// Parse the audit identity without treating it as authentication.  Machine credentials
+    /// deliberately bypass this helper and receive the fixed `MACHINE_BACKUP` identity.
+    pub(crate) fn parse(parts: &Parts) -> Result<Self, ApiError> {
         // Two spellings, because two things have to agree and only one of them is ours.
         //
         // ADR 0001 D1 makes the device's own name the audit identity, and this gym names its

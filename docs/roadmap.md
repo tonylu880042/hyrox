@@ -204,7 +204,7 @@ header 也支援中文 —— `crates/api/src/identity.rs` 特意不用 axum 的
 |---|---|
 | `static/i18n.js` | 三語字典 + `t()` / `apply()` / `switcher()`，約 110 個 key |
 | `static/workout.html` | 靜態文字用 `data-i18n`，動態產生的用 `I18N.t()`；標頭有語言切換鈕 |
-| `static/training.html` | 同上，但字串進 `design/live/build_screens.py`，重新產生 |
+| `static/training.html` | 同上；頁面本身是維護來源，`build_screens.py` 只更新標記的圖示 mask 區塊 |
 | `<html lang>` | 由 `I18N.apply()` 依所選語系設定 |
 | 錯誤訊息 | 前端依 `error` 機器碼查字典；後端 `message` 永遠英文，只給讀 log 的人 |
 

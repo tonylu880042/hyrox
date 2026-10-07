@@ -69,6 +69,29 @@ pub struct AuditedInterpretedWrite {
     pub event: Interpreted,
 }
 
+/// A binding and the raw reads it is meant to claim, persisted as one intent.
+///
+/// Interpretation rows are still written one at a time through the normal domain path.  The
+/// marker makes a failed handoff recoverable: `reconcile_pending` can finish the claim after a
+/// transient error or a process restart.
+#[derive(Clone, Debug)]
+pub struct ClaimIntent {
+    pub session_id: String,
+    pub tag_id: String,
+    pub athlete_id: String,
+    pub since: Instant,
+    pub until: Instant,
+}
+
+/// One roster row in the atomic class-creation write.
+#[derive(Clone, Debug)]
+pub struct ClassAthlete {
+    pub athlete_id: String,
+    pub display_name: String,
+    pub bib: i64,
+    pub member_id: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub enum AuditedWrite {
     Session {
@@ -90,6 +113,7 @@ pub enum AuditedWrite {
     },
     Bindings {
         bindings: Vec<TagBinding>,
+        claim: Option<ClaimIntent>,
         audit: AuditEntry,
     },
     ReaderSave {
@@ -102,6 +126,7 @@ pub enum AuditedWrite {
         audit: AuditEntry,
     },
     ExceptionAccept {
+        session_id: String,
         interpreted_event_id: i64,
         at: Instant,
         operator: String,
@@ -109,6 +134,7 @@ pub enum AuditedWrite {
         audit: AuditEntry,
     },
     ExceptionVoid {
+        session_id: String,
         interpreted_event_id: i64,
         at: Instant,
         operator: String,
@@ -116,11 +142,56 @@ pub enum AuditedWrite {
         audit: AuditEntry,
     },
     ExceptionReinterpret {
+        session_id: String,
         interpreted_event_id: i64,
         at: Instant,
         operator: String,
         reason: String,
         replacement: AuditedInterpretedWrite,
+        audit: AuditEntry,
+    },
+    /// Creates a session, its snapshot, its initial roster and the audit record as one unit.
+    /// The adapter must use insert-only statements: a client supplied session id is an
+    /// identity, not an upsert key (F06/F17).
+    CreateClass {
+        session: Session,
+        created_at: Instant,
+        config: SessionConfig,
+        athletes: Vec<ClassAthlete>,
+        audit: AuditEntry,
+    },
+    /// Saves a coach template and its audit record in one transaction. This variant permits
+    /// the normal create-or-edit semantics; `TemplateCreate` below is create-only.
+    TemplateSave {
+        template: WorkoutTemplate,
+        audit: AuditEntry,
+    },
+    /// Inserts a template and its audit record without replacing an existing id.
+    TemplateCreate {
+        template: WorkoutTemplate,
+        audit: AuditEntry,
+    },
+    TemplateDelete {
+        template_id: String,
+        audit: AuditEntry,
+    },
+    VenueSetting {
+        key: String,
+        value: String,
+        at: Instant,
+        by: String,
+        audit: AuditEntry,
+    },
+    VenueAssetSave {
+        key: String,
+        media_type: String,
+        bytes: Vec<u8>,
+        at: Instant,
+        by: String,
+        audit: AuditEntry,
+    },
+    VenueAssetDelete {
+        key: String,
         audit: AuditEntry,
     },
     EndClass {
@@ -135,6 +206,9 @@ pub enum AuditedWrite {
 pub enum AuditedResult {
     Applied(bool),
     Interpreted(i64),
+    /// The storage adapter won a race against an insert-only identity. Callers map this to
+    /// a conflict response rather than reporting a transient server failure.
+    Conflict,
 }
 
 /// The interpretation decision made at the moment a raw read arrived.
@@ -180,6 +254,19 @@ pub struct StoredRawRead {
     /// Snapshot captured when the raw row was first committed. `None` means this raw row
     /// predates the context table and callers must keep the legacy fallback explicit.
     pub context: Option<RawInterpretationContext>,
+}
+
+/// One non-voided interpretation in the durable event log, including its stable row id.
+///
+/// Corrections use the row id as the tie-breaker for events with the same detected timestamp;
+/// returning the event log through the port keeps that historical context available without
+/// making the application layer know about SQL rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredInterpretation {
+    pub interpreted_event_id: i64,
+    pub athlete_id: String,
+    pub raw_event_id: Option<i64>,
+    pub event: Interpreted,
 }
 
 /// One live exception, as the operator's inbox lists it (ADR 0001 D4).
@@ -400,6 +487,13 @@ pub trait HubStore {
         &self,
         raw_event_id: i64,
     ) -> impl Future<Output = Result<Option<RawInterpretationContext>, Self::Error>> + Send;
+
+    /// Non-voided interpretations in replay order. The stable id is included because detected
+    /// timestamps alone do not define same-millisecond ordering.
+    fn interpretations(
+        &self,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Vec<StoredInterpretation>, Self::Error>> + Send;
 
     /// Persist all finish decisions as one logical batch. Implementations must commit the
     /// whole batch or none of it; a partial policy write would make retries non-deterministic.

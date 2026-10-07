@@ -75,6 +75,30 @@ impl ApiError {
             "the provided PIN is incorrect",
         )
     }
+
+    pub fn auth_required() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_REQUIRED",
+            "an active operator session is required",
+        )
+    }
+
+    pub fn auth_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AUTH_UNAVAILABLE",
+            "the hub could not create an operator session",
+        )
+    }
+
+    pub fn pin_rate_limited() -> Self {
+        Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "PIN_RATE_LIMITED",
+            "too many PIN attempts; try again later",
+        )
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -153,6 +177,9 @@ impl<E: Display> From<OperatorError<E>> for ApiError {
                 "UNKNOWN_EVENT",
                 format!("no interpreted event with id {id}"),
             ),
+            OperatorError::CorrectionConflict(detail) => {
+                ApiError::new(StatusCode::CONFLICT, "CORRECTION_CONFLICT", detail)
+            }
             // A class on the floor outranks a button (M6). 409 rather than 403: the request
             // is legitimate, this is just the wrong moment.
             OperatorError::UnknownReader {
@@ -257,6 +284,16 @@ impl<E: Display> From<TemplateError<E>> for ApiError {
                 StatusCode::CONFLICT,
                 "CLASS_IN_PROGRESS",
                 "a class is already running; complete or cancel it before creating another",
+            ),
+            TemplateError::SessionIdConflict(id) => ApiError::new(
+                StatusCode::CONFLICT,
+                "SESSION_ID_CONFLICT",
+                format!("a session with id {id:?} already exists"),
+            ),
+            TemplateError::TemplateIdConflict(id) => ApiError::new(
+                StatusCode::CONFLICT,
+                "TEMPLATE_ID_CONFLICT",
+                format!("a template with id {id:?} already exists"),
             ),
             TemplateError::ReasonRequired => ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,

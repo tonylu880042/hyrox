@@ -38,12 +38,15 @@ fn draft_session_rejects_events_and_arming_opens_it() {
 #[test]
 fn armed_can_return_to_draft_only_while_nothing_has_been_interpreted() {
     let mut s = armed(SessionMode::Training);
-    s.back_to_draft().unwrap();
+    s.back_to_draft(at(0)).unwrap();
     assert_eq!(s.status, SessionStatus::Draft);
 
     let mut s = armed(SessionMode::Training);
     s.interpreted_event_count = 1;
-    assert_eq!(s.back_to_draft(), Err(SessionError::HasInterpretedEvents));
+    assert_eq!(
+        s.back_to_draft(at(0)),
+        Err(SessionError::HasInterpretedEvents)
+    );
     assert_eq!(
         s.status,
         SessionStatus::Running,
@@ -55,9 +58,9 @@ fn armed_can_return_to_draft_only_while_nothing_has_been_interpreted() {
 fn completed_session_can_be_reopened() {
     // Deliberate: a mis-tap on a busy floor must not force a new session (D2).
     let mut s = armed(SessionMode::Training);
-    s.complete().unwrap();
+    s.complete(at(0)).unwrap();
     assert_eq!(s.status, SessionStatus::Completed);
-    s.reopen().unwrap();
+    s.reopen(at(1)).unwrap();
     assert_eq!(s.status, SessionStatus::Running);
 }
 
@@ -65,7 +68,7 @@ fn completed_session_can_be_reopened() {
 fn draft_cannot_be_completed_directly() {
     let mut s = Session::new_draft("s1", "Test", SessionMode::Training);
     assert!(matches!(
-        s.complete(),
+        s.complete(at(0)),
         Err(SessionError::IllegalTransition { .. })
     ));
 }

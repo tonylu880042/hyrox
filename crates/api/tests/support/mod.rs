@@ -11,11 +11,12 @@
 
 use api::{Clock, Hub};
 use application::{
-    AuditEntry, AuditedResult, AuditedWrite, FinishOrigin, HubStore, InterpretedWrite, LiveSession,
-    RawCommit, RawInterpretationContext, RawRead, SeenReader, StoredException, StoredRawRead,
+    AuditEntry, AuditedResult, AuditedWrite, ClassAthlete, FinishOrigin, HubStore,
+    InterpretedWrite, LiveSession, RawCommit, RawInterpretationContext, RawRead, SeenReader,
+    StoredException, StoredInterpretation, StoredRawRead,
 };
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header, HeaderValue, Request, StatusCode};
 use axum::Router;
 use contract::CommitOutcome;
 use domain::{
@@ -334,9 +335,94 @@ impl HubStore for FakeStore {
             | AuditedWrite::ExceptionAccept { audit, .. }
             | AuditedWrite::ExceptionVoid { audit, .. }
             | AuditedWrite::ExceptionReinterpret { audit, .. }
+            | AuditedWrite::CreateClass { audit, .. }
+            | AuditedWrite::TemplateSave { audit, .. }
+            | AuditedWrite::TemplateCreate { audit, .. }
+            | AuditedWrite::TemplateDelete { audit, .. }
+            | AuditedWrite::VenueSetting { audit, .. }
+            | AuditedWrite::VenueAssetSave { audit, .. }
+            | AuditedWrite::VenueAssetDelete { audit, .. }
             | AuditedWrite::EndClass { audit, .. } => audit.clone(),
         };
         let result = match write {
+            AuditedWrite::CreateClass {
+                session,
+                config,
+                athletes,
+                ..
+            } => {
+                if inner.sessions.iter().any(|stored| stored.id == session.id) {
+                    AuditedResult::Conflict
+                } else {
+                    inner.sessions.push(session);
+                    inner.configs.push(config);
+                    for ClassAthlete {
+                        athlete_id,
+                        display_name,
+                        bib,
+                        member_id,
+                    } in athletes
+                    {
+                        inner
+                            .athletes
+                            .push(AthleteState::ready(&athlete_id, &display_name));
+                        inner.roster.push(SavedAthlete {
+                            athlete_id,
+                            display_name,
+                            bib,
+                            member_id,
+                        });
+                    }
+                    AuditedResult::Applied(true)
+                }
+            }
+            AuditedWrite::TemplateSave { template, .. } => {
+                match inner.templates.iter_mut().find(|t| t.id == template.id) {
+                    Some(stored) if !stored.is_editable() => AuditedResult::Conflict,
+                    Some(stored) => {
+                        *stored = template;
+                        AuditedResult::Applied(true)
+                    }
+                    None => {
+                        inner.templates.push(template);
+                        AuditedResult::Applied(true)
+                    }
+                }
+            }
+            AuditedWrite::TemplateCreate { template, .. } => {
+                if inner.templates.iter().any(|t| t.id == template.id) {
+                    AuditedResult::Conflict
+                } else {
+                    inner.templates.push(template);
+                    AuditedResult::Applied(true)
+                }
+            }
+            AuditedWrite::TemplateDelete { template_id, .. } => {
+                let before = inner.templates.len();
+                inner.templates.retain(|t| t.id != template_id);
+                AuditedResult::Applied(inner.templates.len() != before)
+            }
+            AuditedWrite::VenueSetting { key, value, .. } => {
+                inner.venue_settings.retain(|(k, _)| k != &key);
+                inner.venue_settings.push((key, value));
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::VenueAssetSave {
+                key,
+                media_type,
+                bytes,
+                ..
+            } => {
+                inner.venue_assets.retain(|(k, _)| k != &key);
+                inner
+                    .venue_assets
+                    .push((key, application::VenueAsset { media_type, bytes }));
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::VenueAssetDelete { key, .. } => {
+                inner.venue_assets.retain(|(k, _)| k != &key);
+                AuditedResult::Applied(true)
+            }
             AuditedWrite::Session { session, .. } => {
                 match inner.sessions.iter_mut().find(|s| s.id == session.id) {
                     Some(existing) => *existing = session,
@@ -650,6 +736,27 @@ impl HubStore for FakeStore {
             .iter()
             .find(|(id, _)| *id == raw_event_id)
             .map(|(_, context)| context.clone()))
+    }
+
+    async fn interpretations(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<StoredInterpretation>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .interpreted
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !inner.voided.contains(&(*index as i64 + 1)))
+            .map(
+                |(index, (athlete_id, raw_event_id, event))| StoredInterpretation {
+                    interpreted_event_id: index as i64 + 1,
+                    athlete_id: athlete_id.clone(),
+                    raw_event_id: *raw_event_id,
+                    event: event.clone(),
+                },
+            )
+            .collect())
     }
 
     async fn athlete_bibs(&self, _session_id: &str) -> Result<Vec<(String, i64)>, FakeError> {
@@ -1026,7 +1133,10 @@ pub fn running() -> (Router, Arc<FakeStore>) {
 /// A class that has been run and closed, which is when the machine may be switched off.
 pub fn completed_session() -> LiveSession {
     let mut state = running_session();
-    state.session.complete().expect("complete");
+    state
+        .session
+        .complete(Instant(2_000_000))
+        .expect("complete");
     state
 }
 
@@ -1039,8 +1149,40 @@ pub fn draft() -> (Router, Arc<FakeStore>) {
     hub(draft_session(), store)
 }
 
+/// Every helper speaks as a browser that has already unlocked with the venue PIN: what these
+/// tests check -- identity, audit, rules -- sits behind that door. A request that brings its
+/// own `Cookie` is left alone, which is how the door itself is tested.
+async fn signed_in(router: &Router, mut request: Request<Body>) -> Request<Body> {
+    if request.headers().contains_key(header::COOKIE) {
+        return request;
+    }
+    let login = write(
+        "POST",
+        "/api/operator/pin/verify",
+        None,
+        serde_json::json!({ "pin": application::DEFAULT_SECURITY_PIN }),
+    );
+    let response = router
+        .clone()
+        .oneshot(login)
+        .await
+        .expect("the router always answers");
+    // A changed PIN means no session; the request then goes out bare, as a browser's would.
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(|v| HeaderValue::from_str(v).expect("the hub's own cookie is valid"));
+    if let Some(cookie) = cookie {
+        request.headers_mut().insert(header::COOKIE, cookie);
+    }
+    request
+}
+
 /// One request, driven straight into the router. No listener, no port, no network.
 pub async fn call(router: &Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    let request = signed_in(router, request).await;
     let response = router
         .clone()
         .oneshot(request)
@@ -1057,6 +1199,7 @@ pub async fn call(router: &Router, request: Request<Body>) -> (StatusCode, serde
 /// The same, when the answer is not JSON: status, content type, body as text.
 /// The entry QR is an SVG, and "the hub draws it itself" is the property under test.
 pub async fn raw(router: &Router, request: Request<Body>) -> (StatusCode, String, String) {
+    let request = signed_in(router, request).await;
     let response = router
         .clone()
         .oneshot(request)
@@ -1083,6 +1226,7 @@ pub async fn raw(router: &Router, request: Request<Body>) -> (StatusCode, String
 /// byte that is not valid UTF-8, so a PNG comes back a different length than it went in --
 /// which is exactly what an image assertion needs to compare.
 pub async fn raw_bytes(router: &Router, request: Request<Body>) -> (StatusCode, String, Vec<u8>) {
+    let request = signed_in(router, request).await;
     let response = router
         .clone()
         .oneshot(request)

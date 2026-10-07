@@ -6,7 +6,7 @@
 use crate::ingest::{attribute_read, ReadContext};
 use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
-use crate::ports::{AuditEntry, AuditedWrite, HubStore};
+use crate::ports::{AuditEntry, AuditedWrite, ClaimIntent, HubStore};
 use domain::{AthleteState, EntryCode, Instant, Interpreted, MemberRef, TagId};
 
 /// Somebody to put on the roster (ADR 0010).
@@ -171,6 +171,13 @@ pub async fn bind_tag<S: HubStore>(
     store
         .apply_audited(AuditedWrite::Bindings {
             bindings: candidate_bindings.history().to_vec(),
+            claim: Some(ClaimIntent {
+                session_id: state.session.id.clone(),
+                tag_id: tag.to_string(),
+                athlete_id: athlete_id.to_string(),
+                since: state.class_start,
+                until: cmd.at,
+            }),
             audit: AuditEntry {
                 at: cmd.at,
                 operator: cmd.operator.clone(),
@@ -186,7 +193,7 @@ pub async fn bind_tag<S: HubStore>(
     state.bindings = candidate_bindings;
     state.clear_pending_tag(tag);
 
-    claim_reads(state, store, tag, athlete_id).await
+    claim_reads(state, store, tag, athlete_id, cmd.at).await
 }
 
 /// Moves an athlete onto a different band: the old binding is closed, a new one opened, and
@@ -223,6 +230,13 @@ pub async fn rebind_tag<S: HubStore>(
     store
         .apply_audited(AuditedWrite::Bindings {
             bindings: candidate_bindings.history().to_vec(),
+            claim: Some(ClaimIntent {
+                session_id: state.session.id.clone(),
+                tag_id: new_tag.to_string(),
+                athlete_id: athlete_id.to_string(),
+                since: state.class_start,
+                until: cmd.at,
+            }),
             audit: AuditEntry {
                 at: cmd.at,
                 operator: cmd.operator.clone(),
@@ -238,7 +252,7 @@ pub async fn rebind_tag<S: HubStore>(
     state.bindings = candidate_bindings;
     state.clear_pending_tag(new_tag);
 
-    claim_reads(state, store, new_tag, athlete_id).await
+    claim_reads(state, store, new_tag, athlete_id, cmd.at).await
 }
 
 /// Interprets the stored reads of a tag that no interpretation points at yet, in
@@ -252,6 +266,7 @@ async fn claim_reads<S: HubStore>(
     store: &S,
     tag: &TagId,
     athlete_id: &str,
+    until: Instant,
 ) -> Result<Vec<Interpreted>, OperatorError<S::Error>> {
     let reads = store
         .unclaimed_reads_for_tag(tag.as_str(), state.class_start)
@@ -262,7 +277,7 @@ async fn claim_reads<S: HubStore>(
     }
 
     let mut claimed = Vec::with_capacity(reads.len());
-    for read in &reads {
+    for read in reads.iter().filter(|read| read.detected_at <= until) {
         if read
             .context
             .as_ref()

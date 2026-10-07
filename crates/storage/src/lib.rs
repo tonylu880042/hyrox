@@ -81,8 +81,39 @@ impl Store {
                 audit,
             } => {
                 save_session_tx(&mut tx, &session, created_at).await?;
+                set_active_session_tx(&mut tx, &session, created_at).await?;
                 audit_tx(&mut tx, &audit).await?;
                 application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::CreateClass {
+                session,
+                created_at,
+                config,
+                athletes,
+                audit,
+            } => {
+                if !insert_session_tx(&mut tx, &session, created_at).await? {
+                    application::AuditedResult::Conflict
+                } else {
+                    insert_session_config_tx(&mut tx, &config).await?;
+                    for athlete in athletes {
+                        sqlx::query(
+                            "INSERT INTO session_athletes
+                            (session_id, athlete_id, display_name, bib, member_id)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        )
+                        .bind(&session.id)
+                        .bind(athlete.athlete_id)
+                        .bind(athlete.display_name)
+                        .bind(athlete.bib)
+                        .bind(athlete.member_id)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
+                    set_active_session_tx(&mut tx, &session, created_at).await?;
+                    audit_tx(&mut tx, &audit).await?;
+                    application::AuditedResult::Applied(true)
+                }
             }
             application::AuditedWrite::SessionConfig { config, audit } => {
                 let json = serde_json::to_string(&config)
@@ -95,6 +126,88 @@ impl Store {
                 .bind(json)
                 .execute(&mut *tx)
                 .await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::TemplateSave { template, audit } => {
+                if workout::save_template_tx(&mut tx, &template, false).await? {
+                    audit_tx(&mut tx, &audit).await?;
+                    application::AuditedResult::Applied(true)
+                } else {
+                    application::AuditedResult::Conflict
+                }
+            }
+            application::AuditedWrite::TemplateCreate { template, audit } => {
+                if workout::save_template_tx(&mut tx, &template, true).await? {
+                    audit_tx(&mut tx, &audit).await?;
+                    application::AuditedResult::Applied(true)
+                } else {
+                    application::AuditedResult::Conflict
+                }
+            }
+            application::AuditedWrite::TemplateDelete { template_id, audit } => {
+                let changed = workout::delete_template_tx(&mut tx, &template_id).await?;
+                if changed {
+                    audit_tx(&mut tx, &audit).await?;
+                }
+                application::AuditedResult::Applied(changed)
+            }
+            application::AuditedWrite::VenueSetting {
+                key,
+                value,
+                at,
+                by,
+                audit,
+            } => {
+                sqlx::query(
+                    "INSERT INTO venue_settings (key, value, updated_at, updated_by)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at,
+                        updated_by = excluded.updated_by",
+                )
+                .bind(key)
+                .bind(value)
+                .bind(at.0)
+                .bind(by)
+                .execute(&mut *tx)
+                .await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::VenueAssetSave {
+                key,
+                media_type,
+                bytes,
+                at,
+                by,
+                audit,
+            } => {
+                sqlx::query(
+                    "INSERT INTO venue_assets (key, media_type, bytes, updated_at, updated_by)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(key) DO UPDATE SET
+                        media_type = excluded.media_type,
+                        bytes = excluded.bytes,
+                        updated_at = excluded.updated_at,
+                        updated_by = excluded.updated_by",
+                )
+                .bind(key)
+                .bind(media_type)
+                .bind(bytes)
+                .bind(at.0)
+                .bind(by)
+                .execute(&mut *tx)
+                .await?;
+                audit_tx(&mut tx, &audit).await?;
+                application::AuditedResult::Applied(true)
+            }
+            application::AuditedWrite::VenueAssetDelete { key, audit } => {
+                sqlx::query("DELETE FROM venue_assets WHERE key = ?1")
+                    .bind(key)
+                    .execute(&mut *tx)
+                    .await?;
                 audit_tx(&mut tx, &audit).await?;
                 application::AuditedResult::Applied(true)
             }
@@ -125,7 +238,11 @@ impl Store {
                 audit_tx(&mut tx, &audit).await?;
                 application::AuditedResult::Applied(true)
             }
-            application::AuditedWrite::Bindings { bindings, audit } => {
+            application::AuditedWrite::Bindings {
+                bindings,
+                claim,
+                audit,
+            } => {
                 for binding in bindings {
                     sqlx::query(
                         "INSERT INTO tag_bindings
@@ -139,6 +256,34 @@ impl Store {
                     .bind(binding.athlete_id)
                     .bind(binding.bound_at.0)
                     .bind(binding.unbound_at.map(|at| at.0))
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                if let Some(claim) = claim {
+                    // Persist the claim intent with the binding.  The interpretation rows are
+                    // intentionally written later, one by one, so a failed row remains visible
+                    // to recovery instead of losing the handoff at the check-in boundary.
+                    sqlx::query(
+                        "UPDATE raw_interpretation_context
+                            SET athlete_id = ?1, bound_session_id = ?2, on_roster = 1
+                          WHERE session_id = ?2
+                            AND athlete_id IS NULL
+                            AND raw_event_id IN (
+                                SELECT r.id FROM raw_events r
+                                 WHERE r.tag_id = ?3 COLLATE NOCASE
+                                   AND r.detected_at >= ?4
+                                   AND r.detected_at <= ?5
+                                   AND NOT EXISTS (
+                                       SELECT 1 FROM interpreted_events i
+                                        WHERE i.raw_event_id = r.id
+                                   )
+                            )",
+                    )
+                    .bind(claim.athlete_id)
+                    .bind(claim.session_id)
+                    .bind(claim.tag_id)
+                    .bind(claim.since.0)
+                    .bind(claim.until.0)
                     .execute(&mut *tx)
                     .await?;
                 }
@@ -186,6 +331,7 @@ impl Store {
                 application::AuditedResult::Applied(changed)
             }
             application::AuditedWrite::ExceptionAccept {
+                session_id,
                 interpreted_event_id,
                 at,
                 operator,
@@ -196,12 +342,14 @@ impl Store {
                     "UPDATE interpreted_events
                         SET acknowledged_at = ?2, acknowledged_by = ?3,
                             acknowledge_reason = ?4
-                      WHERE id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+                      WHERE id = ?1 AND session_id = ?5
+                        AND kind = 'EXCEPTION' AND voided_at IS NULL",
                 )
                 .bind(interpreted_event_id)
                 .bind(at.0)
                 .bind(operator)
                 .bind(reason)
+                .bind(session_id)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -212,6 +360,7 @@ impl Store {
                 application::AuditedResult::Applied(changed)
             }
             application::AuditedWrite::ExceptionVoid {
+                session_id,
                 interpreted_event_id,
                 at,
                 operator,
@@ -221,12 +370,13 @@ impl Store {
                 let changed = sqlx::query(
                     "UPDATE interpreted_events
                         SET voided_at = ?2, voided_by = ?3, void_reason = ?4
-                      WHERE id = ?1 AND voided_at IS NULL",
+                      WHERE id = ?1 AND session_id = ?5 AND voided_at IS NULL",
                 )
                 .bind(interpreted_event_id)
                 .bind(at.0)
                 .bind(operator)
                 .bind(reason)
+                .bind(session_id)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -237,6 +387,7 @@ impl Store {
                 application::AuditedResult::Applied(changed)
             }
             application::AuditedWrite::ExceptionReinterpret {
+                session_id,
                 interpreted_event_id,
                 at,
                 operator,
@@ -247,12 +398,14 @@ impl Store {
                 let changed = sqlx::query(
                     "UPDATE interpreted_events
                         SET voided_at = ?2, voided_by = ?3, void_reason = ?4
-                      WHERE id = ?1 AND kind = 'EXCEPTION' AND voided_at IS NULL",
+                      WHERE id = ?1 AND session_id = ?5
+                        AND kind = 'EXCEPTION' AND voided_at IS NULL",
                 )
                 .bind(interpreted_event_id)
                 .bind(at.0)
                 .bind(&operator)
                 .bind(&reason)
+                .bind(session_id)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -284,6 +437,7 @@ impl Store {
                     .await?;
                 }
                 save_session_tx(&mut tx, &session, created_at).await?;
+                set_active_session_tx(&mut tx, &session, created_at).await?;
                 audit_tx(&mut tx, &audit).await?;
                 application::AuditedResult::Applied(true)
             }
@@ -384,28 +538,10 @@ impl Store {
     }
 
     pub async fn save_session(&self, s: &Session, created_at: Instant) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT INTO sessions
-                (id, name, mode, status, interpreted_event_count, created_at,
-                 paused_total_ms, paused_since)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                status = excluded.status,
-                interpreted_event_count = excluded.interpreted_event_count,
-                paused_total_ms = excluded.paused_total_ms,
-                paused_since = excluded.paused_since",
-        )
-        .bind(&s.id)
-        .bind(&s.name)
-        .bind(mode_str(s.mode))
-        .bind(status_str(s.status))
-        .bind(s.interpreted_event_count as i64)
-        .bind(created_at.0)
-        .bind(s.paused_total.millis())
-        .bind(s.paused_since.map(|i| i.0))
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        save_session_tx(&mut tx, s, created_at).await?;
+        set_active_session_tx(&mut tx, s, created_at).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -621,15 +757,16 @@ impl Store {
         Ok(exists.is_some())
     }
 
-    /// The session to resume after a restart: a live one (READY, RUNNING or PAUSED) in
-    /// preference to the most recent (CLAUDE.md 21; ADR 0008).
+    /// The session to resume after a restart, selected by the durable current-session
+    /// pointer. Unlike a status heuristic this keeps a newly-created DRAFT current even
+    /// when an older READY session remains in the history (F07).
     pub async fn active_session(&self) -> Result<Option<Session>, StoreError> {
         let row = sqlx::query(
             "SELECT id, name, mode, status, interpreted_event_count,
                     paused_total_ms, paused_since
              FROM sessions
-             ORDER BY (status IN ('RUNNING', 'PAUSED', 'READY')) DESC, created_at DESC
-             LIMIT 1",
+             JOIN active_session ON active_session.session_id = sessions.id
+             WHERE active_session.singleton = 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -808,7 +945,9 @@ impl Store {
             let Some(state) = out.iter_mut().find(|a| a.athlete_id == aid) else {
                 continue; // event for someone no longer on the roster
             };
-            domain::apply(state, &row_to_interpreted(r)?);
+            if let Some(event) = replay_event(state, row_to_interpreted(r)?) {
+                domain::apply(state, &event);
+            }
         }
 
         let mut historical: Vec<AthleteState> = roster
@@ -825,7 +964,9 @@ impl Store {
             let Some(state) = historical.iter_mut().find(|a| a.athlete_id == aid) else {
                 continue;
             };
-            domain::apply(state, &row_to_interpreted(r)?);
+            if let Some(event) = replay_event(state, row_to_interpreted(r)?) {
+                domain::apply(state, &event);
+            }
         }
 
         // After the replay, not before: a finish the clock decided comes at the end of the
@@ -934,6 +1075,28 @@ impl Store {
     }
 }
 
+/// Recompute derived timing fields from the replay prefix instead of trusting values that were
+/// decided before a historical correction. The event kind, station and timestamp remain the
+/// durable interpretation; `started_timing` and `transition` are properties of their position
+/// in the corrected timeline.
+fn replay_event(state: &AthleteState, event: Interpreted) -> Option<Interpreted> {
+    match event {
+        Interpreted::Entered { .. } if state.station_state == domain::StationState::Inside => {
+            // A historical correction can make a later persisted ENTERED row contradict the
+            // prefix that now precedes it.  It was already recorded in the log, so leave it
+            // auditable, but do not manufacture a second open station run in the projection.
+            None
+        }
+        Interpreted::Entered { station, at, .. } => Some(Interpreted::Entered {
+            station,
+            at,
+            transition: state.last_exit_at.map(|previous| at.since(previous)),
+            started_timing: state.status == domain::AthleteStatus::Ready,
+        }),
+        other => Some(other),
+    }
+}
+
 fn row_to_interpreted(r: &sqlx::sqlite::SqliteRow) -> Result<Interpreted, StoreError> {
     let kind: String = r.get("kind");
     let at = Instant(r.get::<i64, _>("detected_at"));
@@ -993,6 +1156,70 @@ async fn save_session_tx(
     .bind(s.paused_since.map(|i| i.0))
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+async fn insert_session_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    s: &Session,
+    created_at: Instant,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO sessions
+            (id, name, mode, status, interpreted_event_count, created_at,
+             paused_total_ms, paused_since)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(&s.id)
+    .bind(&s.name)
+    .bind(mode_str(s.mode))
+    .bind(status_str(s.status))
+    .bind(s.interpreted_event_count as i64)
+    .bind(created_at.0)
+    .bind(s.paused_total.millis())
+    .bind(s.paused_since.map(|i| i.0))
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+async fn insert_session_config_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    config: &SessionConfig,
+) -> Result<(), StoreError> {
+    let json = serde_json::to_string(config)?;
+    sqlx::query("INSERT INTO session_configs (session_id, config_json) VALUES (?1, ?2)")
+        .bind(&config.session_id)
+        .bind(json)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn set_active_session_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session: &Session,
+    updated_at: Instant,
+) -> Result<(), sqlx::Error> {
+    if session.status.is_terminal() {
+        sqlx::query("DELETE FROM active_session WHERE singleton = 1 AND session_id = ?1")
+            .bind(&session.id)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO active_session (singleton, session_id, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton) DO UPDATE SET
+                session_id = excluded.session_id,
+                updated_at = excluded.updated_at",
+        )
+        .bind(&session.id)
+        .bind(updated_at.0)
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }
 
@@ -1496,6 +1723,35 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.as_ref().map(context_from_row).transpose()?.flatten())
+    }
+
+    /// Returns the non-voided interpretation log in the same order used by replay.  The id is
+    /// retained for same-millisecond ordering and for historical corrections that replace one
+    /// existing row.
+    pub async fn interpretations(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<application::StoredInterpretation>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, athlete_id, raw_event_id, kind, station, detected_at,
+                    transition_ms, started_timing, exception_reason
+             FROM interpreted_events
+             WHERE session_id = ?1 AND voided_at IS NULL
+             ORDER BY detected_at, id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(application::StoredInterpretation {
+                    interpreted_event_id: row.get("id"),
+                    athlete_id: row.get("athlete_id"),
+                    raw_event_id: row.get("raw_event_id"),
+                    event: row_to_interpreted(row)?,
+                })
+            })
+            .collect()
     }
 }
 

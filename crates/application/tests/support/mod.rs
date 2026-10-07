@@ -5,8 +5,9 @@
 #![allow(dead_code)]
 
 use application::{
-    AuditEntry, AuditedResult, AuditedWrite, FinishOrigin, HubStore, InterpretedWrite, RawCommit,
-    RawInterpretationContext, RawRead, SeenReader, StoredException, StoredRawRead,
+    AuditEntry, AuditedResult, AuditedWrite, ClassAthlete, FinishOrigin, HubStore,
+    InterpretedWrite, RawCommit, RawInterpretationContext, RawRead, SeenReader, StoredException,
+    StoredRawRead,
 };
 use contract::CommitOutcome;
 use domain::{
@@ -72,6 +73,7 @@ struct Inner {
     templates: Vec<WorkoutTemplate>,
     exercises: Vec<Exercise>,
     stations: Vec<PhysicalStation>,
+    active_session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -132,6 +134,7 @@ impl FakeStore {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.sessions.push(session);
+            inner.active_session_id = inner.sessions.last().map(|session| session.id.clone());
             inner.configs.extend(config);
             inner.created_at = Some(created_at);
         }
@@ -384,6 +387,11 @@ impl HubStore for FakeStore {
             Some(existing) => *existing = session.clone(),
             None => inner.sessions.push(session.clone()),
         }
+        inner.active_session_id = if session.status.is_terminal() {
+            None
+        } else {
+            Some(session.id.clone())
+        };
         Ok(())
     }
 
@@ -471,6 +479,13 @@ impl HubStore for FakeStore {
             | AuditedWrite::ExceptionAccept { audit, .. }
             | AuditedWrite::ExceptionVoid { audit, .. }
             | AuditedWrite::ExceptionReinterpret { audit, .. }
+            | AuditedWrite::CreateClass { audit, .. }
+            | AuditedWrite::TemplateSave { audit, .. }
+            | AuditedWrite::TemplateCreate { audit, .. }
+            | AuditedWrite::TemplateDelete { audit, .. }
+            | AuditedWrite::VenueSetting { audit, .. }
+            | AuditedWrite::VenueAssetSave { audit, .. }
+            | AuditedWrite::VenueAssetDelete { audit, .. }
             | AuditedWrite::EndClass { audit, .. } => audit.clone(),
         };
         let result = match write {
@@ -491,7 +506,40 @@ impl HubStore for FakeStore {
                     Some(existing) => *existing = session,
                     None => inner.sessions.push(session),
                 }
+                inner.active_session_id = inner.sessions.last().map(|session| session.id.clone());
                 AuditedResult::Applied(true)
+            }
+            AuditedWrite::CreateClass {
+                session,
+                config,
+                athletes,
+                ..
+            } => {
+                if inner.sessions.iter().any(|stored| stored.id == session.id) {
+                    AuditedResult::Conflict
+                } else {
+                    inner.sessions.push(session.clone());
+                    inner.configs.push(config);
+                    for ClassAthlete {
+                        athlete_id,
+                        display_name,
+                        bib,
+                        member_id,
+                    } in athletes
+                    {
+                        inner
+                            .athletes
+                            .push(AthleteState::ready(&athlete_id, &display_name));
+                        inner.roster.push(SavedAthlete {
+                            athlete_id,
+                            display_name,
+                            bib,
+                            member_id,
+                        });
+                    }
+                    inner.active_session_id = Some(session.id);
+                    AuditedResult::Applied(true)
+                }
             }
             AuditedWrite::SessionConfig { config, .. } => {
                 match inner
@@ -502,6 +550,72 @@ impl HubStore for FakeStore {
                     Some(existing) => *existing = config,
                     None => inner.configs.push(config),
                 }
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::TemplateSave { template, .. } => {
+                if inner
+                    .templates
+                    .iter()
+                    .find(|stored| stored.id == template.id)
+                    .is_some_and(|stored| !stored.is_editable())
+                {
+                    AuditedResult::Conflict
+                } else {
+                    match inner
+                        .templates
+                        .iter_mut()
+                        .find(|stored| stored.id == template.id)
+                    {
+                        Some(existing) => *existing = template,
+                        None => inner.templates.push(template),
+                    }
+                    AuditedResult::Applied(true)
+                }
+            }
+            AuditedWrite::TemplateCreate { template, .. } => {
+                if inner
+                    .templates
+                    .iter()
+                    .any(|stored| stored.id == template.id)
+                {
+                    AuditedResult::Conflict
+                } else {
+                    inner.templates.push(template);
+                    AuditedResult::Applied(true)
+                }
+            }
+            AuditedWrite::TemplateDelete { template_id, .. } => {
+                let before = inner.templates.len();
+                inner
+                    .templates
+                    .retain(|template| template.id != template_id);
+                AuditedResult::Applied(inner.templates.len() != before)
+            }
+            AuditedWrite::VenueSetting { key, value, .. } => {
+                inner
+                    .venue_settings
+                    .retain(|(stored_key, _)| stored_key != &key);
+                inner.venue_settings.push((key, value));
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::VenueAssetSave {
+                key,
+                media_type,
+                bytes,
+                ..
+            } => {
+                inner
+                    .venue_assets
+                    .retain(|(stored_key, _)| stored_key != &key);
+                inner
+                    .venue_assets
+                    .push((key, application::VenueAsset { media_type, bytes }));
+                AuditedResult::Applied(true)
+            }
+            AuditedWrite::VenueAssetDelete { key, .. } => {
+                inner
+                    .venue_assets
+                    .retain(|(stored_key, _)| stored_key != &key);
                 AuditedResult::Applied(true)
             }
             AuditedWrite::Athlete {
@@ -523,7 +637,9 @@ impl HubStore for FakeStore {
                 });
                 AuditedResult::Applied(true)
             }
-            AuditedWrite::Bindings { bindings, .. } => {
+            AuditedWrite::Bindings {
+                bindings, claim, ..
+            } => {
                 for binding in bindings {
                     if let Some(existing) = inner.bindings.iter_mut().find(|b| {
                         b.session_id == binding.session_id
@@ -533,6 +649,36 @@ impl HubStore for FakeStore {
                         existing.unbound_at = binding.unbound_at;
                     } else {
                         inner.bindings.push(binding);
+                    }
+                }
+                if let Some(claim) = claim {
+                    let interpreted_ids: Vec<i64> = inner
+                        .interpreted
+                        .iter()
+                        .filter_map(|(_, raw_id, _)| *raw_id)
+                        .collect();
+                    let candidate_ids: Vec<i64> = inner
+                        .raw_contexts
+                        .iter()
+                        .filter_map(|(raw_id, context)| {
+                            let raw = inner.raw.get(*raw_id as usize - 1)?;
+                            (context.session_id == claim.session_id
+                                && context.athlete_id.is_none()
+                                && raw.tag_id.eq_ignore_ascii_case(&claim.tag_id)
+                                && raw.detected_at >= claim.since
+                                && raw.detected_at <= claim.until
+                                && !interpreted_ids.contains(raw_id))
+                            .then_some(*raw_id)
+                        })
+                        .collect();
+                    for raw_id in candidate_ids {
+                        if let Some((_, context)) =
+                            inner.raw_contexts.iter_mut().find(|(id, _)| *id == raw_id)
+                        {
+                            context.athlete_id = Some(claim.athlete_id.clone());
+                            context.bound_session_id = Some(claim.session_id.clone());
+                            context.on_roster = true;
+                        }
                     }
                 }
                 AuditedResult::Applied(true)
@@ -637,6 +783,11 @@ impl HubStore for FakeStore {
                     Some(existing) => *existing = session,
                     None => inner.sessions.push(session),
                 }
+                inner.active_session_id = inner
+                    .sessions
+                    .last()
+                    .filter(|session| !session.status.is_terminal())
+                    .map(|session| session.id.clone());
                 AuditedResult::Applied(true)
             }
         };
@@ -648,7 +799,12 @@ impl HubStore for FakeStore {
     }
 
     async fn active_session(&self) -> Result<Option<Session>, FakeError> {
-        Ok(self.inner.lock().unwrap().sessions.first().cloned())
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .active_session_id
+            .as_ref()
+            .and_then(|id| inner.sessions.iter().find(|session| &session.id == id))
+            .cloned())
     }
 
     async fn session(&self, session_id: &str) -> Result<Option<Session>, FakeError> {
@@ -702,7 +858,21 @@ impl HubStore for FakeStore {
                 continue;
             }
             if let Some(state) = out.iter_mut().find(|a| &a.athlete_id == athlete_id) {
-                domain::apply(state, event);
+                let event = match event {
+                    Interpreted::Entered { .. }
+                        if state.station_state == domain::StationState::Inside =>
+                    {
+                        continue
+                    }
+                    Interpreted::Entered { station, at, .. } => Interpreted::Entered {
+                        station: station.clone(),
+                        at: *at,
+                        transition: state.last_exit_at.map(|previous| at.since(previous)),
+                        started_timing: state.status == domain::AthleteStatus::Ready,
+                    },
+                    other => other.clone(),
+                };
+                domain::apply(state, &event);
             }
         }
         Ok(out)
@@ -1030,6 +1200,27 @@ impl HubStore for FakeStore {
             .iter()
             .find(|(id, _)| *id == raw_event_id)
             .map(|(_, context)| context.clone()))
+    }
+
+    async fn interpretations(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<application::StoredInterpretation>, FakeError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .interpreted
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !inner.voided.contains(&(*index as i64 + 1)))
+            .map(
+                |(index, (athlete_id, raw_event_id, event))| application::StoredInterpretation {
+                    interpreted_event_id: index as i64 + 1,
+                    athlete_id: athlete_id.clone(),
+                    raw_event_id: *raw_event_id,
+                    event: event.clone(),
+                },
+            )
+            .collect())
     }
     // --- the workout library (ADR 0008) --------------------------------------------------
 

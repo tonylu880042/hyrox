@@ -65,7 +65,9 @@ pub struct AthleteView {
     pub station: Option<String>,
     pub station_key: Option<String>,
     pub station_index: Option<usize>,
+    /// Upcoming course step, also available while working inside the current station.
     pub next_station: Option<String>,
+    pub next_plan: Option<String>,
     /// Stations finished, drives the course bar.
     pub completed: usize,
     /// Time in the current station, or in transition when OUTSIDE (CLAUDE.md 13, 23).
@@ -126,16 +128,26 @@ pub fn course_view(course: Option<&Course>) -> Vec<CourseStation> {
 }
 
 pub fn view(bib: usize, a: &AthleteState, course: &[CourseStation], now: Instant) -> AthleteView {
-    let station_index = a
-        .current_station
-        .as_ref()
-        .and_then(|s| course.iter().position(|c| &c.name == s));
     let completed = a.runs.iter().filter(|r| r.exited_at.is_some()).count();
-    let next_station = if a.station_state == StationState::Outside {
-        course.get(completed).map(|c| c.name.clone())
+    // Course position, not the first matching name: rounds may repeat an exercise
+    // with a different target. Outside retains the just-completed station.
+    let current_index = if a.station_state == StationState::Inside {
+        Some(completed)
     } else {
-        None
+        completed.checked_sub(1)
     };
+    let station_index = current_index.filter(|&i| {
+        course
+            .get(i)
+            .is_some_and(|c| Some(&c.name) == a.current_station.as_ref())
+    });
+    let next = if a.status == AthleteStatus::Finished {
+        None
+    } else {
+        course.get(completed + usize::from(a.station_state == StationState::Inside))
+    };
+    let next_station = next.map(|c| c.name.clone());
+    let next_plan = next.map(|c| c.plan.clone());
     let splits: Vec<SplitView> = a.runs.iter().map(split_view).collect();
     AthleteView {
         bib,
@@ -146,6 +158,7 @@ pub fn view(bib: usize, a: &AthleteState, course: &[CourseStation], now: Instant
         station_key: station_index.map(|i| course[i].key.clone()),
         station_index,
         next_station,
+        next_plan,
         completed,
         leg_ms: a.current_leg(now).map(|d| d.millis()),
         elapsed_ms: a.elapsed(now).map(|d| d.millis()),

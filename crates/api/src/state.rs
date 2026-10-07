@@ -20,6 +20,7 @@
 //! The lock lives here too, for the same reason: every use case that advances the session
 //! must hold it across the store's awaits, and one place holding it is one place to check.
 
+use crate::auth::AuthState;
 use application::{
     checkin_view, config, exceptions, finish, health, live, readers, results, session, stages,
     templates, CheckInView, DeviceHealth, Entrant, Health, HubStore, LiveSession, NewClass,
@@ -166,6 +167,8 @@ pub struct Hub<S> {
     power: Arc<dyn Power>,
     /// Demo data, where a machine is set up to offer it. Refuses by default.
     demo: Arc<dyn Demo>,
+    /// Process-local operator sessions and the separately scoped machine credential.
+    auth: Arc<AuthState>,
 }
 
 // Derived `Clone` would demand `S: Clone`, which no store is; every field is an `Arc` or a
@@ -182,6 +185,7 @@ impl<S> Clone for Hub<S> {
             backup_dir: Arc::clone(&self.backup_dir),
             power: Arc::clone(&self.power),
             demo: Arc::clone(&self.demo),
+            auth: Arc::clone(&self.auth),
         }
     }
 }
@@ -207,6 +211,7 @@ impl<S> Hub<S> {
             backup_dir: Arc::from(backup_dir.as_ref()),
             power: Arc::new(NoPower),
             demo: Arc::new(NoDemo),
+            auth: Arc::new(AuthState::new()),
         }
     }
 
@@ -221,6 +226,13 @@ impl<S> Hub<S> {
     /// one; everything else keeps [`NoDemo`], which answers "not available".
     pub fn with_demo(mut self, demo: Arc<dyn Demo>) -> Self {
         self.demo = demo;
+        self
+    }
+
+    /// Configures the credential used by scheduled backup and future maintenance workers.
+    /// It is checked only by the backup principal; it never becomes an operator session.
+    pub fn with_machine_credential(self, credential: impl AsRef<str>) -> Self {
+        self.auth.set_machine_credential(credential.as_ref());
         self
     }
 
@@ -519,6 +531,34 @@ impl<S> Operator<S> {
 
     pub fn read(&self) -> &ReadOnly<S> {
         &self.read
+    }
+
+    pub(crate) fn authorize_session(&self, token: &str) -> bool {
+        self.hub.auth.authorize(token)
+    }
+
+    pub(crate) fn pin_generation(&self) -> u64 {
+        self.hub.auth.pin_generation()
+    }
+
+    pub(crate) fn issue_session_for_pin_generation(&self, generation: u64) -> Result<String, ()> {
+        self.hub.auth.issue_for_pin_generation(generation)
+    }
+
+    pub(crate) fn revoke_sessions(&self) {
+        self.hub.auth.revoke_all();
+    }
+
+    pub(crate) fn begin_pin_attempt(&self) -> bool {
+        self.hub.auth.begin_pin_attempt()
+    }
+
+    pub(crate) fn pin_succeeded(&self) {
+        self.hub.auth.pin_succeeded();
+    }
+
+    pub(crate) fn authorize_machine_credential(&self, credential: &str) -> bool {
+        self.hub.auth.machine_credential_matches(credential)
     }
 }
 
@@ -880,7 +920,11 @@ impl<S: HubStore> Operator<S> {
     where
         S: HubStore,
     {
-        application::save_venue_setting(&*self.hub.store, key, value, cmd).await
+        let result = application::save_venue_setting(&*self.hub.store, key, value, cmd).await;
+        if result.is_ok() && key == application::SECURITY_PIN {
+            self.revoke_sessions();
+        }
+        result
     }
 
     pub async fn void_exception(

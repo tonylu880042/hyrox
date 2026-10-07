@@ -94,7 +94,8 @@ fn an_athlete_inside_a_station_shows_the_station_and_its_leg_time() {
     assert_eq!(a.station_index, Some(0));
     assert_eq!(a.leg_ms, Some(30_000));
     assert_eq!(a.elapsed_ms, Some(30_000));
-    assert_eq!(a.next_station, None);
+    assert_eq!(a.next_station.as_deref(), Some("SLED PUSH"));
+    assert_eq!(a.next_plan.as_deref(), Some("25 M"));
 }
 
 #[test]
@@ -161,4 +162,59 @@ fn a_session_where_nothing_has_happened_has_no_freshness_reading() {
     assert_eq!(snap.last_event_age_ms, None);
     assert_eq!(snap.in_class, 1);
     assert_eq!(snap.finished, 0);
+}
+
+#[test]
+fn repeated_stations_use_the_current_round_and_preview_its_next_target() {
+    let course = Course::new(
+        "ROUNDS",
+        vec![
+            CourseStep::new("SKIERG").with_target(StationTarget::Distance { meters: 500 }),
+            CourseStep::new("SKIERG").with_target(StationTarget::Distance { meters: 250 }),
+            CourseStep::new("SLED PUSH").with_target(StationTarget::Distance { meters: 30 }),
+        ],
+    );
+    let mut state = session();
+    state.config.course = Some(course);
+    let a = state.athlete_mut("a1").unwrap();
+    domain::apply(
+        a,
+        &Interpreted::Entered {
+            station: "SKIERG".into(),
+            at: START,
+            transition: None,
+            started_timing: true,
+        },
+    );
+    domain::apply(
+        a,
+        &Interpreted::Exited {
+            station: "SKIERG".into(),
+            at: Instant(START.0 + 1000),
+        },
+    );
+    domain::apply(
+        a,
+        &Interpreted::Entered {
+            station: "SKIERG".into(),
+            at: Instant(START.0 + 2000),
+            transition: Some(Duration(1000)),
+            started_timing: false,
+        },
+    );
+    let snap = snapshot(&state, Instant(START.0 + 3000));
+    let a = &snap.athletes[0];
+    assert_eq!(a.station_index, Some(1));
+    assert_eq!(a.plan.as_deref(), Some("250 M"));
+    assert_eq!(a.next_station.as_deref(), Some("SLED PUSH"));
+    assert_eq!(a.next_plan.as_deref(), Some("30 M"));
+}
+
+#[test]
+fn finished_athletes_have_no_next_action_even_when_class_ends_early() {
+    let mut state = session();
+    state.athlete_mut("a1").unwrap().status = AthleteStatus::Finished;
+    let snap = snapshot(&state, START);
+    assert_eq!(snap.athletes[0].next_station, None);
+    assert_eq!(snap.athletes[0].next_plan, None);
 }

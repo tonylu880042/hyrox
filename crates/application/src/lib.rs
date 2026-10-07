@@ -48,9 +48,10 @@ pub use live::{
 pub use live_session::LiveSession;
 pub use operator::{OperatorCommand, OperatorError};
 pub use ports::{
-    AuditEntry, AuditedInterpretedWrite, AuditedResult, AuditedWrite, DirectoryError, FinishOrigin,
-    HubStore, InterpretedWrite, MemberDirectory, RawCommit, RawInterpretationContext, RawRead,
-    SeenReader, StoredException, StoredRawRead, UnconfiguredDirectory,
+    AuditEntry, AuditedInterpretedWrite, AuditedResult, AuditedWrite, ClaimIntent, ClassAthlete,
+    DirectoryError, FinishOrigin, HubStore, InterpretedWrite, MemberDirectory, RawCommit,
+    RawInterpretationContext, RawRead, SeenReader, StoredException, StoredInterpretation,
+    StoredRawRead, UnconfiguredDirectory,
 };
 pub use readers::{register_reader, unregister_reader, unregistered_readers};
 pub mod assets;

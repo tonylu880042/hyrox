@@ -2,6 +2,7 @@
 
 本檔是**你們唯一需要照著實作的東西**：把一次 Tag 讀取，變成一則 JSON，發到一個 MQTT topic。
 Hub 端的完整契約與理由寫在 [event-protocol.md](event-protocol.md)，本檔是它的實作面摘要。
+只想看「感測端發出去的那則訊息長什麼樣」，看 [mqtt-uplink-format.md](mqtt-uplink-format.md)。
 
 **契約變更必須雙方同步**（CLAUDE.md 30）。有疑問的欄位請先看第 8 節「待確認」，不要自行猜測。
 

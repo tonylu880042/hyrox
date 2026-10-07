@@ -110,6 +110,28 @@ async fn a_write_without_an_operator_identity_is_refused() {
     assert!(store.saved_sessions().is_empty());
 }
 
+/// The PIN is the door: an operator name without a session is not enough, and a forged
+/// session cookie is not a session. Refused before anything is written.
+#[tokio::test]
+async fn an_operator_write_without_a_session_is_refused() {
+    let (router, store) = running();
+
+    let mut request = post(
+        "/api/operator/exceptions/1/void",
+        "front desk",
+        json!({ "reason": "test" }),
+    );
+    request.headers_mut().insert(
+        axum::http::header::COOKIE,
+        axum::http::HeaderValue::from_static("hyrox_operator_session=forged"),
+    );
+    let (status, body) = call(&router, request).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "AUTH_REQUIRED");
+    assert!(store.audits().is_empty());
+}
+
 /// A header that is present but blank is not an identity. It would satisfy "the field is
 /// there" and tell a later reader of the audit trail exactly nothing.
 #[tokio::test]

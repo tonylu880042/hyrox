@@ -85,19 +85,22 @@ exactly like a passing one. Point it elsewhere with `HYROX_TEST_MQTT_HOST` /
 | `crates/simulator` | Emulated ESP32 collectors: presence/re-arm suppression, journal, link faults (CLAUDE.md 25). Over a real broker behind the `broker` feature. |
 | `crates/storage` | SQLite (WAL), migrations, raw + interpreted event stores, recovery. |
 | `crates/api` | The REST / WebSocket surface: router, handlers, wire shapes (ADR 0007). Sees `application` and `domain` only — no SQLite, no MQTT. Endpoint table in `docs/api.md`. |
-| `apps/hub-server` | The composition root: opens the store, recovers the session, runs the MQTT ingestion loop and the dev venue, serves `crates/api`'s router plus the generated static screens. |
+| `apps/hub-server` | The composition root: opens the store, recovers the session, runs the MQTT ingestion loop and the dev venue, serves `crates/api`'s router plus the static screens. |
 | `design/live` | Screen design sources: station pictograms and the page generator. |
 | `packaging` | The appliance: systemd units, the `.deb` build, the signed S3 apt repository, and the production line's autoinstall file (ADR 0009). |
 
 ## Regenerating the screens
 
-`apps/hub-server/static/training.html` is generated, not hand-edited — its labels live in
-the generator, so a translation goes there and not into the output:
+`apps/hub-server/static/training.html` is the canonical hand-maintained page. The generator
+only refreshes the marked station icon mask CSS block and the icon review sheet; it never
+rebuilds or replaces the page, so training-specific UI changes remain in the source:
 
 ```
-cd design/live && python3 build_screens.py
+python3 design/live/build_screens.py
+python3 design/live/build_screens.py --check
 ```
 
-Needs Pillow and NumPy. The generator slices `design/live/icons/*.png` into CSS mask images,
-so station glyphs stay recolourable by CSS. The server embeds the result with `include_str!`,
-so rebuild the binary after regenerating.
+The first command regenerates the icon masks; the second is the CI check. Both commands need
+Pillow and NumPy. The generator slices `design/live/icons/*.png` into CSS mask images, so
+station glyphs stay recolourable by CSS. The server embeds the page with `include_str!`, so
+rebuild the binary after changing the static assets.

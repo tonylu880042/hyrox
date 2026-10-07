@@ -144,7 +144,10 @@ async fn a_closed_session_cannot_be_reconfigured() {
     let mut state = draft();
     state.session.mark_ready().expect("arm");
     state.session.start().expect("arm");
-    state.session.complete().expect("complete");
+    state
+        .session
+        .complete(Instant(2_000_000))
+        .expect("complete");
 
     let err = configure(
         &mut state,

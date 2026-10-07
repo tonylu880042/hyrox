@@ -7,7 +7,8 @@
 use crate::{RawEvent, Store, StoreError};
 use application::{
     AuditEntry, AuditedResult, AuditedWrite, FinishOrigin, HubStore, InterpretedWrite, RawCommit,
-    RawInterpretationContext, RawRead, SeenReader, StoredException, StoredRawRead, VenueAsset,
+    RawInterpretationContext, RawRead, SeenReader, StoredException, StoredInterpretation,
+    StoredRawRead, VenueAsset,
 };
 use contract::CommitOutcome;
 use domain::{
@@ -264,6 +265,13 @@ impl HubStore for Store {
         raw_event_id: i64,
     ) -> Result<Option<RawInterpretationContext>, StoreError> {
         Store::raw_interpretation_context(self, raw_event_id).await
+    }
+
+    async fn interpretations(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<StoredInterpretation>, StoreError> {
+        Store::interpretations(self, session_id).await
     }
 
     // --- the workout library (ADR 0008) --------------------------------------------------

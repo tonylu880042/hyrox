@@ -203,6 +203,64 @@ async fn a_paused_class_can_be_completed_without_resuming() {
     assert_eq!(state.session.status, SessionStatus::Completed);
 }
 
+#[tokio::test]
+async fn reopening_a_paused_completed_class_resumes_the_clock_at_the_command_time() {
+    let store = FakeStore::new();
+    let mut state = draft();
+    run_class(&mut state, &store).await;
+
+    pause(&mut state, &store, &at(CLASS_START.0 + 100))
+        .await
+        .expect("pause");
+    complete(&mut state, &store, &at(CLASS_START.0 + 200))
+        .await
+        .expect("complete");
+    reopen(
+        &mut state,
+        &store,
+        &at(CLASS_START.0 + 300).with_reason("誤觸"),
+    )
+    .await
+    .expect("reopen");
+
+    assert_eq!(state.session.status, SessionStatus::Running);
+    assert_eq!(state.session.paused_since, None);
+    assert_eq!(state.session.paused_total, Duration(200));
+    assert_eq!(
+        state.class_elapsed(Instant(CLASS_START.0 + 350)),
+        Duration(150)
+    );
+}
+
+#[tokio::test]
+async fn returning_a_paused_class_to_draft_ends_the_pause_but_keeps_its_history() {
+    let store = FakeStore::new();
+    let mut state = draft();
+    run_class(&mut state, &store).await;
+
+    pause(&mut state, &store, &at(CLASS_START.0 + 100))
+        .await
+        .expect("pause");
+    return_to_draft(&mut state, &store, &at(CLASS_START.0 + 250))
+        .await
+        .expect("back to draft");
+
+    assert_eq!(state.session.status, SessionStatus::Draft);
+    assert_eq!(state.session.paused_since, None);
+    assert_eq!(state.session.paused_total, Duration(150));
+
+    mark_ready(&mut state, &store, &at(CLASS_START.0 + 260))
+        .await
+        .expect("ready");
+    start(&mut state, &store, &at(CLASS_START.0 + 270))
+        .await
+        .expect("start");
+    assert_eq!(
+        state.class_elapsed(Instant(CLASS_START.0 + 300)),
+        Duration(150)
+    );
+}
+
 // --- cancel ----------------------------------------------------------------------------
 
 #[tokio::test]

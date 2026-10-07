@@ -13,6 +13,7 @@ use crate::live_session::LiveSession;
 use crate::operator::{OperatorCommand, OperatorError};
 use crate::ports::{
     AuditEntry, AuditedInterpretedWrite, AuditedResult, AuditedWrite, HubStore, StoredException,
+    StoredInterpretation,
 };
 use domain::{AthleteStatus, Instant, Interpreted, ReaderMode};
 
@@ -65,6 +66,7 @@ pub async fn accept<S: HubStore>(
         .map_err(OperatorError::Storage)?;
     let accepted = store
         .apply_audited(AuditedWrite::ExceptionAccept {
+            session_id: state.session.id.clone(),
             interpreted_event_id,
             at: cmd.at,
             operator: cmd.operator.clone(),
@@ -121,6 +123,7 @@ pub async fn void<S: HubStore>(
 
     let voided = store
         .apply_audited(AuditedWrite::ExceptionVoid {
+            session_id: state.session.id.clone(),
             interpreted_event_id,
             at: cmd.at,
             operator: cmd.operator.clone(),
@@ -171,34 +174,34 @@ pub async fn reinterpret<S: HubStore>(
 
     let target_athlete_id = spec.athlete_id.as_deref().unwrap_or(&exception.athlete_id);
 
+    let effective_at = spec.at.unwrap_or(exception.at);
+
     let athlete = state
         .athlete(target_athlete_id)
         .ok_or_else(|| OperatorError::UnknownAthlete(target_athlete_id.to_string()))?;
 
-    let effective_at = spec.at.unwrap_or(exception.at);
-
-    let started_timing = athlete.status == AthleteStatus::Ready && spec.mode != ReaderMode::Exit;
-    let transition = if spec.mode == ReaderMode::Entry {
-        athlete.last_exit_at.map(|prev| effective_at.since(prev))
-    } else {
-        None
-    };
-
-    let new_event = match spec.mode {
-        ReaderMode::Exit => Interpreted::Exited {
-            station: spec.station.clone(),
-            at: effective_at,
-        },
-        _ => Interpreted::Entered {
-            station: spec.station.clone(),
-            at: effective_at,
-            transition,
-            started_timing,
-        },
-    };
+    // A correction is inserted at the historical position of the original event, not decided
+    // against the athlete's current final state.  In particular, a later EXIT must not make an
+    // earlier corrected ENTRY look like a transition with a negative duration.  Validate the
+    // complete candidate timeline before the audited transaction: a correction that would make
+    // a later ENTRY/EXIT impossible is rejected without voiding the original exception.
+    let history = store
+        .interpretations(&state.session.id)
+        .await
+        .map_err(OperatorError::Storage)?;
+    let new_event = corrected_event(
+        target_athlete_id,
+        interpreted_event_id,
+        effective_at,
+        &spec,
+        &athlete.display_name,
+        &history,
+    )
+    .map_err(OperatorError::CorrectionConflict)?;
 
     let result = store
         .apply_audited(AuditedWrite::ExceptionReinterpret {
+            session_id: state.session.id.clone(),
             interpreted_event_id,
             at: cmd.at,
             operator: cmd.operator.clone(),
@@ -230,6 +233,116 @@ pub async fn reinterpret<S: HubStore>(
 
     recalculate(state, store).await?;
     Ok(new_id)
+}
+
+/// Builds and validates the complete candidate timeline for a correction.
+///
+/// The replacement receives a new interpretation id, so for an equal detected timestamp it is
+/// ordered after existing rows by the same `(detected_at, id)` key used by storage replay. The
+/// original exception is skipped because the operator action would void it in the same
+/// transaction. Existing derived timing fields are recomputed from the candidate prefix.
+fn corrected_event(
+    athlete_id: &str,
+    replaced_id: i64,
+    at: Instant,
+    spec: &ReinterpretSpec,
+    display_name: &str,
+    history: &[StoredInterpretation],
+) -> Result<Interpreted, String> {
+    let mut events: Vec<(Instant, i64, Option<Interpreted>)> = history
+        .iter()
+        .filter(|row| row.interpreted_event_id != replaced_id && row.athlete_id == athlete_id)
+        .map(|row| {
+            (
+                event_at(&row.event),
+                row.interpreted_event_id,
+                Some(row.event.clone()),
+            )
+        })
+        .collect();
+    // i64::MAX models the id the replacement will receive after all existing rows.
+    events.push((at, i64::MAX, None));
+    events.sort_by_key(|(event_at, id, _)| (*event_at, *id));
+
+    let mut context = domain::AthleteState::ready(athlete_id, display_name);
+    let mut replacement = None;
+    for (_, _, event) in events {
+        let is_replacement = event.is_none();
+        let candidate = match event {
+            Some(event) => normalize_replay_event(&context, event),
+            None => {
+                let started_timing =
+                    context.status == AthleteStatus::Ready && spec.mode != ReaderMode::Exit;
+                let transition = if spec.mode == ReaderMode::Entry {
+                    context.last_exit_at.map(|prev| at.since(prev))
+                } else {
+                    None
+                };
+                match spec.mode {
+                    ReaderMode::Exit => Interpreted::Exited {
+                        station: spec.station.clone(),
+                        at,
+                    },
+                    _ => Interpreted::Entered {
+                        station: spec.station.clone(),
+                        at,
+                        transition,
+                        started_timing,
+                    },
+                }
+            }
+        };
+
+        validate_event(&context, &candidate)?;
+        if is_replacement {
+            replacement = Some(candidate.clone());
+        }
+        domain::apply(&mut context, &candidate);
+    }
+
+    replacement.ok_or_else(|| "replacement was not inserted into the timeline".to_string())
+}
+
+fn normalize_replay_event(state: &domain::AthleteState, event: Interpreted) -> Interpreted {
+    match event {
+        Interpreted::Entered { station, at, .. } => Interpreted::Entered {
+            station,
+            at,
+            transition: state.last_exit_at.map(|previous| at.since(previous)),
+            started_timing: state.status == AthleteStatus::Ready,
+        },
+        other => other,
+    }
+}
+
+fn validate_event(state: &domain::AthleteState, event: &Interpreted) -> Result<(), String> {
+    match event {
+        Interpreted::Entered { station, .. }
+            if state.station_state == domain::StationState::Inside =>
+        {
+            Err(format!(
+                "ENTRY for {station:?} arrives while athlete is already inside {:?}",
+                state.current_station
+            ))
+        }
+        Interpreted::Exited { station, .. }
+            if state.station_state != domain::StationState::Inside
+                || state.current_station.as_deref() != Some(station.as_str()) =>
+        {
+            Err(format!(
+                "EXIT for {station:?} has no matching open station in the candidate history"
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn event_at(event: &Interpreted) -> Instant {
+    match event {
+        Interpreted::Entered { at, .. }
+        | Interpreted::Exited { at, .. }
+        | Interpreted::Exception { at, .. } => *at,
+    }
 }
 
 /// Re-derives athlete state and the inbox badge from the stored log.

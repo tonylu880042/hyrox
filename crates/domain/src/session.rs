@@ -193,12 +193,20 @@ impl Session {
     /// RUNNING or PAUSED -> COMPLETED. A paused class need not be resumed to be ended: the
     /// coach who paused it is the one ending it.
     ///
-    /// An open pause is left open on purpose. Closing it here would add the pause's wall
-    /// time to `paused_total` and shift every derived instant, and the class is not running
-    /// any more anyway -- the clock reads the same either way.
-    pub fn complete(&mut self) -> Result<(), SessionError> {
+    /// A completed class is terminal, so its clock must stop at the operator command. When
+    /// the class was already paused, the original pause remains open; the time between the
+    /// pause and this command was not class time either way. Keeping the open marker lets a
+    /// later, reasoned reopen account for the whole non-running interval.
+    pub fn complete(&mut self, at: Instant) -> Result<(), SessionError> {
         match self.status {
-            SessionStatus::Running | SessionStatus::Paused | SessionStatus::Completed => {
+            SessionStatus::Running => {
+                let mut clock = self.clock(at);
+                clock.pause(at);
+                self.absorb(clock);
+                self.status = SessionStatus::Completed;
+                Ok(())
+            }
+            SessionStatus::Paused | SessionStatus::Completed => {
                 self.status = SessionStatus::Completed;
                 Ok(())
             }
@@ -224,11 +232,18 @@ impl Session {
     /// mis-tap on a busy floor must not force a new session, and there is deliberately no
     /// time window on it -- a window would be a magic constant nobody validated.
     ///
+    /// Reopening is a timed transition. If completion or an earlier pause left the clock
+    /// stopped, the non-running interval ends at `at`; this is what makes a reopened
+    /// session actually run instead of reporting RUNNING while its clock stays frozen.
+    ///
     /// A CANCELLED session is not reopened. Cancelling says the class did not happen; the
     /// honest repair is a new session, not resurrecting one that was written off.
-    pub fn reopen(&mut self) -> Result<(), SessionError> {
+    pub fn reopen(&mut self, at: Instant) -> Result<(), SessionError> {
         match self.status {
             SessionStatus::Completed | SessionStatus::Running => {
+                let mut clock = self.clock(at);
+                clock.resume(at);
+                self.absorb(clock);
                 self.status = SessionStatus::Running;
                 Ok(())
             }
@@ -238,7 +253,11 @@ impl Session {
 
     /// Back to editing. Free from READY; from RUNNING only while nothing has been
     /// interpreted (D2), because a class with splits in it has a history to answer for.
-    pub fn back_to_draft(&mut self) -> Result<(), SessionError> {
+    ///
+    /// Returning a paused class to DRAFT also ends the open pause at the operator command.
+    /// The accumulated pause remains part of the session's history, but the next
+    /// READY -> RUNNING path cannot inherit a stale pause marker.
+    pub fn back_to_draft(&mut self, at: Instant) -> Result<(), SessionError> {
         match self.status {
             SessionStatus::Ready | SessionStatus::Draft => {
                 self.status = SessionStatus::Draft;
@@ -248,6 +267,9 @@ impl Session {
                 if self.interpreted_event_count > 0 {
                     return Err(SessionError::HasInterpretedEvents);
                 }
+                let mut clock = self.clock(at);
+                clock.resume(at);
+                self.absorb(clock);
                 self.status = SessionStatus::Draft;
                 Ok(())
             }

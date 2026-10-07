@@ -16,10 +16,12 @@ dependencies = [
  "axum",
  "contract",
  "domain",
+ "getrandom 0.3.4",
  "percent-encoding",
  "qrcode",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tower",
 ]

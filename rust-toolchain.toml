@@ -1,0 +1,5 @@
+# Pinned so a new stable release cannot turn CI red with fresh lints overnight.
+# Bump deliberately: change this and `dtolnay/rust-toolchain@` in .github/workflows/ci.yml together.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

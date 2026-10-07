@@ -26,7 +26,7 @@ fn the_happy_path_is_draft_ready_running_completed() {
     assert_eq!(s.status, SessionStatus::Ready);
     s.start().unwrap();
     assert_eq!(s.status, SessionStatus::Running);
-    s.complete().unwrap();
+    s.complete(Instant(2_000)).unwrap();
     assert_eq!(s.status, SessionStatus::Completed);
 }
 
@@ -56,7 +56,7 @@ fn running_pauses_and_resumes() {
 fn a_paused_session_completes_without_being_resumed_first() {
     let mut s = running();
     s.pause(Instant(1_000)).unwrap();
-    s.complete().unwrap();
+    s.complete(Instant(2_000)).unwrap();
     assert_eq!(s.status, SessionStatus::Completed);
 }
 
@@ -84,7 +84,7 @@ fn every_live_state_can_be_cancelled() {
 #[test]
 fn a_completed_session_cannot_be_restarted() {
     let mut s = running();
-    s.complete().unwrap();
+    s.complete(Instant(2_000)).unwrap();
     assert_eq!(
         s.start(),
         Err(SessionError::IllegalTransition {
@@ -106,7 +106,7 @@ fn a_cancelled_session_cannot_be_restarted() {
         })
     );
     assert_eq!(
-        s.reopen(),
+        s.reopen(Instant(3_000)),
         Err(SessionError::IllegalTransition {
             from: SessionStatus::Cancelled,
             to: SessionStatus::Running
@@ -120,8 +120,8 @@ fn a_cancelled_session_cannot_be_restarted() {
 #[test]
 fn a_completed_session_can_be_reopened_as_a_correction() {
     let mut s = running();
-    s.complete().unwrap();
-    s.reopen().unwrap();
+    s.complete(Instant(2_000)).unwrap();
+    s.reopen(Instant(3_000)).unwrap();
     assert_eq!(s.status, SessionStatus::Running);
 }
 
@@ -136,7 +136,7 @@ fn only_a_running_session_accepts_events() {
     s.pause(Instant(1)).unwrap();
     assert!(!s.accepts_events(), "a paused class is not timing anybody");
     s.resume(Instant(2)).unwrap();
-    s.complete().unwrap();
+    s.complete(Instant(2_000)).unwrap();
     assert!(!s.accepts_events());
 }
 
@@ -157,19 +157,54 @@ fn configuration_is_editable_before_the_class_starts_and_not_after() {
 fn a_ready_session_goes_back_to_draft_freely() {
     let mut s = draft();
     s.mark_ready().unwrap();
-    s.back_to_draft().unwrap();
+    s.back_to_draft(Instant(2_000)).unwrap();
     assert_eq!(s.status, SessionStatus::Draft);
 }
 
 #[test]
 fn a_running_session_goes_back_to_draft_only_before_anything_is_interpreted() {
     let mut s = running();
-    s.back_to_draft().unwrap();
+    s.back_to_draft(Instant(2_000)).unwrap();
     assert_eq!(s.status, SessionStatus::Draft);
 
     let mut s = running();
     s.interpreted_event_count = 1;
-    assert_eq!(s.back_to_draft(), Err(SessionError::HasInterpretedEvents));
+    assert_eq!(
+        s.back_to_draft(Instant(2_000)),
+        Err(SessionError::HasInterpretedEvents)
+    );
+}
+
+#[test]
+fn reopening_a_paused_completed_session_resumes_at_the_command_time() {
+    let mut s = running();
+    s.pause(Instant(100)).unwrap();
+    s.complete(Instant(200)).unwrap();
+
+    assert_eq!(s.status, SessionStatus::Completed);
+    assert_eq!(s.paused_since, Some(Instant(100)));
+
+    s.reopen(Instant(300)).unwrap();
+
+    assert_eq!(s.status, SessionStatus::Running);
+    assert_eq!(s.paused_since, None);
+    assert_eq!(s.paused_total, Duration(200));
+    assert_eq!(s.clock(Instant(0)).elapsed(Instant(350)), Duration(150));
+}
+
+#[test]
+fn returning_a_paused_session_to_draft_closes_the_pause_without_losing_history() {
+    let mut s = running();
+    s.pause(Instant(100)).unwrap();
+    s.back_to_draft(Instant(250)).unwrap();
+
+    assert_eq!(s.status, SessionStatus::Draft);
+    assert_eq!(s.paused_since, None);
+    assert_eq!(s.paused_total, Duration(150));
+
+    s.mark_ready().unwrap();
+    s.start().unwrap();
+    assert_eq!(s.clock(Instant(0)).elapsed(Instant(300)), Duration(150));
 }
 
 // --- the class clock -------------------------------------------------------------------

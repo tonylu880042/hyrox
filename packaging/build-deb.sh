@@ -82,6 +82,23 @@ adduser kiosk video  || true
 adduser kiosk input  || true
 adduser kiosk render || true
 
+# The hub and scheduled workers share a random machine credential through a root owned file.
+# Generate it once; upgrades preserve the existing value so a running worker is never
+# invalidated by package installation. `hyrox` needs read access and the backup unit runs as
+# root, while the file remains inaccessible to ordinary venue users.
+CREDENTIAL_FILE=/etc/hyrox/backup-credential
+if [ ! -s "$CREDENTIAL_FILE" ]; then
+    umask 077
+    temporary=$(mktemp)
+    dd if=/dev/urandom bs=32 count=1 status=none | base64 | tr -d '\n' > "$temporary"
+    chown hyrox:hyrox "$temporary"
+    chmod 600 "$temporary"
+    mv -f "$temporary" "$CREDENTIAL_FILE"
+else
+    chown hyrox:hyrox "$CREDENTIAL_FILE"
+    chmod 600 "$CREDENTIAL_FILE"
+fi
+
 systemctl daemon-reload
 systemctl enable hyrox-hub.service hyrox-maintenance.timer hyrox-backup.timer
 # Only where there is something to show it on. Enabling a kiosk on a headless server would

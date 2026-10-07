@@ -76,7 +76,7 @@ pub async fn unregistered_readers<S: HubStore>(
         // list: somebody has to see it to know their firmware is sending something odd.
         Err(_) => true,
     });
-    seen.sort_by(|a, b| b.last_seen.0.cmp(&a.last_seen.0));
+    seen.sort_by_key(|a| std::cmp::Reverse(a.last_seen.0));
     Ok(seen)
 }
 

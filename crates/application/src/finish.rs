@@ -107,7 +107,7 @@ pub async fn end_class<S: HubStore>(
 
     let before = status_name(state.session.status);
     let mut candidate = state.session.clone();
-    candidate.complete().map_err(OperatorError::Session)?;
+    candidate.complete(cmd.at).map_err(OperatorError::Session)?;
 
     // Validate the lifecycle transition before any roster write. A refused command must not
     // leave a completed/invalid session with only some athletes manually finished.

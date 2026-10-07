@@ -16,8 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Python toolchain
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install screen generator dependencies
+        run: python -m pip install --disable-pip-version-check Pillow numpy
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt, clippy
 
@@ -30,14 +38,25 @@ jobs:
       - name: Production Check (no default features)
         run: cargo check --no-default-features
 
+      - name: Live screen generator regression
+        run: python design/live/test_build_screens.py
+
+      - name: Live screen regeneration check
+        run: python design/live/build_screens.py --check
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
 
       - name: Install Mosquitto
         run: |
@@ -47,3 +66,6 @@ jobs:
 
       - name: Run Tests
         run: cargo test --workspace
+
+      - name: Run Node UI tests
+        run: node --test apps/hub-server/tests/ui/*.test.cjs

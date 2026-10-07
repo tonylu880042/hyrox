@@ -324,5 +324,22 @@ These are not oversights. Each of them would require inventing a product rule (C
   athlete and timestamp), and triggers replay recalculation with full audit logging (`EVENT_REINTERPRET`).
 * **Venue PIN Security Lock.** **Amended 2026-09-05.** `POST /api/operator/pin/verify` and
   `POST /api/operator/pin/change` protect sensitive settings (`/settings`, power control, reader mapping).
-  Default is `2018`, overridable via `HYROX_PIN` or `venue_settings` table.
+  The valid `venue_settings.security.pin` row is authoritative; `HYROX_PIN` is used only when
+  that row is missing or invalid, and `2018` is the final fallback. Successful verification
+  returns an HttpOnly, SameSite=Strict session cookie.
 * **No `operator_identity`.** D1 chose device-level traceability on purpose.
+
+### Live action preview (2026-09-11)
+
+`GET /api/live` and `/ws` share the same athlete projection. `next_station` now
+also previews the upcoming course step while an athlete is inside a station;
+for an outside/ready athlete it still means the next station to enter. The new
+nullable `next_plan` carries that step's display target (for example `30 M`).
+Both fields are null for finished athletes or when no further course step exists.
+`station_index` and the current `plan` use the athlete's course position, including
+repeated exercises in later rounds, rather than the first matching station name.
+
+The training screen displays a common current/next action only when all roster
+entries share the same active step and state. Mixed progress is labelled as
+individual stations, with each athlete's own preview on their card. This does
+not introduce a coach-controlled synchronized progression mode.

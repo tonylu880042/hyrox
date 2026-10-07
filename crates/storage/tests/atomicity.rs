@@ -112,7 +112,7 @@ async fn end_class_rolls_back_finishes_and_session_when_audit_fails() {
     .unwrap();
 
     let mut completed = session.clone();
-    completed.complete().unwrap();
+    completed.complete(Instant(NOW.0 + 1)).unwrap();
     let result = store
         .apply_audited(AuditedWrite::EndClass {
             session: completed,
@@ -174,6 +174,7 @@ async fn reinterpret_rolls_back_the_void_and_replacement_when_audit_fails() {
 
     let result = store
         .apply_audited(AuditedWrite::ExceptionReinterpret {
+            session_id: "s1".into(),
             interpreted_event_id: 1,
             at: Instant(NOW.0 + 2),
             operator: "COACH".into(),

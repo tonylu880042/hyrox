@@ -72,11 +72,21 @@ pub async fn resume_or_start<S: HubStore>(
         // to replay the durable context; otherwise starting a new class would strand it.
         let pending = store.pending_raw_reads(&existing.id).await?;
         let has_replayable_pending = pending.iter().any(|read| {
-            read.context
-                .as_ref()
-                .is_some_and(|context| context.planned.is_some())
+            read.context.as_ref().is_some_and(|context| {
+                context.planned.is_some()
+                    || (context.athlete_id.is_some()
+                        && context.bound_session_id.as_deref() == Some(existing.id.as_str())
+                        && context.on_roster)
+            })
         });
-        if existing.is_live() || has_replayable_pending {
+        // The durable active pointer can intentionally name a DRAFT class: it is the
+        // current class after replacing a READY class, and its course/roster must survive a
+        // restart before the coach marks it ready (F07). Terminal sessions are only resumed
+        // when their pending interpretation context still needs reconciliation.
+        if existing.status == domain::SessionStatus::Draft
+            || existing.is_live()
+            || has_replayable_pending
+        {
             let mut existing = existing;
             existing.interpreted_event_count = store.interpreted_event_count(&existing.id).await?;
             // The stored creation time is the class clock's origin; falling back to the

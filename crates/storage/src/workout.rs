@@ -14,38 +14,9 @@ use sqlx::Row;
 
 impl Store {
     pub async fn save_template(&self, t: &WorkoutTemplate) -> Result<(), StoreError> {
-        let blocks = serde_json::to_string(&t.blocks)?;
-        sqlx::query(
-            "INSERT INTO workout_templates
-                (id, name, description, category, source, owner_id, version, difficulty,
-                 estimated_duration_minutes, enabled, blocks_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
-             ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                description = excluded.description,
-                category = excluded.category,
-                owner_id = excluded.owner_id,
-                version = excluded.version,
-                difficulty = excluded.difficulty,
-                estimated_duration_minutes = excluded.estimated_duration_minutes,
-                enabled = excluded.enabled,
-                blocks_json = excluded.blocks_json,
-                updated_at = excluded.updated_at",
-        )
-        .bind(&t.id)
-        .bind(&t.name)
-        .bind(&t.description)
-        .bind(template_category_str(t.category))
-        .bind(template_source_str(t.source))
-        .bind(&t.owner_id)
-        .bind(t.version as i64)
-        .bind(&t.difficulty)
-        .bind(t.estimated_duration_minutes.map(|m| m as i64))
-        .bind(t.enabled as i64)
-        .bind(blocks)
-        .bind(now_ms())
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        save_template_tx(&mut tx, t, false).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -168,6 +139,68 @@ impl Store {
                 .collect(),
         ))
     }
+}
+
+/// Writes a template on a caller-owned transaction. `create_only` is used by duplicate:
+/// SQLite must reject an id collision at the storage boundary, even when two callers race the
+/// application-level existence check.
+pub(crate) async fn save_template_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    t: &WorkoutTemplate,
+    create_only: bool,
+) -> Result<bool, StoreError> {
+    let blocks = serde_json::to_string(&t.blocks)?;
+    let query = if create_only {
+        "INSERT INTO workout_templates
+            (id, name, description, category, source, owner_id, version, difficulty,
+             estimated_duration_minutes, enabled, blocks_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+         ON CONFLICT(id) DO NOTHING"
+    } else {
+        "INSERT INTO workout_templates
+            (id, name, description, category, source, owner_id, version, difficulty,
+             estimated_duration_minutes, enabled, blocks_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            category = excluded.category,
+            owner_id = excluded.owner_id,
+            version = excluded.version,
+            difficulty = excluded.difficulty,
+            estimated_duration_minutes = excluded.estimated_duration_minutes,
+            enabled = excluded.enabled,
+            blocks_json = excluded.blocks_json,
+            updated_at = excluded.updated_at
+         WHERE workout_templates.source <> 'SYSTEM'"
+    };
+    let done = sqlx::query(query)
+        .bind(&t.id)
+        .bind(&t.name)
+        .bind(&t.description)
+        .bind(template_category_str(t.category))
+        .bind(template_source_str(t.source))
+        .bind(&t.owner_id)
+        .bind(t.version as i64)
+        .bind(&t.difficulty)
+        .bind(t.estimated_duration_minutes.map(|m| m as i64))
+        .bind(t.enabled as i64)
+        .bind(blocks)
+        .bind(now_ms())
+        .execute(&mut **tx)
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+pub(crate) async fn delete_template_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    id: &str,
+) -> Result<bool, StoreError> {
+    let done = sqlx::query("DELETE FROM workout_templates WHERE id = ?1")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 /// Both template reads select the same columns, because `template_from_row` needs all of

@@ -300,7 +300,18 @@ pub(crate) async fn attribute_read<S: HubStore>(
         },
         (true, Some(binding)) => {
             let athlete = state.athlete(ctx.athlete_id).expect("checked by on_roster");
-            domain::decide(athlete, &binding, ctx.at, &state.session)
+            // A live event older than the last event already folded for this athlete cannot be
+            // safely inserted into the current state without re-deciding history. Preserve it
+            // as an explicit exception; the raw row remains evidence and replay will make the
+            // same decision from the stored context.
+            if athlete.last_event_at.is_some_and(|last| ctx.at < last) {
+                Interpreted::Exception {
+                    reason: domain::ExceptionReason::ImpossibleTransition,
+                    at: ctx.at,
+                }
+            } else {
+                domain::decide(athlete, &binding, ctx.at, &state.session)
+            }
         }
     };
 
@@ -423,6 +434,12 @@ fn plan_contexts(state: &LiveSession, edge: &EdgeEvent) -> Vec<RawInterpretation
                             .find(|a| a.athlete_id == *athlete_id)
                             .expect("on_roster was checked above");
                         let event = match reader.as_ref() {
+                            Some(_) if athlete.last_event_at.is_some_and(|last| at < last) => {
+                                Interpreted::Exception {
+                                    reason: ExceptionReason::ImpossibleTransition,
+                                    at,
+                                }
+                            }
                             Some(reader) => domain::decide(athlete, reader, at, &state.session),
                             None => Interpreted::Exception {
                                 reason: ExceptionReason::UnknownReader,
@@ -470,26 +487,49 @@ pub async fn reconcile_pending<S: HubStore>(
     let mut repaired = Vec::new();
     for StoredRawRead {
         raw_event_id,
+        device_id,
+        reader_id,
+        detected_at,
         context,
-        ..
     } in pending
     {
         let Some(context) = context else { continue };
-        let Some(event) = context.planned else {
-            continue;
-        };
         let Some(athlete_id) = context.athlete_id else {
             continue;
         };
-        commit_and_apply(
-            state,
-            store,
-            &context.session_id,
-            &athlete_id,
-            Some(raw_event_id),
-            &event,
-        )
-        .await?;
+        if let Some(event) = context.planned.clone() {
+            commit_and_apply(
+                state,
+                store,
+                &context.session_id,
+                &athlete_id,
+                Some(raw_event_id),
+                &event,
+            )
+            .await?;
+        } else if context.bound_session_id.as_deref() == Some(state.session.id.as_str())
+            && context.on_roster
+        {
+            // A binding transaction can leave a durable claim intent whose plan is still None.
+            // Decide it now against the recovered projection, then commit the same way as a
+            // live/retroactive read. Unowned legacy rows remain deliberately untouched.
+            attribute_read(
+                state,
+                store,
+                ReadContext {
+                    athlete_id: &athlete_id,
+                    on_roster: true,
+                    device_id: &device_id,
+                    reader_id: &reader_id,
+                    raw_event_id: Some(raw_event_id),
+                    at: detected_at,
+                    reader: Some(context.reader.clone()),
+                },
+            )
+            .await?;
+        } else {
+            continue;
+        }
         repaired.push(raw_event_id);
     }
     if !repaired.is_empty() || state.session_save_dirty {

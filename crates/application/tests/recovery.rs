@@ -92,7 +92,7 @@ async fn a_closed_session_is_not_resumed() {
     let mut closed = Session::new_draft("s-old", "WED 19:00", SessionMode::Training);
     closed.mark_ready().expect("arm");
     closed.start().expect("arm");
-    closed.complete().expect("complete");
+    closed.complete(Instant(1_000_000)).expect("complete");
     let store = FakeStore::new().with_session(closed, Instant(500_000));
 
     let (state, how) = resume_or_start(&store, plan()).await.expect("start");

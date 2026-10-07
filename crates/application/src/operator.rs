@@ -79,6 +79,12 @@ pub enum OperatorError<E> {
     /// than silently succeeding: an operator who voided nothing must not be told they did.
     #[error("no interpreted event with id {0}")]
     UnknownEvent(i64),
+    /// A historical correction would make the ordered interpretation log impossible to fold
+    /// (for example, an ENTRY while the candidate athlete is already inside a station).
+    /// Refuse before the audited transaction so the original event and its audit trail stay
+    /// untouched.
+    #[error("historical correction conflicts with the event timeline: {0}")]
+    CorrectionConflict(String),
     /// A class is on the floor. Used where an action would abandon it -- creating a second
     /// class (ADR 0008), and switching the machine off (M6).
     #[error("a class is in progress")]

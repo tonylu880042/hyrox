@@ -11,7 +11,7 @@
 
 use crate::live_session::LiveSession;
 use crate::operator::OperatorCommand;
-use crate::ports::{AuditEntry, HubStore};
+use crate::ports::{AuditEntry, AuditedResult, AuditedWrite, ClassAthlete, HubStore};
 use crate::recover::RosterEntry;
 use domain::{
     AthleteState, CompileError, ExerciseLibrary, FinishPolicy, Instant, Session, SessionConfig,
@@ -30,6 +30,10 @@ pub enum TemplateError<E> {
     /// on the floor. Complete or cancel it first.
     #[error("a class is already in progress")]
     ClassInProgress,
+    #[error("a session with id {0:?} already exists")]
+    SessionIdConflict(String),
+    #[error("a template with id {0:?} already exists")]
+    TemplateIdConflict(String),
     /// Deleting a template destroys a plan a coach wrote. CLAUDE.md 20 wants a reason on
     /// the record for that, and whitespace is not a reason.
     #[error("this action changes recorded data, so it needs a reason")]
@@ -75,23 +79,29 @@ pub async fn save_template<S: HubStore>(
         template.edited();
     }
 
-    store
-        .save_template(&template)
+    let action = if existing.is_some() {
+        "TEMPLATE_UPDATE"
+    } else {
+        "TEMPLATE_CREATE"
+    };
+    let result = store
+        .apply_audited(AuditedWrite::TemplateSave {
+            template: template.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: action.to_string(),
+                subject: template.id.clone(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: existing.as_ref().map(describe),
+                after: Some(describe(&template)),
+            },
+        })
         .await
         .map_err(TemplateError::Storage)?;
-    audit(
-        store,
-        cmd,
-        if existing.is_some() {
-            "TEMPLATE_UPDATE"
-        } else {
-            "TEMPLATE_CREATE"
-        },
-        &template.id,
-        existing.as_ref().map(describe),
-        Some(describe(&template)),
-    )
-    .await?;
+    if matches!(result, AuditedResult::Conflict) {
+        return Err(TemplateError::TemplateIdConflict(template.id));
+    }
     Ok(template)
 }
 
@@ -110,20 +120,34 @@ pub async fn duplicate_template<S: HubStore>(
         .map_err(TemplateError::Storage)?
         .ok_or_else(|| TemplateError::UnknownTemplate(source_id.to_string()))?;
 
+    if store
+        .template(new_id)
+        .await
+        .map_err(TemplateError::Storage)?
+        .is_some()
+    {
+        return Err(TemplateError::TemplateIdConflict(new_id.to_string()));
+    }
+
     let copy = source.duplicate(new_id, new_name, owner_id);
-    store
-        .save_template(&copy)
+    let result = store
+        .apply_audited(AuditedWrite::TemplateCreate {
+            template: copy.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "TEMPLATE_DUPLICATE".to_string(),
+                subject: copy.id.clone(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: Some(describe(&source)),
+                after: Some(describe(&copy)),
+            },
+        })
         .await
         .map_err(TemplateError::Storage)?;
-    audit(
-        store,
-        cmd,
-        "TEMPLATE_DUPLICATE",
-        &copy.id,
-        Some(describe(&source)),
-        Some(describe(&copy)),
-    )
-    .await?;
+    if matches!(result, AuditedResult::Conflict) {
+        return Err(TemplateError::TemplateIdConflict(copy.id));
+    }
     Ok(copy)
 }
 
@@ -145,19 +169,25 @@ pub async fn delete_template<S: HubStore>(
         return Err(TemplateError::NotEditable);
     }
 
-    store
-        .delete_template(template_id)
+    let result = store
+        .apply_audited(AuditedWrite::TemplateDelete {
+            template_id: template_id.to_string(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "TEMPLATE_DELETE".to_string(),
+                subject: template_id.to_string(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: Some(describe(&existing)),
+                after: None,
+            },
+        })
         .await
         .map_err(TemplateError::Storage)?;
-    audit(
-        store,
-        cmd,
-        "TEMPLATE_DELETE",
-        template_id,
-        Some(describe(&existing)),
-        None,
-    )
-    .await
+    if matches!(result, AuditedResult::Applied(false)) {
+        return Err(TemplateError::UnknownTemplate(template_id.to_string()));
+    }
+    Ok(())
 }
 
 /// What a class is created with (brief §15).
@@ -193,53 +223,76 @@ pub async fn create_class<S: HubStore>(
         return Err(TemplateError::ClassInProgress);
     }
 
+    // A replacement is a handoff between two projections. Finish any raw/context write that
+    // was in flight before choosing which session becomes current, otherwise the old session
+    // can leave a pending claim behind while the new one is already active.
+    crate::ingest::reconcile_pending(state, store)
+        .await
+        .map_err(TemplateError::Storage)?;
+
+    // This check gives the normal API path a stable 409. The transaction below repeats the
+    // protection with an INSERT-only statement, so two stores racing this read cannot
+    // overwrite an existing class.
+    if store
+        .session(&new.session_id)
+        .await
+        .map_err(TemplateError::Storage)?
+        .is_some()
+    {
+        return Err(TemplateError::SessionIdConflict(new.session_id));
+    }
+
     let course = template.compile(library).map_err(TemplateError::Compile)?;
     let session = Session::new_draft(&new.session_id, &new.name, new.mode);
     let config = SessionConfig::new(&new.session_id)
         .with_course(course)
         .with_finish_policy(new.finish_policy);
 
-    store
-        .save_session(&session, new.created_at)
-        .await
-        .map_err(TemplateError::Storage)?;
-    // After the session row, not before: the configuration belongs to a session that exists.
-    store
-        .save_session_config(&config)
-        .await
-        .map_err(TemplateError::Storage)?;
-
     let mut athletes = Vec::with_capacity(new.roster.len());
     let mut bibs = Vec::with_capacity(new.roster.len());
     for (i, entry) in new.roster.iter().enumerate() {
-        store
-            .save_athlete(
-                &session.id,
-                &entry.athlete_id,
-                &entry.display_name,
-                i as i64 + 1,
-                None,
-            )
-            .await
-            .map_err(TemplateError::Storage)?;
+        let bib = i as i64 + 1;
         athletes.push(AthleteState::ready(&entry.athlete_id, &entry.display_name));
-        bibs.push((entry.athlete_id.clone(), i as i64 + 1));
+        bibs.push((entry.athlete_id.clone(), bib));
     }
 
-    audit(
-        store,
-        cmd,
-        "CLASS_CREATE",
-        &session.id,
-        None,
-        Some(format!(
-            "template {:?} v{}, {} steps",
-            template.name,
-            template.version,
-            template.step_count()
-        )),
-    )
-    .await?;
+    let roster = new
+        .roster
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| ClassAthlete {
+            athlete_id: entry.athlete_id.clone(),
+            display_name: entry.display_name.clone(),
+            bib: i as i64 + 1,
+            member_id: None,
+        })
+        .collect();
+    let result = store
+        .apply_audited(AuditedWrite::CreateClass {
+            session: session.clone(),
+            created_at: new.created_at,
+            config: config.clone(),
+            athletes: roster,
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "CLASS_CREATE".to_string(),
+                subject: session.id.clone(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before: None,
+                after: Some(format!(
+                    "template {:?} v{}, {} steps",
+                    template.name,
+                    template.version,
+                    template.step_count()
+                )),
+            },
+        })
+        .await
+        .map_err(TemplateError::Storage)?;
+    if matches!(result, AuditedResult::Conflict) {
+        return Err(TemplateError::SessionIdConflict(session.id));
+    }
 
     let readers = std::mem::take(&mut state.readers);
     let bindings = std::mem::take(&mut state.bindings);
@@ -264,26 +317,4 @@ fn describe(template: &WorkoutTemplate) -> String {
         template.blocks.len(),
         template.step_count()
     )
-}
-
-async fn audit<S: HubStore>(
-    store: &S,
-    cmd: &OperatorCommand,
-    action: &str,
-    subject: &str,
-    before: Option<String>,
-    after: Option<String>,
-) -> Result<(), TemplateError<S::Error>> {
-    store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: action.to_string(),
-            subject: subject.to_string(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before,
-            after,
-        })
-        .await
-        .map_err(TemplateError::Storage)
 }

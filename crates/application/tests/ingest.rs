@@ -316,7 +316,10 @@ async fn a_redelivered_event_is_acknowledged_but_interpreted_only_once() {
 async fn an_event_arriving_before_the_session_is_armed_is_an_exception() {
     let store = FakeStore::new();
     let mut state = armed_session();
-    state.session.complete().expect("complete");
+    state
+        .session
+        .complete(Instant(1_020_000))
+        .expect("complete");
 
     let out = ingest_read(&mut state, &store, &read("rfid-01", "TAG-A1", 1, 1_010_000))
         .await

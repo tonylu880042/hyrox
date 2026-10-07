@@ -47,6 +47,7 @@
 //! mandatory because CLAUDE.md 31's first principle is that no event is lost -- and without
 //! it, a still screen and a dead link are the same picture.
 
+pub mod auth;
 pub mod checkin;
 pub mod error;
 pub mod identity;
@@ -55,6 +56,7 @@ pub mod read;
 pub mod state;
 pub mod wire;
 
+pub use auth::{BackupPrincipal, OperatorSession, SESSION_COOKIE};
 pub use error::{ApiError, ErrorBody};
 pub use identity::{OperatorDevice, OPERATOR_HEADER};
 pub use read::WEBSOCKET_PATH;

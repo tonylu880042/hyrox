@@ -685,14 +685,14 @@
     </div>
   </div>
 
-  <h2>7.1 場館 4 位純數字 PIN 安全鎖 (Venue PIN Lock)</h2>
+  <h2>7.1 場館 4–8 位純數字 PIN 安全鎖 (Venue PIN Lock)</h2>
   <ul>
     <li><strong>設計初衷</strong>：防止公用平板在非執教期間遭學員或無關人員誤觸重啟讀卡機或竄改賽制。</li>
     <li><strong>系統預設值</strong>：出廠預設為 <kbd>2018</kbd>（HYROX 誕生年份）。</li>
     <li><strong>操作特性</strong>：
       <ul>
-        <li>支援實體鍵盤 0~9 輸入與螢幕觸控 9 宮格按鈕，輸入滿 4 碼立即自動發送驗證。</li>
-        <li>密碼錯誤具備即時紅色抖動警示；驗證通過後由瀏覽器記住憑證 12 小時，當日值班免重複輸入。</li>
+        <li>支援實體鍵盤 0~9 輸入與螢幕觸控 9 宮格按鈕，輸入 4–8 碼後按「解鎖」或 Enter 發送驗證；輸入 4 碼不會自動送出。</li>
+        <li>密碼錯誤具備即時紅色抖動警示；驗證通過後由 Hub 發出最長 12 小時的 HttpOnly、SameSite=Strict session cookie，瀏覽器不以 localStorage 保存登入 token。</li>
         <li>審計保護：日誌（Logs & Audit）絕不記錄密碼明文，統一以 <code>****</code> 遮罩。</li>
       </ul>
     </li>
@@ -877,7 +877,7 @@
       <tr>
         <td><kbd>0</kbd> ~ <kbd>9</kbd></td>
         <td>場館設定 (<code>/settings</code>)</td>
-        <td>直接以鍵盤輸入 4 碼 PIN 碼快速解鎖。</td>
+        <td>以鍵盤輸入 4–8 碼 PIN 碼，按 Enter 送出解鎖。</td>
       </tr>
       <tr>
         <td><kbd>Backspace</kbd></td>
@@ -903,8 +903,8 @@
     <strong>Q3：現場忘記場館 PIN 碼，無法進入 /settings 解鎖？</strong><br>
     <strong>解答</strong>：系統提供伺服器層級的安全覆蓋機制，可透過下列任一方式重設：
     <ol style="margin-top: 6px; margin-bottom: 0;">
-      <li><strong>環境變數強制覆蓋</strong>：重啟 Hub 服務時帶入 <code>HYROX_PIN=2018 ./hub-server</code>，即可將密碼強制還原為預設值。</li>
-      <li><strong>SQLite 指令重設</strong>：執行指令 <code>sqlite3 hyrox.db "UPDATE settings SET value='2018' WHERE key='venue_pin';"</code> 即可完成解鎖。</li>
+      <li><strong>環境變數 fallback</strong>：重啟 Hub 服務前設定有效的 <code>HYROX_PIN</code>，只會在資料庫缺少或沒有有效 <code>security.pin</code> 時使用；資料庫已有有效 PIN 時不會被覆寫。</li>
+      <li><strong>SQLite 指令重設</strong>：執行 <code>sqlite3 /var/lib/hyrox/hyrox.db "DELETE FROM venue_settings WHERE key='security.pin';"</code>，未設定有效 <code>HYROX_PIN</code> 時重啟後即回到 <code>2018</code>。</li>
     </ol>
   </div>
 

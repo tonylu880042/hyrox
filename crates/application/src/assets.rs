@@ -10,7 +10,7 @@
 //!   the front of the file are the fact.
 
 use crate::operator::OperatorCommand;
-use crate::ports::{AuditEntry, HubStore};
+use crate::ports::{AuditEntry, AuditedWrite, HubStore};
 
 pub const VENUE_LOGO: &str = "venue.logo";
 
@@ -87,18 +87,21 @@ pub async fn save_venue_asset<S: HubStore>(
     })?;
 
     store
-        .save_venue_asset(key, media_type, &bytes, cmd.at, &cmd.operator)
-        .await
-        .map_err(AssetError::Storage)?;
-    store
-        .record_audit(&AuditEntry {
+        .apply_audited(AuditedWrite::VenueAssetSave {
+            key: key.to_string(),
+            media_type: media_type.to_string(),
+            bytes: bytes.clone(),
             at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "VENUE_ASSET".to_string(),
-            subject: key.to_string(),
-            reason: None,
-            before: None,
-            after: Some(format!("{media_type}, {} bytes", bytes.len())),
+            by: cmd.operator.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "VENUE_ASSET".to_string(),
+                subject: key.to_string(),
+                reason: None,
+                before: None,
+                after: Some(format!("{media_type}, {} bytes", bytes.len())),
+            },
         })
         .await
         .map_err(AssetError::Storage)?;
@@ -116,19 +119,19 @@ pub async fn delete_venue_asset<S: HubStore>(
     cmd: &OperatorCommand,
 ) -> Result<(), AssetError<S::Error>> {
     store
-        .delete_venue_asset(key)
-        .await
-        .map_err(AssetError::Storage)?;
-    store
-        .record_audit(&AuditEntry {
-            at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "VENUE_ASSET".to_string(),
-            subject: key.to_string(),
-            reason: None,
-            before: None,
-            after: Some("removed".to_string()),
+        .apply_audited(AuditedWrite::VenueAssetDelete {
+            key: key.to_string(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "VENUE_ASSET".to_string(),
+                subject: key.to_string(),
+                reason: None,
+                before: None,
+                after: Some("removed".to_string()),
+            },
         })
         .await
+        .map(|_| ())
         .map_err(AssetError::Storage)
 }

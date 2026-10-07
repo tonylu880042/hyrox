@@ -63,7 +63,10 @@ pub async fn complete<S: HubStore>(
     store: &S,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    transition(state, store, cmd, "SESSION_COMPLETE", |s, _| s.complete()).await
+    transition(state, store, cmd, "SESSION_COMPLETE", |s, at| {
+        s.complete(at)
+    })
+    .await
 }
 
 /// The class did not happen. Destructive -- it writes off everything recorded under the
@@ -90,7 +93,7 @@ pub async fn reopen<S: HubStore>(
     if cmd.stated_reason().is_none() {
         return Err(OperatorError::ReasonRequired);
     }
-    transition(state, store, cmd, "SESSION_REOPEN", |s, _| s.reopen()).await
+    transition(state, store, cmd, "SESSION_REOPEN", |s, at| s.reopen(at)).await
 }
 
 /// Back to editing, only while nothing has been interpreted (ADR 0001 D2). `domain::Session`
@@ -100,8 +103,8 @@ pub async fn return_to_draft<S: HubStore>(
     store: &S,
     cmd: &OperatorCommand,
 ) -> Result<(), OperatorError<S::Error>> {
-    transition(state, store, cmd, "SESSION_BACK_TO_DRAFT", |s, _| {
-        s.back_to_draft()
+    transition(state, store, cmd, "SESSION_BACK_TO_DRAFT", |s, at| {
+        s.back_to_draft(at)
     })
     .await
 }

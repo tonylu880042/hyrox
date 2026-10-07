@@ -7,6 +7,7 @@
 //! reason is required, whether a class may be ended by hand -- are all below this layer
 //! (CLAUDE.md 29).
 
+use crate::auth::{BackupPrincipal, OperatorSession};
 use crate::checkin::command;
 use crate::error::ApiError;
 use crate::identity::{Body, OperatorDevice};
@@ -20,6 +21,7 @@ use crate::wire::{
 };
 use application::HubStore;
 use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap, HeaderValue};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use domain::{Instant, ReaderKey, ReaderRegistration, WorkoutTemplate};
@@ -87,7 +89,14 @@ where
 
 /// Everything the operator screen keeps on display: the session, its configuration, the
 /// reader map with per-reader freshness (ADR 0001 D5), device health, and the two badges.
-async fn overview<S>(State(operator): State<Operator<S>>) -> Json<OverviewResponse> {
+async fn overview<S>(
+    State(operator): State<Operator<S>>,
+    _session: OperatorSession,
+) -> Json<OverviewResponse>
+where
+    S: HubStore + Send + Sync + 'static,
+    S::Error: Display + Send,
+{
     let read = operator.read();
     let now = read.now();
     let snapshot = read.snapshot().await;
@@ -110,7 +119,14 @@ async fn overview<S>(State(operator): State<Operator<S>>) -> Json<OverviewRespon
     })
 }
 
-async fn readers<S>(State(operator): State<Operator<S>>) -> Json<ReadersResponse> {
+async fn readers<S>(
+    State(operator): State<Operator<S>>,
+    _session: OperatorSession,
+) -> Json<ReadersResponse>
+where
+    S: HubStore + Send + Sync + 'static,
+    S::Error: Display + Send,
+{
     let read = operator.read();
     Json(ReadersResponse {
         freshness: freshness(read).await,
@@ -126,6 +142,7 @@ async fn readers<S>(State(operator): State<Operator<S>>) -> Json<ReadersResponse
 /// `(device_id, reader_id)` replaces its mapping, which is what repointing a reader is.
 async fn register_reader<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<RegisterReaderRequest>,
 ) -> Result<Json<ReadersResponse>, ApiError>
@@ -178,7 +195,16 @@ where
 /// produced it.
 async fn exceptions<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
 ) -> Result<Json<ExceptionsResponse>, ApiError>
+where
+    S: HubStore,
+    S::Error: Display,
+{
+    exceptions_response(operator).await
+}
+
+async fn exceptions_response<S>(operator: Operator<S>) -> Result<Json<ExceptionsResponse>, ApiError>
 where
     S: HubStore,
     S::Error: Display,
@@ -197,6 +223,7 @@ where
 /// Destructive, so the use case demands a reason and answers 422 without one.
 async fn void<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     Path(interpreted_event_id): Path<i64>,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<ReasonRequest>,
@@ -208,7 +235,7 @@ where
     let now = operator.read().now();
     let cmd = command(device, now, request.reason);
     operator.void_exception(interpreted_event_id, &cmd).await?;
-    exceptions(State(operator)).await
+    exceptions_response(operator).await
 }
 
 /// Accepts one exception as it stands: out of the inbox, still in the log (ADR 0001 D4).
@@ -217,6 +244,7 @@ where
 /// requiring one would buy a trail of "ok" rather than a trail worth reading.
 async fn accept<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     Path(interpreted_event_id): Path<i64>,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<ReasonRequest>,
@@ -230,12 +258,13 @@ where
     operator
         .accept_exception(interpreted_event_id, &cmd)
         .await?;
-    exceptions(State(operator)).await
+    exceptions_response(operator).await
 }
 
 /// Reinterprets one exception into a valid station reading (ADR 0001 D4; CLAUDE.md 20).
 async fn reinterpret<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     Path(interpreted_event_id): Path<i64>,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<ReinterpretRequest>,
@@ -255,7 +284,7 @@ where
     operator
         .reinterpret_exception(interpreted_event_id, spec, &cmd)
         .await?;
-    exceptions(State(operator)).await
+    exceptions_response(operator).await
 }
 
 /// The session lifecycle routes (ADR 0008). Every one of them is the same four lines --
@@ -495,7 +524,7 @@ where
 /// produce a backup that is missing the transactions in the `-wal`, or is simply corrupt.
 async fn backup<S>(
     State(operator): State<Operator<S>>,
-    OperatorDevice(device): OperatorDevice,
+    principal: BackupPrincipal,
     Body(request): Body<crate::wire::BackupRequest>,
 ) -> Result<Json<crate::wire::BackupResponse>, ApiError>
 where
@@ -504,7 +533,7 @@ where
 {
     let now = operator.read().now();
     let reason = request.reason.clone();
-    let cmd = command(device, now, request.reason);
+    let cmd = command(principal.operator_name().to_string(), now, request.reason);
     let path = operator.backup(&cmd, reason).await?;
     Ok(Json(crate::wire::BackupResponse {
         freshness: crate::read::freshness(operator.read()).await,
@@ -519,6 +548,7 @@ where
 /// guard lives in [`Operator::power`] rather than here, so it holds for any caller.
 async fn power<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<crate::wire::PowerRequest>,
 ) -> Result<Json<crate::wire::PowerResponse>, ApiError>
@@ -552,6 +582,7 @@ where
 /// Nobody copies a MAC address off a sticker.
 async fn unregistered<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
 ) -> Result<Json<crate::wire::UnregisteredReadersResponse>, ApiError>
 where
     S: HubStore,
@@ -579,6 +610,7 @@ where
 /// and a stored typo is a setting somebody will swear they changed.
 async fn settings<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<crate::wire::SettingsRequest>,
 ) -> Result<Json<crate::wire::SettingsResponse>, ApiError>
@@ -617,6 +649,7 @@ where
 /// nothing to parse before the only check that matters -- what the bytes actually are.
 async fn upload_logo<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
     bytes: axum::body::Bytes,
 ) -> Result<Json<crate::wire::LogoResponse>, ApiError>
@@ -636,6 +669,7 @@ where
 /// Remove it. The screens go back to leading with the class, which is what they did before.
 async fn remove_logo<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
 ) -> Result<Json<crate::wire::LogoResponse>, ApiError>
 where
@@ -659,6 +693,7 @@ where
 /// land in the inbox rather than disappearing.
 async fn remove_reader<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
     Path((device_id, reader_id)): Path<(String, String)>,
     Body(request): Body<crate::wire::ReaderRemovalRequest>,
@@ -683,6 +718,7 @@ where
 /// athletes into somebody's evening would be indistinguishable from a bug.
 async fn load_demo<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
 ) -> Result<Json<crate::wire::DemoResponse>, ApiError>
 where
@@ -703,6 +739,7 @@ where
 /// needs the off switch, and stopping invented reads cannot damage a real class.
 async fn clear_demo<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
 ) -> Result<Json<crate::wire::DemoResponse>, ApiError>
 where
@@ -721,11 +758,15 @@ where
 async fn verify_pin<S>(
     State(operator): State<Operator<S>>,
     Body(request): Body<VerifyPinRequest>,
-) -> Result<Json<VerifyPinResponse>, ApiError>
+) -> Result<(HeaderMap, Json<VerifyPinResponse>), ApiError>
 where
     S: HubStore,
     S::Error: Display,
 {
+    if !operator.begin_pin_attempt() {
+        return Err(ApiError::pin_rate_limited());
+    }
+    let generation = operator.pin_generation();
     let ok = operator
         .verify_pin(&request.pin)
         .await
@@ -733,15 +774,27 @@ where
     if !ok {
         return Err(ApiError::pin_invalid());
     }
-    Ok(Json(VerifyPinResponse { ok: true }))
+    operator.pin_succeeded();
+    let token = operator
+        .issue_session_for_pin_generation(generation)
+        .map_err(|_| ApiError::auth_unavailable())?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&crate::auth::session_cookie(&token))
+            .expect("random session cookie is valid ASCII"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((headers, Json(VerifyPinResponse { ok: true })))
 }
 
 /// Changes the venue's PIN after validating knowledge of the current PIN.
 async fn change_pin<S>(
     State(operator): State<Operator<S>>,
+    _session: OperatorSession,
     OperatorDevice(device): OperatorDevice,
     Body(request): Body<ChangePinRequest>,
-) -> Result<Json<VerifyPinResponse>, ApiError>
+) -> Result<(HeaderMap, Json<VerifyPinResponse>), ApiError>
 where
     S: HubStore,
     S::Error: Display,
@@ -757,5 +810,11 @@ where
     operator
         .save_setting(application::SECURITY_PIN, &request.new_pin, &cmd)
         .await?;
-    Ok(Json(VerifyPinResponse { ok: true }))
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_static(crate::auth::clear_session_cookie()),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((headers, Json(VerifyPinResponse { ok: true })))
 }

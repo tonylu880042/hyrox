@@ -93,6 +93,8 @@ pub async fn subscribe_acks(client: &AsyncClient, device: &DeviceId) -> Result<(
 /// Errors are returned, not swallowed, because only the caller can decide whether to log and
 /// retry or to give up — but note that rumqttc reconnects by itself on the next poll, so
 /// retrying is normally the right answer.
+// rumqttc owns `ConnectionError`; boxing it would only move the size, once per poll.
+#[allow(clippy::result_large_err)]
 pub async fn next_inbound(eventloop: &mut EventLoop) -> Result<Option<Inbound>, ConnectionError> {
     match eventloop.poll().await? {
         Event::Incoming(Packet::Publish(publish)) => Ok(Some(crate::inbound::classify(

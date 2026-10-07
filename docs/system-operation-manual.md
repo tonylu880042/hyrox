@@ -154,13 +154,15 @@ HYROX 訓練與競賽應用系統專為現場高強度體能賽事量身打造�
 ![場館設定安全鎖 9 宮格輸入彈窗](assets/manual/screenshot_pin_locked.png)
 ![場館安全設定與 PIN 碼管理](assets/manual/screenshot_pin_security_tab.png)
 
-### 7.1 場館 4 位純數字 PIN 安全鎖 (Venue PIN Lock)
+### 7.1 場館 4–8 位純數字 PIN 安全鎖 (Venue PIN Lock)
 * **設計初衷**：防止公用平板在非執教期間遭學員或無關人員誤觸重啟讀卡機或竄改賽制。
 * **系統預設值**：出廠預設為 `2018`（HYROX 誕生年份）。
 * **操作特性**：
-  * 支援實體鍵盤 0~9 輸入與螢幕觸控 9 宮格按鈕，輸入滿 4 碼立即自動發送驗證。
-  * 密碼錯誤具備即時紅色抖動警示；驗證通過後由瀏覽器記住憑證 12 小時，當日值班免重複輸入。
+  * 支援實體鍵盤 0~9 輸入與螢幕觸控 9 宮格按鈕，輸入 4–8 碼後按「解鎖」或 Enter 發送驗證；輸入 4 碼不會自動送出。
+  * 密碼錯誤具備即時紅色抖動警示；驗證通過後由 Hub 發出最長 12 小時的 HttpOnly、SameSite=Strict session cookie，瀏覽器不以 localStorage 保存登入 token。
   * 審計保護：日誌（Logs & Audit）絕不記錄密碼明文，統一以 `****` 遮罩。
+
+讀卡機、電源、備份、Logo、Demo、例外處理及設定寫入等敏感 API 需要有效 session cookie；一般課程操作、讀取及報到維持免 PIN。排程備份使用獨立 machine credential，權限只涵蓋備份與後續維運，不能用來修改 PIN 或一般設定。
 
 ### 7.2 讀卡機管理與 4 格動態 RSSI 訊號指示條
 ![讀卡機動態訊號指示條](assets/manual/screenshot_settings_devices_signal.png)
@@ -217,7 +219,7 @@ HYROX 訓練與競賽應用系統專為現場高強度體能賽事量身打造�
 | :--- | :--- | :--- |
 | `L` / `l` | 大螢幕視圖 (`/live`) | 於「方格矩陣監控」與「頒獎台 (Podium)」之間秒級雙向切換。 |
 | `Esc` | 所有頁面彈窗 | 關閉當前開啟的彈窗（如 PIN 碼鎖定、分享預覽卡等）。 |
-| `0` ~ `9` | 場館設定 (`/settings`) | 直接以鍵盤輸入 4 碼 PIN 碼快速解鎖。 |
+| `0` ~ `9` | 場館設定 (`/settings`) | 以鍵盤輸入 4–8 碼 PIN 碼，按 Enter 送出解鎖。 |
 | `Backspace` | 場館設定 (`/settings`) | 倒退刪除一位已輸入的 PIN 碼。 |
 
 ### 9.3 現場常見故障緊急排查 (Troubleshooting)
@@ -226,6 +228,6 @@ HYROX 訓練與競賽應用系統專為現場高強度體能賽事量身打造�
 * **Q2：讀卡機訊號呈現 1 格紅色或斷線灰色？**  
   **解答**：進入 `/settings` 檢視該讀卡機的「最後事件（Age）」。若超過 60 秒無心跳，請檢查讀卡機供電線與乙太網線是否鬆脫。若是無線讀卡機，請調整天線仰角以避開現場大型金屬深蹲架或槓片架。
 * **Q3：現場忘記場館 PIN 碼，無法進入 /settings 解鎖？**  
-  **解答**：系統提供伺服器層級的安全覆蓋機制，可透過下列任一方式重設：  
-  1. **環境變數強制覆蓋**：重啟 Hub 服務時帶入 `HYROX_PIN=2018 ./hub-server`，即可將密碼強制還原為預設值。  
-  2. **SQLite 指令重設**：執行指令 `sqlite3 hyrox.db "UPDATE settings SET value='2018' WHERE key='venue_pin';"` 即可完成解鎖。
+  **解答**：`venue_settings.security.pin` 是有效時的權威值。可在重啟 Hub 前暫時設定有效的 `HYROX_PIN` 作為資料庫缺值或無效值時的 fallback；它不會覆寫資料庫已有的有效 PIN。若要回到預設值，先刪除資料庫中的 `security.pin`：  
+  `sqlite3 /var/lib/hyrox/hyrox.db "DELETE FROM venue_settings WHERE key='security.pin';"`  
+  未設定有效 `HYROX_PIN` 時，重啟後會使用 `2018`。

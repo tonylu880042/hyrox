@@ -25,8 +25,28 @@ REASON="${1:-scheduled}"
 # has not been given one -- the machine still backs itself up, it just has no copy that
 # survives the disk dying. Set it and a missing stick becomes a loud failure.
 MIRROR="${HYROX_BACKUP_MIRROR:-}"
-
 log() { logger -t hyrox-backup -s -- "$*"; }
+# This credential is independent of the browser PIN.  Prefer a root readable file so it is
+# never placed in a unit command line.  The hub loads the same file at composition time.
+MACHINE_CREDENTIAL="${HYROX_MACHINE_CREDENTIAL:-}"
+if [ -z "$MACHINE_CREDENTIAL" ] && [ -n "${HYROX_MACHINE_CREDENTIAL_FILE:-}" ]; then
+    if [ ! -r "$HYROX_MACHINE_CREDENTIAL_FILE" ]; then
+        log "backup failed ($REASON) -- machine credential is not readable"
+        exit 1
+    fi
+    MACHINE_CREDENTIAL="$(cat -- "$HYROX_MACHINE_CREDENTIAL_FILE")"
+fi
+
+case "$MACHINE_CREDENTIAL" in
+    *$'\r'*|*$'\n'*)
+        log "backup failed ($REASON) -- machine credential contains a line break"
+        exit 1
+        ;;
+    "")
+        log "backup failed ($REASON) -- machine credential is not configured"
+        exit 1
+        ;;
+esac
 
 # Age, not count. `-mtime +N` is whole days since modification, which is what "keep two
 # weeks" means to the person who set it.
@@ -53,8 +73,8 @@ mounted() {
 
 body=$(curl -sf --max-time 300 -X POST \
     -H 'content-type: application/json' \
-    -H 'x-operator-device: SCHEDULED BACKUP' \
-    -d "{\"reason\":\"$REASON\"}" "$BACKUP_URL") || {
+    -H "Authorization: Bearer $MACHINE_CREDENTIAL" \
+    -d "$(jq -cn --arg reason "$REASON" '{reason: $reason}')" "$BACKUP_URL") || {
     # No answer means the hub is down or wedged. Not having a backup is worth a red unit:
     # it is the one job whose silent failure is only discovered when it is needed.
     log "backup failed ($REASON) -- the hub did not answer $BACKUP_URL"

@@ -57,8 +57,10 @@ async fn a_template_round_trips_whole() {
 #[tokio::test]
 async fn saving_a_template_twice_replaces_it_rather_than_duplicating() {
     let store = store().await;
-    store.save_template(&template()).await.unwrap();
-    let mut edited = template();
+    let mut coach = template();
+    coach.source = domain::TemplateSource::Coach;
+    store.save_template(&coach).await.unwrap();
+    let mut edited = coach.clone();
     edited.name = "Renamed".into();
     edited.version = 2;
     store.save_template(&edited).await.unwrap();
@@ -67,6 +69,19 @@ async fn saving_a_template_twice_replaces_it_rather_than_duplicating() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].name, "Renamed");
     assert_eq!(all[0].version, 2);
+}
+
+#[tokio::test]
+async fn a_system_template_is_not_overwritten_by_a_save() {
+    let store = store().await;
+    store.save_template(&template()).await.unwrap();
+    let mut edited = template();
+    edited.name = "Renamed".into();
+    store.save_template(&edited).await.unwrap();
+
+    let all = store.templates().await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].name, "HYROX Engine 800");
 }
 
 #[tokio::test]
@@ -191,7 +206,7 @@ async fn the_new_session_states_round_trip() {
             s.pause(Instant(5_000)).unwrap();
         }
         match apply {
-            4 => s.complete().unwrap(),
+            4 => s.complete(Instant(6_000)).unwrap(),
             5 => s.cancel().unwrap(),
             _ => {}
         }
@@ -242,7 +257,7 @@ async fn a_paused_session_is_still_the_active_one() {
     let mut old = Session::new_draft("old", "Yesterday", SessionMode::Training);
     old.mark_ready().unwrap();
     old.start().unwrap();
-    old.complete().unwrap();
+    old.complete(Instant(1_000)).unwrap();
     store.save_session(&old, Instant(0)).await.unwrap();
 
     let mut paused = Session::new_draft("today", "Today", SessionMode::Training);

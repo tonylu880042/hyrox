@@ -8,7 +8,7 @@
 //! typo, and a typo that stores successfully is a setting somebody will swear they changed.
 
 use crate::operator::OperatorCommand;
-use crate::ports::{AuditEntry, HubStore};
+use crate::ports::{AuditEntry, AuditedWrite, HubStore};
 
 /// How long the live screen holds a page before rotating, when the venue has not said.
 /// Ten seconds: long enough to find your own name, short enough that the next page is not
@@ -172,21 +172,31 @@ pub async fn save_venue_setting<S: HubStore>(
         other => return Err(SettingError::Unknown(other.to_string())),
     };
 
-    store
-        .save_venue_setting(key, value.trim(), cmd.at, &cmd.operator)
+    let before = store
+        .venue_settings()
         .await
-        .map_err(SettingError::Storage)?;
+        .map_err(SettingError::Storage)?
+        .into_iter()
+        .find(|(stored_key, _)| stored_key == key)
+        .map(|(_, stored_value)| stored_value);
     store
-        .record_audit(&AuditEntry {
+        .apply_audited(AuditedWrite::VenueSetting {
+            key: key.to_string(),
+            value: value.trim().to_string(),
             at: cmd.at,
-            operator: cmd.operator.clone(),
-            action: "VENUE_SETTING".to_string(),
-            subject: key.to_string(),
-            reason: cmd.stated_reason().map(str::to_string),
-            before: None,
-            after: masked_audit,
+            by: cmd.operator.clone(),
+            audit: AuditEntry {
+                at: cmd.at,
+                operator: cmd.operator.clone(),
+                action: "VENUE_SETTING".to_string(),
+                subject: key.to_string(),
+                reason: cmd.stated_reason().map(str::to_string),
+                before,
+                after: masked_audit,
+            },
         })
         .await
+        .map(|_| ())
         .map_err(SettingError::Storage)
 }
 

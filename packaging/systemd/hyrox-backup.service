@@ -9,6 +9,7 @@ Wants=hyrox-hub.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/hyrox/hub.env
 ExecStart=/usr/lib/hyrox/backup scheduled
 # A backup of a venue's database is seconds. Ten minutes is the point at which something
 # is wrong and the unit should say so rather than hang.

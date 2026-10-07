@@ -36,15 +36,9 @@ mod demo;
 mod sim;
 
 /// Whether this machine offers demo data. A build without the emulated collector never does.
+#[cfg(feature = "dev-simulator")]
 fn demo_enabled() -> bool {
-    #[cfg(feature = "dev-simulator")]
-    {
-        demo::enabled()
-    }
-    #[cfg(not(feature = "dev-simulator"))]
-    {
-        false
-    }
+    demo::enabled()
 }
 
 use api::{Clock, Hub};
@@ -66,6 +60,7 @@ use transport::MqttConfig;
 /// Development clock speed. The class script covers ~20 minutes of real training;
 /// running it faster keeps the screen moving while iterating on the UI.
 /// ponytail: dev-only knob. Real ingestion uses detected_at straight from the edge.
+#[cfg(feature = "dev-simulator")]
 const SPEED: i64 = 12;
 
 /// Exit code for a damaged database. The systemd unit lists it in
@@ -85,6 +80,31 @@ fn backup_dir(db_url: &str) -> std::path::PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("backups")
+}
+
+/// Loads the credential used by the scheduled backup and future maintenance worker.  The
+/// secret itself is never logged or placed in a request field; the API hashes it before
+/// retaining it in the hub.  A file is preferred for systemd deployments so the secret does
+/// not appear in the unit command line or in a process listing.
+fn machine_credential() -> Option<String> {
+    if let Ok(value) = std::env::var("HYROX_MACHINE_CREDENTIAL") {
+        let value = value.trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+
+    let path = std::env::var("HYROX_MACHINE_CREDENTIAL_FILE").ok()?;
+    match std::fs::read_to_string(path) {
+        Ok(value) => {
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some(value)
+        }
+        Err(_) => {
+            eprintln!("HYROX_MACHINE_CREDENTIAL_FILE is unreadable; scheduled backup is disabled");
+            None
+        }
+    }
 }
 
 /// The hub's MQTT client id. Stable on purpose: with `clean_session = false` the broker
@@ -139,6 +159,7 @@ const FONTS_CSS: &str = include_str!("../static/fonts.css");
 ///
 /// It is also the clock `crates/api` reads, through [`api::Clock`]. One clock for the
 /// screens and the script, so an age shown on a screen means what the events mean.
+#[cfg(feature = "dev-simulator")]
 #[derive(Clone, Copy)]
 struct VirtualClock {
     /// Where the class script's clock starts. Only the emulated collector needs it, so a
@@ -151,6 +172,7 @@ struct VirtualClock {
     speed: i64,
 }
 
+#[cfg(feature = "dev-simulator")]
 impl VirtualClock {
     fn start(class_start: Instant, resume_offset: i64, speed: i64) -> Self {
         Self {
@@ -167,9 +189,22 @@ impl VirtualClock {
     }
 }
 
+#[cfg(feature = "dev-simulator")]
 impl Clock for VirtualClock {
     fn now(&self) -> Instant {
         Instant(self.base_ms + (wall_clock_ms() - self.started_wall_ms) * self.speed)
+    }
+}
+
+/// The production clock has no session-derived base. Every call reads the current epoch
+/// time, so restarting the hub after a quiet period cannot move the class clock backwards
+/// to the last RFID event. A virtual clock is composed only when the demo venue is enabled.
+#[derive(Clone, Copy, Default)]
+struct WallClock;
+
+impl Clock for WallClock {
+    fn now(&self) -> Instant {
+        Instant(wall_clock_ms())
     }
 }
 
@@ -249,26 +284,43 @@ async fn main() {
         Recovery::Started => println!("started new session {}", state.session.id),
     }
 
+    #[cfg(feature = "dev-simulator")]
     let session_id = state.session.id.clone();
 
-    // Dev virtual clock only: pick up where the stored events left off instead of replaying
-    // the class from zero. Not a business value.
-    let resume_offset = store
-        .max_detected_at(&session_id)
-        .await
-        .expect("max detected_at lookup failed")
-        .map(|t| t.0 - state.class_start.0)
-        .unwrap_or(0);
-
     let backups = backup_dir(&db);
-    // Real time on a venue machine. The fast clock exists so a demo class does not take
-    // twenty minutes to watch, and it must never be what a customer's screens read.
-    let speed = if demo_enabled() { SPEED } else { 1 };
-    let clock = VirtualClock::start(state.class_start, resume_offset, speed);
+    // Only a demo class resumes from the last scripted event. A venue build, including a
+    // build that happens to carry the simulator feature but has HYROX_DEMO unset, reads the
+    // host wall clock directly. This deliberately leaves a restart gap as real elapsed time
+    // instead of anchoring the API clock to the last detected RFID event.
+    #[cfg(feature = "dev-simulator")]
+    let demo_clock = if demo_enabled() {
+        let resume_offset = store
+            .max_detected_at(&session_id)
+            .await
+            .expect("max detected_at lookup failed")
+            .map(|t| t.0 - state.class_start.0)
+            .unwrap_or(0);
+        Some(VirtualClock::start(state.class_start, resume_offset, SPEED))
+    } else {
+        None
+    };
+
+    let clock: Arc<dyn Clock> = {
+        #[cfg(feature = "dev-simulator")]
+        if let Some(demo_clock) = demo_clock {
+            Arc::new(demo_clock)
+        } else {
+            Arc::new(WallClock)
+        }
+        #[cfg(not(feature = "dev-simulator"))]
+        {
+            Arc::new(WallClock)
+        }
+    };
     let hub = Hub::new(
         state,
         Arc::new(store),
-        Arc::new(clock),
+        Arc::clone(&clock),
         PUSH_INTERVAL_MS,
         SNAPSHOT_CHANNEL_CAPACITY,
         // The shipped artefact's version, which is what `/api/health` is asked for
@@ -280,14 +332,21 @@ async fn main() {
     // is enforced above this; all that is handed over here is the mechanism.
     .with_power(Arc::new(power::SystemdPower));
 
+    let hub = match machine_credential() {
+        Some(credential) => hub.with_machine_credential(credential),
+        None => hub,
+    };
+
     // Demo data on demand (M6 follow-up). Present only in a build that carries the emulated
     // collector, and inert unless HYROX_DEMO says otherwise -- the hub and the demo need
     // each other, so the hub is handed over once it exists.
     #[cfg(feature = "dev-simulator")]
-    let hub = {
-        let venue = Arc::new(demo::DemoVenue::new(clock, broker_config()));
+    let hub = if let Some(demo_clock) = demo_clock {
+        let venue = Arc::new(demo::DemoVenue::new(demo_clock, broker_config()));
         let hub = hub.with_demo(venue.clone());
         venue.attach(hub.clone());
+        hub
+    } else {
         hub
     };
 
@@ -503,5 +562,22 @@ async fn tick_loop(hub: Hub<Store>) {
         drop(state);
 
         hub.publish(payload);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{wall_clock_ms, Clock, WallClock};
+
+    #[test]
+    fn a_new_production_clock_keeps_advancing_across_a_restart_gap() {
+        let before_shutdown = WallClock.now().0;
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // Constructing a fresh adapter models a process restart. It has no stored event
+        // offset to restore, so the gap is visible immediately to the API clock.
+        let after_restart = WallClock.now().0;
+        assert!(after_restart >= before_shutdown + 4);
+        assert!(after_restart <= wall_clock_ms() + 1);
     }
 }
