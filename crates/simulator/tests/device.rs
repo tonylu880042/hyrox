@@ -301,3 +301,103 @@ fn a_round_where_every_tag_is_suppressed_consumes_no_sequence_number() {
     let seqs: Vec<i64> = d.pending().iter().map(|e| e.sequence).collect();
     assert_eq!(seqs, [1, 2]);
 }
+
+// --- departures (ADR 0017) -------------------------------------------------------------
+
+fn zone_device() -> SimDevice {
+    let config = DeviceConfig::new("A4:CF:12:8B:3D:91")
+        .unwrap()
+        .with_reader(reader("zone-1", 4_000).with_departures())
+        .with_reader(reader("gate-1", 4_000));
+    SimDevice::boot(config, T0).unwrap()
+}
+
+#[test]
+fn a_zone_reports_a_departure_timed_at_the_last_sighting() {
+    let mut d = zone_device();
+    for t in [0, 1_000, 2_000] {
+        d.rf_read(&rid("zone-1"), TAG_A, T0 + t).unwrap();
+    }
+    assert!(
+        d.rf_tick(&rid("zone-1"), T0 + 6_000).unwrap().is_empty(),
+        "4 s is not yet gone"
+    );
+
+    let departed = d.rf_tick(&rid("zone-1"), T0 + 6_001).unwrap();
+
+    assert_eq!(departed.len(), 1);
+    let events = d.pending();
+    let last = events.last().unwrap();
+    assert_eq!(last.presence, contract::Presence::Departed);
+    assert_eq!(
+        last.detected_at,
+        T0 + 2_000,
+        "when it was last seen, not when it was declared gone"
+    );
+    assert_eq!(last.tag_id, [TAG_A]);
+    assert_eq!(last.sequence, 2);
+    assert!(
+        d.rf_tick(&rid("zone-1"), T0 + 9_000).unwrap().is_empty(),
+        "reported once"
+    );
+}
+
+#[test]
+fn tags_last_seen_in_the_same_round_depart_together() {
+    let mut d = zone_device();
+    d.rf_inventory(&rid("zone-1"), &[TAG_A, TAG_B], T0).unwrap();
+    d.rf_inventory(&rid("zone-1"), &[TAG_B], T0 + 3_000)
+        .unwrap();
+
+    d.rf_tick(&rid("zone-1"), T0 + 10_000).unwrap();
+
+    let departures: Vec<_> = d
+        .pending()
+        .into_iter()
+        .filter(|e| e.presence == contract::Presence::Departed)
+        .collect();
+    assert_eq!(departures.len(), 2, "one message per last-seen round");
+    assert_eq!(
+        (departures[0].detected_at, departures[0].tag_id.clone()),
+        (T0, vec![TAG_A.to_string()])
+    );
+    assert_eq!(
+        (departures[1].detected_at, departures[1].tag_id.clone()),
+        (T0 + 3_000, vec![TAG_B.to_string()])
+    );
+}
+
+#[test]
+fn a_tag_that_comes_back_after_the_timeout_departs_before_it_arrives_again() {
+    let mut d = zone_device();
+    d.rf_read(&rid("zone-1"), TAG_A, T0).unwrap();
+
+    d.rf_read(&rid("zone-1"), TAG_A, T0 + 10_000).unwrap();
+
+    let events = d.pending();
+    let shape: Vec<_> = events
+        .iter()
+        .map(|e| (e.sequence, e.presence, e.detected_at))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (1, contract::Presence::Arrived, T0),
+            (2, contract::Presence::Departed, T0),
+            (3, contract::Presence::Arrived, T0 + 10_000),
+        ]
+    );
+}
+
+#[test]
+fn a_reader_without_departures_never_reports_one() {
+    let mut d = zone_device();
+    d.rf_read(&rid("gate-1"), TAG_A, T0).unwrap();
+
+    assert!(d.rf_tick(&rid("gate-1"), T0 + 60_000).unwrap().is_empty());
+    d.rf_read(&rid("gate-1"), TAG_A, T0 + 60_000).unwrap();
+    assert!(d
+        .pending()
+        .iter()
+        .all(|e| e.presence == contract::Presence::Arrived));
+}

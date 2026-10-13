@@ -66,6 +66,7 @@ async fn every_three_read_arrival_permutation_matches_durable_replay() {
                 tag_id: vec!["BAND".into()],
                 detected_at: at,
                 uptime_ms: at,
+                presence: contract::Presence::Arrived,
             };
             application::ingest_read(
                 &mut live,

@@ -388,6 +388,7 @@ TOGGLE
 CHECKPOINT
 PASSAGE
 START_FINISH   # one mat: start line, and exit of the station it is registered against (ADR 0016)
+ZONE           # one reader per station area: arrival enters, departure exits (ADR 0017)
 ```
 
 Actual interpretation belongs to Central Hub.
@@ -633,6 +634,10 @@ ESP32 handles RF-level suppression.
 Central Hub handles business-level deduplication.
 
 Station duration must never be used as RFID suppression duration.
+
+A ZONE reader (antenna covering the whole station area) additionally reports **departure**:
+when a tag's absence passes `absent_timeout`, the edge publishes `"presence": "DEPARTED"` with
+`detected_at` = the last time the tag was seen (ADR 0017). `presence` omitted means arrival.
 
 ---
 

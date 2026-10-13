@@ -127,8 +127,9 @@ function gates(course, readers) {
   return {
     mat,
     stations: course.map((c) => ({
-      s: readers.filter((r) => same(r.station, c.name) && (r.mode === "ENTRY" || r.mode === "TOGGLE")),
-      n: readers.filter((r) => same(r.station, c.name) && (r.mode === "EXIT" || r.mode === "TOGGLE")),
+      // A toggle or a zone reader is both gates (ADR 0017).
+      s: readers.filter((r) => same(r.station, c.name) && ["ENTRY", "TOGGLE", "ZONE"].includes(r.mode)),
+      n: readers.filter((r) => same(r.station, c.name) && ["EXIT", "TOGGLE", "ZONE"].includes(r.mode)),
       nIsMat: mat.some((r) => same(r.station, c.name)),
     })),
   };

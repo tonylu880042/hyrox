@@ -26,6 +26,22 @@ pub enum FinishPolicy {
     /// format (full course, half course) is expressed as a different course, not as another
     /// rule here. Adding a format must not mean adding a variant.
     CourseComplete,
+    /// Competition with a separate finish line (ADR 0017): the course is complete and then
+    /// the athlete crosses the start/finish mat. The crossing is the result, so the run from
+    /// the last station to the line counts. Replaces `CourseComplete` where the last station
+    /// has its own reader.
+    FinishLine,
+}
+
+impl FinishPolicy {
+    /// The rules whose answer is read off the event log rather than a clock or a coach, and
+    /// so must be re-derived whenever the log is rebuilt.
+    pub fn is_derived_from_log(&self) -> bool {
+        matches!(
+            self,
+            FinishPolicy::CourseComplete | FinishPolicy::FinishLine
+        )
+    }
 }
 
 /// Three-valued on purpose. A two-valued answer would force `NotConfigured` to report
@@ -79,7 +95,7 @@ impl FinishPolicy {
                 }
             }
 
-            FinishPolicy::CourseComplete => {
+            FinishPolicy::CourseComplete | FinishPolicy::FinishLine => {
                 let Some(course) = course else {
                     // A course-completion rule without a course cannot answer, and
                     // NotFinished would read as an answer (CLAUDE.md 28).
@@ -93,13 +109,26 @@ impl FinishPolicy {
                 if done.len() < course.steps.len() {
                     return FinishDecision::NotFinished;
                 }
-                match done.last() {
+                let last_exit = match done.last() {
+                    Some(run) if run.station == last_step.station => run.exited_at,
+                    _ => return FinishDecision::NotFinished,
+                };
+                match (self, last_exit) {
                     // The exit of the final station is the recording point, so that exit's
                     // own timestamp is the result -- not now.
-                    Some(run) if run.station == last_step.station => match run.exited_at {
-                        Some(at) => FinishDecision::Finished { at },
-                        None => FinishDecision::NotFinished,
-                    },
+                    (FinishPolicy::CourseComplete, Some(at)) => FinishDecision::Finished { at },
+                    // The first crossing after leaving the last station (ADR 0017). Not
+                    // after entering it: the route may cross the line mid-station-visit only
+                    // if the venue is drawn that way, and then it is not the finish.
+                    (FinishPolicy::FinishLine, Some(out)) => state
+                        .line_crossings
+                        .iter()
+                        .copied()
+                        .filter(|t| *t >= out)
+                        .min()
+                        .map_or(FinishDecision::NotFinished, |at| FinishDecision::Finished {
+                            at,
+                        }),
                     _ => FinishDecision::NotFinished,
                 }
             }

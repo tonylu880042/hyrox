@@ -297,6 +297,7 @@ async fn startup_replays_a_pending_interpretation_without_a_redelivery() {
             tag_id: vec!["TAG-A1".into()],
             detected_at: 501_000,
             uptime_ms: 1_000,
+            presence: contract::Presence::Arrived,
         },
         501_250,
     );
@@ -575,6 +576,7 @@ async fn the_checkin_queue_is_rebuilt_from_the_raw_store() {
             tag_id: "TAG-NOBODY".into(),
             detected_at: Instant(START.0 + 5_000),
             received_at: Instant(START.0 + 5_250),
+            presence: domain::Presence::Arrived,
         })
         .await
         .expect("raw read of an unclaimed band");
@@ -599,6 +601,7 @@ async fn a_tag_bound_before_the_restart_is_not_queued_for_check_in_again() {
             tag_id: "TAG-A1".into(),
             detected_at: Instant(START.0 + 5_000),
             received_at: Instant(START.0 + 5_250),
+            presence: domain::Presence::Arrived,
         })
         .await
         .expect("raw");

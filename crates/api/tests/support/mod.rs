@@ -686,6 +686,7 @@ impl HubStore for FakeStore {
                 device_id: r.device_id.clone(),
                 reader_id: r.reader_id.clone(),
                 detected_at: r.detected_at,
+                presence: r.presence,
                 context: inner
                     .raw_contexts
                     .iter()
@@ -718,6 +719,7 @@ impl HubStore for FakeStore {
                         device_id: raw.device_id.clone(),
                         reader_id: raw.reader_id.clone(),
                         detected_at: raw.detected_at,
+                        presence: raw.presence,
                         context: Some(context.clone()),
                     })
             })

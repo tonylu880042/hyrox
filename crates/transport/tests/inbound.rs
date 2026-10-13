@@ -19,6 +19,7 @@ fn event() -> EdgeEvent {
         tag_id: vec!["E280117000001234".to_string()],
         detected_at: 1_787_734_821_382,
         uptime_ms: 382_912,
+        presence: contract::Presence::Arrived,
     }
 }
 

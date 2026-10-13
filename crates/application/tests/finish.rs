@@ -212,3 +212,55 @@ async fn a_database_failure_during_finish_does_not_mutate_memory_and_retries_on_
     assert_eq!(finished, vec!["a1".to_string()]);
     assert_eq!(state.athlete("a1").unwrap().status, AthleteStatus::Finished);
 }
+
+/// ADR 0017: with a finish line, completing the course is not the result -- crossing the line
+/// afterwards is. Ranked like CourseComplete, and derived from the log rather than stored.
+#[tokio::test]
+async fn a_finish_line_class_finishes_on_the_crossing_and_ranks_by_it() {
+    use domain::{Course, CourseStep, Interpreted};
+    let store = FakeStore::new();
+    let mut state = class(SessionMode::Competition, FinishPolicy::FinishLine);
+    state.config.course = Some(Course::new("RACE", vec![CourseStep::new("SKIERG")]));
+    let a = state.athlete_mut("a1").unwrap();
+    for event in [
+        Interpreted::Entered {
+            station: "SKIERG".into(),
+            at: Instant(START.0 + 240_000),
+            transition: None,
+            started_timing: false,
+        },
+        Interpreted::Exited {
+            station: "SKIERG".into(),
+            at: Instant(START.0 + 500_000),
+        },
+    ] {
+        domain::apply(a, &event);
+    }
+
+    let none = apply_finish_policy(&mut state, &store, Instant(START.0 + 600_000))
+        .await
+        .unwrap();
+    assert!(
+        none.is_empty(),
+        "the course is done but the line is not crossed"
+    );
+
+    domain::apply(
+        state.athlete_mut("a1").unwrap(),
+        &Interpreted::Crossed {
+            at: Instant(START.0 + 520_000),
+        },
+    );
+    let finished = apply_finish_policy(&mut state, &store, Instant(START.0 + 600_000))
+        .await
+        .unwrap();
+
+    assert_eq!(finished, vec!["a1".to_string()]);
+    assert_eq!(
+        state.athlete("a1").unwrap().finished_at,
+        Some(Instant(START.0 + 520_000))
+    );
+    let results = application::live_results(&state);
+    assert_eq!(results.rows[0].place, Some(1));
+    assert_eq!(results.rows[0].finished_at, Some(START.0 + 520_000));
+}

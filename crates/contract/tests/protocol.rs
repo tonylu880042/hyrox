@@ -231,3 +231,39 @@ fn official_time_is_detected_at_not_arrival() {
     assert_eq!(prompt.official_time(), late.official_time());
     assert_eq!(late.arrival_lag_ms(), 8_000, "lag is diagnostics only");
 }
+
+// --- presence (ADR 0017) ---------------------------------------------------------------
+
+#[test]
+fn a_payload_without_presence_is_an_arrival_so_existing_firmware_keeps_working() {
+    assert_eq!(canonical_event().presence, contract::Presence::Arrived);
+}
+
+#[test]
+fn an_arrival_encodes_without_the_field_so_the_documented_shape_is_unchanged() {
+    let json: serde_json::Value = serde_json::from_slice(&canonical_event().encode()).unwrap();
+    assert!(json.get("presence").is_none());
+}
+
+#[test]
+fn a_departure_decodes_and_round_trips() {
+    let payload = CANONICAL.replace(
+        r#""sequence": 10382,"#,
+        r#""sequence": 10382, "presence": "DEPARTED","#,
+    );
+    let e = EdgeEvent::decode(payload.as_bytes()).expect("a departure is a valid event");
+    assert_eq!(e.presence, contract::Presence::Departed);
+    assert_eq!(EdgeEvent::decode(&e.encode()).unwrap(), e);
+}
+
+#[test]
+fn an_unknown_presence_is_refused_rather_than_guessed() {
+    let payload = CANONICAL.replace(
+        r#""sequence": 10382,"#,
+        r#""sequence": 10382, "presence": "LEFT","#,
+    );
+    assert!(matches!(
+        EdgeEvent::decode(payload.as_bytes()),
+        Err(WireError::Malformed(_))
+    ));
+}

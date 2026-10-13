@@ -1,7 +1,10 @@
 //! Session lifecycle: the six states of the class session, and the clock that pauses
 //! with it (CLAUDE.md 19 of the workout brief; ADR 0008).
 
-use domain::{ClassClock, Duration, Instant, Session, SessionError, SessionMode, SessionStatus};
+use domain::{
+    ClassClock, Duration, Instant, Session, SessionCommand, SessionError, SessionMode,
+    SessionStatus,
+};
 
 fn draft() -> Session {
     Session::new_draft("s1", "Friday Engine", SessionMode::Training)
@@ -269,4 +272,72 @@ fn redundant_pause_and_resume_are_harmless() {
     clock.pause(Instant(4_000));
     clock.resume(Instant(5_000));
     assert_eq!(clock.elapsed(Instant(6_000)), Duration(4_000));
+}
+
+// ── What the operator may do next ──────────────────────────────────────────────
+// The screen disables the buttons that would be refused or would change nothing. It asks
+// the session rather than re-deriving the table, so these are the table.
+
+#[test]
+fn a_draft_can_be_made_ready_or_cancelled() {
+    use SessionCommand::*;
+    assert_eq!(draft().available_commands(), vec![Ready, Cancel]);
+}
+
+#[test]
+fn a_ready_class_can_be_started_cancelled_or_taken_back_to_draft() {
+    use SessionCommand::*;
+    let mut s = draft();
+    s.mark_ready().unwrap();
+    assert_eq!(s.available_commands(), vec![Start, Cancel, Draft]);
+}
+
+#[test]
+fn a_running_class_offers_no_command_that_would_change_nothing() {
+    use SessionCommand::*;
+    assert_eq!(
+        running().available_commands(),
+        vec![Pause, Complete, Cancel, Draft],
+        "start and resume are accepted while running, but they are no-ops"
+    );
+}
+
+#[test]
+fn a_class_with_splits_in_it_is_not_offered_the_way_back_to_draft() {
+    use SessionCommand::*;
+    let mut s = running();
+    s.interpreted_event_count = 1;
+    assert_eq!(s.available_commands(), vec![Pause, Complete, Cancel]);
+}
+
+#[test]
+fn a_paused_class_can_be_resumed_or_ended() {
+    use SessionCommand::*;
+    let mut s = running();
+    s.interpreted_event_count = 1;
+    s.pause(Instant(5_000)).unwrap();
+    assert_eq!(s.available_commands(), vec![Resume, Complete, Cancel]);
+}
+
+#[test]
+fn a_completed_class_offers_only_the_reopen_correction() {
+    let mut s = running();
+    s.complete(Instant(5_000)).unwrap();
+    assert_eq!(s.available_commands(), vec![SessionCommand::Reopen]);
+}
+
+#[test]
+fn a_cancelled_class_offers_nothing() {
+    let mut s = running();
+    s.cancel().unwrap();
+    assert_eq!(s.available_commands(), vec![]);
+}
+
+#[test]
+fn asking_what_is_available_does_not_move_the_session_or_its_clock() {
+    let mut s = running();
+    s.pause(Instant(5_000)).unwrap();
+    let before = (s.status, s.paused_total, s.paused_since);
+    s.available_commands();
+    assert_eq!((s.status, s.paused_total, s.paused_since), before);
 }

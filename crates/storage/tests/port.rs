@@ -17,6 +17,7 @@ fn raw(seq: i64) -> RawRead {
         tag_id: "E280117000001234".into(),
         detected_at: Instant(T0),
         received_at: Instant(T0 + 120),
+        presence: domain::Presence::Arrived,
     }
 }
 

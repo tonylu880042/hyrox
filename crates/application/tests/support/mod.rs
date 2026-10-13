@@ -1150,6 +1150,7 @@ impl HubStore for FakeStore {
                 device_id: r.device_id.clone(),
                 reader_id: r.reader_id.clone(),
                 detected_at: r.detected_at,
+                presence: r.presence,
                 context: inner
                     .raw_contexts
                     .iter()
@@ -1182,6 +1183,7 @@ impl HubStore for FakeStore {
                         device_id: raw.device_id.clone(),
                         reader_id: raw.reader_id.clone(),
                         detected_at: raw.detected_at,
+                        presence: raw.presence,
                         context: Some(context.clone()),
                     })
             })
@@ -1289,6 +1291,9 @@ fn kind_of(e: &Interpreted) -> String {
         Interpreted::Entered { .. } => "ENTERED".into(),
         Interpreted::Exited { .. } => "EXITED".into(),
         Interpreted::Started { .. } => "STARTED".into(),
+        Interpreted::Crossed { .. } => "CROSSED".into(),
+        Interpreted::VisitWithdrawn { .. } => "VISIT_WITHDRAWN".into(),
+        Interpreted::ExitWithdrawn { .. } => "EXIT_WITHDRAWN".into(),
         Interpreted::Passed { .. } => "PASSED".into(),
         Interpreted::Exception { reason, .. } => format!("EXCEPTION/{reason:?}"),
     }

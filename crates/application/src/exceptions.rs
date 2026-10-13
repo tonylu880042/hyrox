@@ -326,6 +326,9 @@ fn event_at(event: &Interpreted) -> Instant {
         Interpreted::Entered { at, .. }
         | Interpreted::Exited { at, .. }
         | Interpreted::Started { at }
+        | Interpreted::Crossed { at }
+        | Interpreted::VisitWithdrawn { at, .. }
+        | Interpreted::ExitWithdrawn { at, .. }
         | Interpreted::Passed { at, .. }
         | Interpreted::Exception { at, .. } => *at,
     }

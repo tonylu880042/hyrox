@@ -51,6 +51,9 @@ impl Default for AbsentTimeout {
 pub struct ReaderConfig {
     pub reader_id: contract::ReaderId,
     pub absent_timeout: AbsentTimeout,
+    /// A zone antenna also reports a tag gone once its absence passes the timeout
+    /// (ADR 0017). Off for gates and doorways, where arrival is all that matters.
+    pub reports_departures: bool,
 }
 
 impl ReaderConfig {
@@ -58,7 +61,13 @@ impl ReaderConfig {
         Ok(Self {
             reader_id: contract::ReaderId::parse(reader_id)?,
             absent_timeout,
+            reports_departures: false,
         })
+    }
+
+    pub fn with_departures(mut self) -> Self {
+        self.reports_departures = true;
+        self
     }
 }
 
@@ -111,6 +120,22 @@ impl TagPresence {
     pub fn prune(&mut self, now_ms: i64) {
         let timeout = self.timeout.millis();
         self.last_seen.retain(|_, seen| now_ms - *seen <= timeout);
+    }
+
+    /// Takes every tag whose absence has passed the timeout out of the table, grouped by the
+    /// instant each was last seen, oldest first (ADR 0017). Taking them out *is* the re-arm:
+    /// their next sighting is a new arrival, exactly as before.
+    pub fn depart(&mut self, now_ms: i64) -> Vec<(i64, Vec<String>)> {
+        let timeout = self.timeout.millis();
+        let mut gone: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+        self.last_seen.retain(|tag, seen| {
+            let away = now_ms - *seen > timeout;
+            if away {
+                gone.entry(*seen).or_default().push(tag.clone());
+            }
+            !away
+        });
+        gone.into_iter().collect()
     }
 
     /// What a power cycle does: the radio comes back knowing nothing.

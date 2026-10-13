@@ -27,6 +27,11 @@ async fn a_draft_session_is_made_ready_and_then_started() {
         body["config_editable"], true,
         "today's tweaks happen in READY"
     );
+    assert_eq!(
+        body["available_commands"],
+        json!(["start", "cancel", "draft"]),
+        "the screen disables its buttons from this, not from a table of its own"
+    );
 
     let (status, body) = call(
         &router,
@@ -39,6 +44,10 @@ async fn a_draft_session_is_made_ready_and_then_started() {
     assert_eq!(
         body["config_editable"], false,
         "a running class keeps the plan it started on"
+    );
+    assert_eq!(
+        body["available_commands"],
+        json!(["pause", "complete", "cancel", "draft"])
     );
     // Persisted before it was claimed, and audited under the device that did it.
     assert_eq!(
@@ -425,6 +434,24 @@ async fn a_start_finish_mat_can_be_registered() {
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["readers"][0]["mode"], "START_FINISH");
+}
+
+/// A zone reader carries its own flicker guard (ADR 0017); a negative one is refused.
+#[tokio::test]
+async fn a_zone_reader_is_registered_with_its_guard() {
+    let (router, _store) = running();
+    let body = |ms: i64| {
+        json!({ "device_id": "a4cf128b3d91", "reader_id": "zone-1", "station": "SKIERG",
+                "mode": "ZONE", "min_visit_ms": ms })
+    };
+
+    let (status, ok) = call(&router, post("/api/operator/readers", DESK, body(8_000))).await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    assert_eq!(ok["readers"][0]["mode"], "ZONE");
+    assert_eq!(ok["readers"][0]["min_visit_ms"], 8_000);
+
+    let (status, _) = call(&router, post("/api/operator/readers", DESK, body(-1))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

@@ -238,6 +238,7 @@ async fn a_failed_claim_replays_its_durable_intent_after_restart() {
         tag_id: "TAG-1".into(),
         detected_at: Instant(START.0 + 100),
         received_at: Instant(START.0 + 150),
+        presence: domain::Presence::Arrived,
     };
     store
         .save_raw_with_context(
@@ -247,10 +248,7 @@ async fn a_failed_claim_replays_its_durable_intent_after_restart() {
                 athlete_id: None,
                 bound_session_id: None,
                 on_roster: false,
-                reader: Some(domain::ReaderBinding {
-                    station: "RUN".into(),
-                    mode: ReaderMode::Entry,
-                }),
+                reader: Some(domain::ReaderBinding::new("RUN", ReaderMode::Entry)),
                 planned: None,
             },
         )
@@ -289,6 +287,7 @@ async fn a_failed_claim_replays_its_durable_intent_after_restart() {
         tag_id: "TAG-1".into(),
         detected_at: Instant(START.0 + 600),
         received_at: Instant(START.0 + 650),
+        presence: domain::Presence::Arrived,
     };
     store
         .save_raw_with_context(
@@ -298,10 +297,7 @@ async fn a_failed_claim_replays_its_durable_intent_after_restart() {
                 athlete_id: None,
                 bound_session_id: None,
                 on_roster: false,
-                reader: Some(domain::ReaderBinding {
-                    station: "RUN".into(),
-                    mode: ReaderMode::Entry,
-                }),
+                reader: Some(domain::ReaderBinding::new("RUN", ReaderMode::Entry)),
                 planned: None,
             },
         )
@@ -381,6 +377,7 @@ async fn late_reads_are_explicit_exceptions_and_live_matches_replay() {
             tag_id: vec!["TAG-1".into()],
             detected_at,
             uptime_ms: detected_at,
+            presence: contract::Presence::Arrived,
         };
         ingest_read(
             &mut live,
@@ -436,6 +433,7 @@ async fn same_timestamp_arrival_orders_are_each_stable_across_restart() {
                 tag_id: vec!["TAG-1".into()],
                 detected_at: START.0 + 100,
                 uptime_ms: 100,
+                presence: contract::Presence::Arrived,
             };
             ingest_read(&mut live, &store, &ReceivedEvent::new(event, START.0 + 200))
                 .await

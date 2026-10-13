@@ -6,6 +6,7 @@
 
 use crate::athlete::{ReaderBinding, ReaderMode};
 use crate::device::{DeviceId, DeviceIdError, ReaderId, ReaderIdError};
+use crate::time::Duration;
 use serde::Serialize;
 
 /// The pair the ESP32 sends. Both halves are required: the same `reader_id` on two boards
@@ -48,6 +49,9 @@ pub struct ReaderRegistration {
     pub zone: Option<String>,
     /// The event role from CLAUDE.md 8 -- ENTRY/EXIT/TOGGLE/CHECKPOINT/PASSAGE.
     pub mode: ReaderMode,
+    /// The flicker guard for a ZONE reader (ADR 0017); carried for every mode so a reader
+    /// changed to ZONE later keeps what the operator set.
+    pub min_visit: Duration,
 }
 
 impl ReaderRegistration {
@@ -57,7 +61,13 @@ impl ReaderRegistration {
             station: station.into(),
             zone: None,
             mode,
+            min_visit: ReaderBinding::DEFAULT_MIN_VISIT,
         }
+    }
+
+    pub fn with_min_visit(mut self, min_visit: Duration) -> Self {
+        self.min_visit = min_visit;
+        self
     }
 
     pub fn with_zone(mut self, zone: impl Into<String>) -> Self {
@@ -67,10 +77,7 @@ impl ReaderRegistration {
 
     /// The slice of the mapping the interpreter needs (CLAUDE.md 10).
     pub fn binding(&self) -> ReaderBinding {
-        ReaderBinding {
-            station: self.station.clone(),
-            mode: self.mode,
-        }
+        ReaderBinding::new(self.station.clone(), self.mode).with_min_visit(self.min_visit)
     }
 }
 

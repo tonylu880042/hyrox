@@ -34,6 +34,7 @@ fn read(reader: &str, tag: &str, sequence: i64, at: i64) -> ReceivedEvent {
         tag_id: vec![tag.to_string()],
         detected_at: at,
         uptime_ms: at - CLASS_START.0,
+        presence: contract::Presence::Arrived,
     };
     // received_at is deliberately later than detected_at: arrival is diagnostics, never
     // timing (CLAUDE.md 17).

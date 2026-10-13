@@ -17,6 +17,7 @@ fn event(boot_id: i64, sequence: i64) -> EdgeEvent {
         tag_id: vec!["E280117000001234".into()],
         detected_at: 1_787_734_821_382 + sequence,
         uptime_ms: sequence,
+        presence: contract::Presence::Arrived,
     }
 }
 

@@ -93,9 +93,7 @@ pub struct SessionResults {
 pub fn live_results(state: &crate::live_session::LiveSession) -> SessionResults {
     let policy = state.config.finish_policy;
     let mut athletes = state.athletes.clone();
-    if policy == FinishPolicy::CourseComplete {
-        crate::finish::apply_course_completion(&mut athletes, state.config.course.as_ref());
-    }
+    crate::finish::apply_course_completion(&mut athletes, policy, state.config.course.as_ref());
     let bib_of = |id: &str| state.bib_of(id).unwrap_or(0) as usize;
     let (ordering, rows) = rank(policy, &athletes, &bib_of);
     SessionResults {
@@ -121,12 +119,11 @@ pub async fn results<S: HubStore>(
     let config = store.session_config(session_id).await?;
     let mut athletes = store.rebuild_athletes(session_id).await?;
     let policy = config.as_ref().map(|c| c.finish_policy).unwrap_or_default();
-    if policy == FinishPolicy::CourseComplete {
-        crate::finish::apply_course_completion(
-            &mut athletes,
-            config.as_ref().and_then(|c| c.course.as_ref()),
-        );
-    }
+    crate::finish::apply_course_completion(
+        &mut athletes,
+        policy,
+        config.as_ref().and_then(|c| c.course.as_ref()),
+    );
     let bibs = store.athlete_bibs(session_id).await?;
     let bib_of = |id: &str| {
         bibs.iter()
@@ -163,7 +160,7 @@ fn rank(
         .map(|a| row(bib_of(&a.athlete_id), a))
         .collect();
 
-    if policy != FinishPolicy::CourseComplete {
+    if !policy.is_derived_from_log() {
         return (Ordering::Bib, rows);
     }
 

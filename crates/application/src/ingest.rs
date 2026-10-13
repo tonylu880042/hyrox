@@ -253,6 +253,7 @@ pub(crate) struct ReadContext<'a> {
     pub reader_id: &'a str,
     pub raw_event_id: Option<i64>,
     pub at: Instant,
+    pub presence: domain::Presence,
     /// A persisted reader snapshot used by retroactive claims. Live reads leave this `None`
     /// and resolve the current venue map once while deciding the event.
     /// `None` means resolve the current venue map (a live read or a legacy row). `Some(None)`
@@ -310,7 +311,7 @@ pub(crate) async fn attribute_read<S: HubStore>(
                     at: ctx.at,
                 }
             } else {
-                domain::decide(athlete, &binding, ctx.at, &state.session)
+                domain::decide_read(athlete, &binding, ctx.presence, ctx.at, &state.session)
             }
         }
     };
@@ -374,9 +375,11 @@ pub(crate) async fn rebuild_projection<S: HubStore>(
     let mut athletes = store.rebuild_athletes(&state.session.id).await?;
     let exception_count = store.exception_count(&state.session.id).await?;
     let interpreted_event_count = store.interpreted_event_count(&state.session.id).await?;
-    if state.config.finish_policy == domain::FinishPolicy::CourseComplete {
-        crate::finish::apply_course_completion(&mut athletes, state.config.course.as_ref());
-    }
+    crate::finish::apply_course_completion(
+        &mut athletes,
+        state.config.finish_policy,
+        state.config.course.as_ref(),
+    );
 
     state.athletes = athletes;
     state.exception_count = exception_count;
@@ -440,7 +443,13 @@ fn plan_contexts(state: &LiveSession, edge: &EdgeEvent) -> Vec<RawInterpretation
                                     at,
                                 }
                             }
-                            Some(reader) => domain::decide(athlete, reader, at, &state.session),
+                            Some(reader) => domain::decide_read(
+                                athlete,
+                                reader,
+                                edge.presence,
+                                at,
+                                &state.session,
+                            ),
                             None => Interpreted::Exception {
                                 reason: ExceptionReason::UnknownReader,
                                 at,
@@ -490,6 +499,7 @@ pub async fn reconcile_pending<S: HubStore>(
         device_id,
         reader_id,
         detected_at,
+        presence,
         context,
     } in pending
     {
@@ -523,6 +533,7 @@ pub async fn reconcile_pending<S: HubStore>(
                     reader_id: &reader_id,
                     raw_event_id: Some(raw_event_id),
                     at: detected_at,
+                    presence,
                     reader: Some(context.reader.clone()),
                 },
             )
@@ -583,6 +594,7 @@ impl<S: HubStore> EventStore for RawSink<'_, S> {
                         tag_id: tag.clone(),
                         detected_at: Instant(edge.detected_at),
                         received_at: Instant(event.received_at()),
+                        presence: edge.presence,
                     },
                     context,
                 )

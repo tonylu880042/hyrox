@@ -13,10 +13,7 @@ fn armed(mode: SessionMode) -> Session {
 }
 
 fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
-    ReaderBinding {
-        station: station.into(),
-        mode,
-    }
+    ReaderBinding::new(station, mode)
 }
 
 fn at(offset_ms: i64) -> Instant {

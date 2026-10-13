@@ -15,6 +15,8 @@
   .drag-over { outline: 2px dashed #fee400; outline-offset: -2px; }
   .dragging { opacity: .4; }
   [draggable="true"] { cursor: grab; }
+  /* app.css is prebuilt and carries no disabled: variants, so the dimming is stated here. */
+  .cmd:disabled { opacity: .3; cursor: not-allowed; }
 </style>
 </head>
 <body class="bg-surface text-on-surface min-h-screen">
@@ -134,6 +136,7 @@
             <option value="COACH_DECIDES" data-i18n="finish.COACH_DECIDES"></option>
             <option value="CLASS_DURATION" data-i18n="finish.CLASS_DURATION"></option>
             <option value="COURSE_COMPLETE" data-i18n="finish.COURSE_COMPLETE"></option>
+            <option value="FINISH_LINE" data-i18n="finish.FINISH_LINE"></option>
           </select>
         </label>
         <label id="c-limit-wrap" class="hidden w-28">
@@ -660,6 +663,7 @@ document.querySelectorAll(".cmd").forEach((b) => b.onclick = () => guard(async (
   }
   await api("POST", "/api/operator/session/" + b.dataset.cmd, body);
   await refreshSession();
+  toast(I18N.t("st." + SESSION.session.status));
 }));
 
 async function refreshSession() {
@@ -669,6 +673,11 @@ async function refreshSession() {
   document.getElementById("c-status").textContent = I18N.t("st." + SESSION.session.status);
   document.getElementById("c-elapsed").textContent = clock(SESSION.class_elapsed_ms);
   document.getElementById("c-rule").textContent = ruleLine(SESSION);
+  // Which commands apply is the hub's answer, not this page's (CLAUDE.md 29).
+  const available = SESSION.available_commands || [];
+  document.querySelectorAll(".cmd").forEach((b) => {
+    b.disabled = !available.includes(b.dataset.cmd);
+  });
 
   const steps = document.getElementById("c-steps");
   steps.innerHTML = "";

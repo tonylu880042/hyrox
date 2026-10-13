@@ -9,8 +9,8 @@ use crate::{
     AbsentTimeout, AckResult, ConfigError, DeviceError, Journal, JournalConfig, PresenceDecision,
     ReaderConfig, TagPresence,
 };
-use contract::{AckPayload, AckStatus, DeviceId, EdgeEvent, EventId, ReaderId};
-use std::collections::BTreeMap;
+use contract::{AckPayload, AckStatus, DeviceId, EdgeEvent, EventId, Presence, ReaderId};
+use std::collections::{BTreeMap, BTreeSet};
 use transport::DeviceStatus;
 
 #[derive(Clone, Debug)]
@@ -64,6 +64,8 @@ pub struct SimDevice {
     next_sequence: i64,
     booted_at: i64,
     readers: BTreeMap<ReaderId, TagPresence>,
+    /// The readers that report departures (ADR 0017).
+    zones: BTreeSet<ReaderId>,
     journal: Journal,
     online: bool,
 }
@@ -80,12 +82,19 @@ impl SimDevice {
             .iter()
             .map(|r| (r.reader_id.clone(), TagPresence::new(r.absent_timeout)))
             .collect();
+        let zones = config
+            .readers
+            .iter()
+            .filter(|r| r.reports_departures)
+            .map(|r| r.reader_id.clone())
+            .collect();
         Ok(Self {
             device_id: config.device_id,
             boot_id: 1,
             next_sequence: 1,
             booted_at: now_ms,
             readers,
+            zones,
             journal: Journal::new(config.journal),
             online: true,
         })
@@ -138,6 +147,9 @@ impl SimDevice {
         tags: &[&str],
         now_ms: i64,
     ) -> Result<RfOutcome, DeviceError> {
+        // A tag back after its timeout left first; say so before it arrives again, so the
+        // sequence reads in the order things happened.
+        self.rf_tick(reader, now_ms)?;
         let fresh: Vec<String> = {
             let presence = self
                 .readers
@@ -152,22 +164,52 @@ impl SimDevice {
             return Ok(RfOutcome::Suppressed);
         }
 
+        let key = self.emit(reader, fresh, now_ms, Presence::Arrived)?;
+        Ok(RfOutcome::Emitted(key))
+    }
+
+    /// Lets time pass at a zone reader: every tag gone longer than its timeout is reported
+    /// departed, one event per round it was last seen in, timed at that round (ADR 0017).
+    /// A reader that does not report departures answers nothing, as a gate's never did.
+    pub fn rf_tick(&mut self, reader: &ReaderId, now_ms: i64) -> Result<Vec<EventId>, DeviceError> {
+        if !self.zones.contains(reader) {
+            return Ok(Vec::new());
+        }
+        let gone = self
+            .readers
+            .get_mut(reader)
+            .ok_or_else(|| DeviceError::UnknownReader(reader.clone()))?
+            .depart(now_ms);
+        gone.into_iter()
+            .map(|(last_seen, tags)| self.emit(reader, tags, last_seen, Presence::Departed))
+            .collect()
+    }
+
+    fn emit(
+        &mut self,
+        reader: &ReaderId,
+        tags: Vec<String>,
+        detected_at: i64,
+        presence: Presence,
+    ) -> Result<EventId, DeviceError> {
         let event = EdgeEvent {
             device_id: self.device_id.clone(),
             reader_id: reader.clone(),
             boot_id: self.boot_id,
             sequence: self.next_sequence,
-            tag_id: fresh,
-            // Official timing is the moment of detection on the edge clock (CLAUDE.md 17).
-            detected_at: now_ms,
+            tag_id: tags,
+            // Official timing is the moment of detection on the edge clock (CLAUDE.md 17);
+            // for a departure, the last moment the tag was detected.
+            detected_at,
             // Clamped: an emulated device cannot have been running for negative time. A
             // caller winding the clock back is a test bug, not a wire-level condition.
-            uptime_ms: (now_ms - self.booted_at).max(0),
+            uptime_ms: (detected_at - self.booted_at).max(0),
+            presence,
         };
         let key = event.id();
         self.journal.append(event)?;
         self.next_sequence += 1;
-        Ok(RfOutcome::Emitted(key))
+        Ok(key)
     }
 
     /// A power cycle. `boot_id` advances and `sequence` restarts, which together keep the

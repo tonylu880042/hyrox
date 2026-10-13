@@ -155,6 +155,12 @@ where
         .map_err(|e| ApiError::invalid_body(format!("reader key: {e:?}")))?;
     let mut registration = ReaderRegistration::new(key, request.station, request.mode);
     registration.zone = request.zone;
+    if let Some(ms) = request.min_visit_ms {
+        if ms < 0 {
+            return Err(ApiError::invalid_body("min_visit_ms must not be negative"));
+        }
+        registration = registration.with_min_visit(domain::Duration(ms));
+    }
 
     let cmd = command(device, now, request.reason);
     operator.register_reader(&registration, &cmd).await?;
@@ -185,6 +191,7 @@ where
     Ok(Json(crate::wire::SessionResponse {
         freshness: freshness(operator.read()).await,
         config_editable: session.accepts_config_edits(),
+        available_commands: session.available_commands(),
         session,
         config,
         class_elapsed_ms,
@@ -373,6 +380,7 @@ async fn session_response<S>(
     Ok(Json(crate::wire::SessionResponse {
         freshness: freshness(read).await,
         config_editable: session.accepts_config_edits(),
+        available_commands: session.available_commands(),
         session,
         config,
         class_elapsed_ms,

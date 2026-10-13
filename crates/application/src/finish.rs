@@ -14,15 +14,22 @@ use crate::ports::{AuditEntry, AuditedWrite, FinishOrigin, HubStore};
 use crate::session::status_name;
 use domain::{AthleteState, AthleteStatus, Course, FinishDecision, FinishPolicy, Instant};
 
-/// Applies the replay-derived CourseComplete answer without writing roster state. Callers
-/// that rebuild from the store (startup, results and correction replay) use this so a final
-/// exit is reflected even when no periodic tick happened yet.
-pub(crate) fn apply_course_completion(athletes: &mut [AthleteState], course: Option<&Course>) {
+/// Applies a log-derived finish answer (CourseComplete, FinishLine) without writing roster
+/// state. Callers that rebuild from the store (startup, results and correction replay) use
+/// this so a final exit or crossing is reflected even when no periodic tick happened yet.
+pub(crate) fn apply_course_completion(
+    athletes: &mut [AthleteState],
+    policy: FinishPolicy,
+    course: Option<&Course>,
+) {
+    if !policy.is_derived_from_log() {
+        return;
+    }
     let Some(course) = course else { return };
     let clock = domain::ClassClock::started_at(Instant(0));
     for athlete in athletes {
         if let FinishDecision::Finished { at } =
-            FinishPolicy::CourseComplete.evaluate(athlete, clock, Instant(0), Some(course))
+            policy.evaluate(athlete, clock, Instant(0), Some(course))
         {
             domain::finish(athlete, at);
         }
@@ -59,9 +66,9 @@ pub async fn apply_finish_policy<S: HubStore>(
     }
 
     // Persist finishes FIRST. If saving fails, the athletes remain unfinished in memory,
-    // and the next tick will safely retry saving them. CourseComplete is derived from the
-    // event log and deliberately has no roster write.
-    if policy != FinishPolicy::CourseComplete {
+    // and the next tick will safely retry saving them. A log-derived finish is re-derived
+    // from the events and deliberately has no roster write.
+    if !policy.is_derived_from_log() {
         store
             .save_athlete_finishes(&state.session.id, &newly, FinishOrigin::Policy)
             .await?;

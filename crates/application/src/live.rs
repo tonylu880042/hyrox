@@ -51,6 +51,8 @@ pub struct ReaderView {
     pub station: String,
     pub zone: Option<String>,
     pub mode: ReaderMode,
+    /// The ZONE flicker guard this reader runs under (ADR 0017).
+    pub min_visit_ms: i64,
     /// `None` means the hub has heard nothing from this device since it started. That is
     /// not the same as zero, and a screen must not draw it as fresh.
     pub last_seen_age_ms: Option<i64>,
@@ -272,6 +274,7 @@ pub fn reader_views(state: &LiveSession, now: Instant) -> Vec<ReaderView> {
                 station: r.station.clone(),
                 zone: r.zone.clone(),
                 mode: r.mode,
+                min_visit_ms: r.min_visit.millis(),
                 last_seen_age_ms: health.map(|h| now.since(h.last_seen).millis()),
                 last_read_age_ms: state
                     .reader_last_read(&r.key)

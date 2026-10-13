@@ -5,6 +5,7 @@
 //! there is no conversion step between them to drift out of step (ADR 0005).
 
 use crate::{DeviceId, EventId, ReaderId};
+use domain::Presence;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +43,15 @@ pub struct EdgeEvent {
     /// Milliseconds since this boot. Diagnostics: it is what lets an operator tell a clock
     /// jump from a genuinely late event.
     pub uptime_ms: i64,
+    /// `ARRIVED` when omitted, so firmware that predates ADR 0017 is unchanged on the wire;
+    /// an arrival is also encoded without it. A `DEPARTED` event's `detected_at` is when the
+    /// tag was last seen, not when the edge decided it had gone.
+    #[serde(default, skip_serializing_if = "is_arrival")]
+    pub presence: Presence,
+}
+
+fn is_arrival(p: &Presence) -> bool {
+    *p == Presence::Arrived
 }
 
 impl EdgeEvent {

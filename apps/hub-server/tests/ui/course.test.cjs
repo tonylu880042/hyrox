@@ -116,3 +116,11 @@ test('a whole venue of silent readers is one line, not one per gate', () => {
     list = alerts(snap, ${JSON.stringify(readers)}, place(snap, 300000), 300000);`);
   assert.deepEqual(JSON.parse(p('JSON.stringify(list.map(a => a.text))')), ['course.readerDown|2S 2N 3S 3N 4S 4N']);
 });
+
+test('a zone reader serves both gates of its station', () => {
+  const p = page();
+  p(`g = gates(${JSON.stringify(course)}, ${JSON.stringify([{ station: 'SKIERG', mode: 'ZONE' }, { station: 'FINISH', mode: 'START_FINISH' }])})`);
+  assert.equal(p('g.stations[0].s.length + "/" + g.stations[0].n.length'), '1/1');
+  assert.equal(p('g.stations[2].nIsMat'), false, 'a mat registered against FINISH closes no station');
+  assert.equal(p('g.mat.length'), 1);
+});

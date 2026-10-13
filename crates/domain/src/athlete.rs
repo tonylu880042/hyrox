@@ -34,12 +34,52 @@ pub enum ReaderMode {
     /// One mat that is both the start line and the exit of the station it is registered
     /// against (ADR 0016). What a read means depends on the athlete, never on the mat.
     StartFinish,
+    /// One reader whose antenna covers the whole station area (ADR 0017). Arriving enters,
+    /// departing exits; it needs the edge to report departures.
+    Zone,
+}
+
+/// Whether the edge saw a tag appear, or reported it gone after `absent_timeout`
+/// (ADR 0017). Every reader reports arrivals; only some report departures.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Presence {
+    #[default]
+    Arrived,
+    Departed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReaderBinding {
     pub station: String,
     pub mode: ReaderMode,
+    /// A ZONE visit shorter than this is a pass-by, and a departure followed by a return
+    /// within it is the same visit (ADR 0017). Per reader: an erg hides an athlete from an
+    /// antenna differently than a sled lane does.
+    #[serde(default = "ReaderBinding::default_min_visit")]
+    pub min_visit: Duration,
+}
+
+impl ReaderBinding {
+    /// Far shorter than any station's work, far longer than RF flicker (ADR 0017).
+    pub const DEFAULT_MIN_VISIT: Duration = Duration(15_000);
+
+    pub fn new(station: impl Into<String>, mode: ReaderMode) -> Self {
+        Self {
+            station: station.into(),
+            mode,
+            min_visit: Self::DEFAULT_MIN_VISIT,
+        }
+    }
+
+    pub fn with_min_visit(mut self, min_visit: Duration) -> Self {
+        self.min_visit = min_visit;
+        self
+    }
+
+    fn default_min_visit() -> Duration {
+        Self::DEFAULT_MIN_VISIT
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,8 +120,27 @@ pub enum Interpreted {
     Started {
         at: Instant,
     },
-    /// The athlete crossed the start/finish mat without it meaning anything: the route runs
-    /// over it. Kept so the read is accounted for, but it is not an exception (ADR 0016).
+    /// An active athlete crossed the start/finish line without it closing a station
+    /// (ADR 0017). The route runs over it, so most crossings mean nothing; the first one
+    /// after the last station is the finish under `FinishPolicy::FinishLine`.
+    Crossed {
+        at: Instant,
+    },
+    /// A ZONE visit too short to be one -- the route brushed the zone (ADR 0017). Undoes the
+    /// entry it follows; the entry stays in the log, auditable.
+    VisitWithdrawn {
+        station: String,
+        at: Instant,
+    },
+    /// The athlete reappeared in a ZONE shortly after its departure: they never left, the
+    /// antenna lost them (ADR 0017). Reopens the visit.
+    ExitWithdrawn {
+        station: String,
+        at: Instant,
+    },
+    /// A read that means nothing where it was taken: a finished athlete on the mat, or a
+    /// departure from a reader that does not track presence (ADR 0016, 0017). Kept so the
+    /// read is accounted for, but it is not an exception.
     Passed {
         station: String,
         at: Instant,
@@ -127,6 +186,10 @@ pub struct AthleteState {
     /// screen would keep counting after the class ended.
     pub finished_at: Option<Instant>,
     pub runs: Vec<StationRun>,
+    /// Every crossing of the finish line after the start (ADR 0017). Kept apart from
+    /// `last_event_at`: a station departure is published after the athlete has gone, so it
+    /// can reach the hub behind a crossing that happened later.
+    pub line_crossings: Vec<Instant>,
 }
 
 impl AthleteState {
@@ -142,6 +205,7 @@ impl AthleteState {
             last_exit_at: None,
             finished_at: None,
             runs: Vec::new(),
+            line_crossings: Vec::new(),
         }
     }
 
@@ -173,6 +237,17 @@ pub fn decide(
     at: Instant,
     session: &Session,
 ) -> Interpreted {
+    decide_read(state, binding, Presence::Arrived, at, session)
+}
+
+/// [`decide`] for a read that may be a departure (ADR 0017).
+pub fn decide_read(
+    state: &AthleteState,
+    binding: &ReaderBinding,
+    presence: Presence,
+    at: Instant,
+    session: &Session,
+) -> Interpreted {
     let exception = |reason| Interpreted::Exception { reason, at };
 
     if !session.accepts_events() {
@@ -182,6 +257,31 @@ pub fn decide(
         state.station_state == StationState::Inside
             && state.current_station.as_deref() == Some(station)
     };
+    let passed = || Interpreted::Passed {
+        station: binding.station.clone(),
+        at,
+    };
+    if presence == Presence::Departed {
+        // Only a zone gives a departure meaning; anywhere else it is recorded (ADR 0017).
+        if binding.mode != ReaderMode::Zone
+            || state.status == AthleteStatus::Finished
+            || !inside(&binding.station)
+        {
+            return passed();
+        }
+        let entered = state.runs.last().map(|r| r.entered_at).unwrap_or(at);
+        return if at.since(entered) < binding.min_visit {
+            Interpreted::VisitWithdrawn {
+                station: binding.station.clone(),
+                at,
+            }
+        } else {
+            Interpreted::Exited {
+                station: binding.station.clone(),
+                at,
+            }
+        };
+    }
     if binding.mode == ReaderMode::StartFinish {
         // The route runs over this mat, so most reads of it mean nothing (ADR 0016).
         return match state.status {
@@ -190,10 +290,8 @@ pub fn decide(
                 station: binding.station.clone(),
                 at,
             },
-            _ => Interpreted::Passed {
-                station: binding.station.clone(),
-                at,
-            },
+            AthleteStatus::Active => Interpreted::Crossed { at },
+            AthleteStatus::Finished => passed(),
         };
     }
     if state.status == AthleteStatus::Finished {
@@ -232,6 +330,25 @@ pub fn decide(
         ReaderMode::Checkpoint | ReaderMode::Passage => {
             exception(ExceptionReason::ImpossibleTransition)
         }
+        // Still in the zone: the same presence, re-reported.
+        ReaderMode::Zone if inside(&binding.station) => passed(),
+        ReaderMode::Zone => {
+            let reopen = Interpreted::ExitWithdrawn {
+                station: binding.station.clone(),
+                at,
+            };
+            match state.runs.last() {
+                Some(run)
+                    if run
+                        .exited_at
+                        .is_some_and(|out| at.since(out) < binding.min_visit)
+                        && rederive(state, reopen.clone()).is_some() =>
+                {
+                    reopen
+                }
+                _ => entering(),
+            }
+        }
         ReaderMode::StartFinish => unreachable!("handled above"),
     }
 }
@@ -266,6 +383,22 @@ pub fn rederive(state: &AthleteState, event: Interpreted) -> Option<Interpreted>
         }),
         // Only the first event can start the clock.
         Interpreted::Started { .. } if state.status != AthleteStatus::Ready => None,
+        // A withdrawal only fits the history it was decided against (ADR 0017).
+        Interpreted::VisitWithdrawn { ref station, .. }
+            if !(state.station_state == StationState::Inside
+                && state.current_station.as_deref() == Some(station.as_str())) =>
+        {
+            None
+        }
+        Interpreted::ExitWithdrawn { ref station, .. }
+            if !(state.station_state == StationState::Outside
+                && state
+                    .runs
+                    .last()
+                    .is_some_and(|r| &r.station == station && r.exited_at.is_some())) =>
+        {
+            None
+        }
         other => Some(other),
     }
 }
@@ -319,8 +452,42 @@ pub fn apply(state: &mut AthleteState, event: &Interpreted) {
             state.last_exit_at = Some(*at);
             state.last_event_at = Some(*at);
         }
+        Interpreted::Crossed { at } => state.line_crossings.push(*at),
+        Interpreted::VisitWithdrawn { at, .. } => {
+            state.runs.pop();
+            match state.runs.last_mut() {
+                // The withdrawn entry was what marked this exit missed; undo that too.
+                Some(open) if open.exit_missed => {
+                    open.exit_missed = false;
+                    state.current_station = Some(open.station.clone());
+                    state.station_state = StationState::Inside;
+                }
+                _ => {
+                    state.current_station = None;
+                    state.station_state = StationState::Outside;
+                }
+            }
+            // A pass-by that started the clock did not start the race.
+            if state.runs.is_empty() && state.last_exit_at.is_none() {
+                state.status = AthleteStatus::Ready;
+                state.started_at = None;
+            }
+            state.last_event_at = Some(*at);
+        }
+        Interpreted::ExitWithdrawn { at, .. } => {
+            if let Some(run) = state.runs.last_mut() {
+                run.exited_at = None;
+                // The exit before this visit, recovered from the visit's own run time.
+                state.last_exit_at = run
+                    .transition_from_prev
+                    .map(|d| Instant(run.entered_at.0 - d.millis()));
+                state.current_station = Some(run.station.clone());
+            }
+            state.station_state = StationState::Inside;
+            state.last_event_at = Some(*at);
+        }
         // Recorded for the operator's exception inbox (ADR 0001 D4); changes no state.
-        // A pass of the start/finish mat changes none either (ADR 0016).
+        // A meaningless read changes none either (ADR 0016).
         Interpreted::Exception { .. } | Interpreted::Passed { .. } => {}
     }
 }
@@ -332,7 +499,18 @@ pub fn interpret(
     at: Instant,
     session: &Session,
 ) -> Interpreted {
-    let event = decide(state, binding, at, session);
+    interpret_read(state, binding, Presence::Arrived, at, session)
+}
+
+/// [`interpret`] for a read that may be a departure (ADR 0017).
+pub fn interpret_read(
+    state: &mut AthleteState,
+    binding: &ReaderBinding,
+    presence: Presence,
+    at: Instant,
+    session: &Session,
+) -> Interpreted {
+    let event = decide_read(state, binding, presence, at, session);
     apply(state, &event);
     event
 }

@@ -37,6 +37,20 @@ that it stays a faithful stand-in.
 
 ---
 
+## FIRMWARE TEAM — 站區讀頭的「離開」事件（ADR 0017，2026-10-08）
+
+主機端與模擬器已支援 `"presence": "DEPARTED"`（`docs/mqtt-uplink-format.md` §3.3）。
+韌體需實作：缺席超過 `absent_timeout` 時送出，`detected_at` 為最後一次讀到的時間。
+在韌體完成前，站區讀頭只能測到進站。
+
+現場必須驗證：
+
+* 15 秒防護的預設值（`readers.min_visit_ms`）是否適合每一站的器材遮擋情況。
+* 相鄰站區讀取範圍不重疊、跑道不穿過站區範圍（RSSI 門檻、功率、天線角度）。
+* 站區讀頭的 `absent_timeout`（建議 8–10 秒）。
+
+---
+
 ## OPEN — 起終點感應墊與漏讀的邊界情況（ADR 0016，2026-10-08）
 
 ADR 0016 已處理起跑、終點、中途路過與漏讀出站。以下兩件刻意不猜：

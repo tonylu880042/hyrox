@@ -39,7 +39,7 @@ without one.
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/live` | — | — | `{ freshness, snapshot }` — the big screen |
 | `GET` | `/api/coach` | — | — | `{ freshness, snapshot, readers }` — CLAUDE.md 23 |
-| `GET` | `/api/session` | — | — | `{ freshness, session, config, class_elapsed_ms, config_editable }` |
+| `GET` | `/api/session` | — | — | `{ freshness, session, config, class_elapsed_ms, config_editable, available_commands }` — `available_commands` lists the `/api/operator/session/<command>` segments that would be accepted now **and** change the status, answered by `domain::Session`; screens disable their buttons from it |
 | `GET` | `/api/result/{session_id}` | — | — | `{ freshness, results }`; `404 UNKNOWN_SESSION` |
 | `GET` | `/ws` | — | — | WebSocket; a `Snapshot` document per frame |
 | `GET` | `/api/exercises` | — | — | `{ freshness, exercises }` — the library a builder offers |
@@ -231,6 +231,9 @@ finish rule.
 started, and `readers[].last_read_age_ms` — when that one head last produced a tag read. A
 board can carry the S and N gates, and the board answering says nothing about which antenna
 is reading; `null` means no read this run.
+
+Readers also carry `min_visit_ms`, the ZONE flicker guard (ADR 0017; default 15000).
+`POST /api/operator/readers` accepts it as an optional field; a negative value is a 400.
 
 Each split (`athletes[].splits[]` on the live snapshot, `rows[].splits[]` on results) carries
 `exit_missed`: the athlete left that station without its exit being read (ADR 0016), which is

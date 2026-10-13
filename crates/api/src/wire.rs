@@ -14,8 +14,8 @@ use application::{
 };
 use domain::{
     Course, DeviceWarning, ExceptionReason, Exercise, Expectation, FinishPolicy, Instant,
-    Interpreted, ReaderMode, Session, SessionConfig, SessionMode, TemplateCategory, WorkoutBlock,
-    WorkoutTemplate,
+    Interpreted, ReaderMode, Session, SessionCommand, SessionConfig, SessionMode, TemplateCategory,
+    WorkoutBlock, WorkoutTemplate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +75,9 @@ pub struct SessionResponse {
     /// button using a rule it re-derived would be holding a business rule (CLAUDE.md 6, 29),
     /// and would drift the day the rule changes.
     pub config_editable: bool,
+    /// The lifecycle commands that would be accepted now and would change the status. The
+    /// same reasoning: the screen disables its buttons from this list.
+    pub available_commands: Vec<SessionCommand>,
 }
 
 /// `GET /api/result/{id}` -- results for any stored session (CLAUDE.md 22).
@@ -271,6 +274,9 @@ pub struct RegisterReaderRequest {
     #[serde(default)]
     pub zone: Option<String>,
     pub mode: ReaderMode,
+    /// ZONE flicker guard (ADR 0017). Omitted means the 15 s default.
+    #[serde(default)]
+    pub min_visit_ms: Option<i64>,
     #[serde(default)]
     pub reason: Option<String>,
 }

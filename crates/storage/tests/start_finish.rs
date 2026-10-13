@@ -8,10 +8,7 @@ use domain::{AthleteState, Instant};
 use storage::Store;
 
 fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
-    ReaderBinding {
-        station: station.into(),
-        mode,
-    }
+    ReaderBinding::new(station, mode)
 }
 
 #[tokio::test]

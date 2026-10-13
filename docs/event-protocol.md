@@ -234,6 +234,11 @@ re-arm 後再次出現                → SEND
 
 實際數值必須在場地以真實天線驗證後調整。
 
+**站區讀頭另送 `DEPARTED`（ADR 0017）**：缺席超過 timeout 被 re-arm 時，送一則
+`"presence": "DEPARTED"`，`detected_at` 為最後一次讀到的時間。完整規則見
+[mqtt-uplink-format.md](mqtt-uplink-format.md) §3.3。`presence` 省略即為 `ARRIVED`，
+所以既有讀頭與韌體不受影響。
+
 ### 6.2 Journal（CLAUDE.md 18）
 
 append-only log + ACK cursor + ring buffer。

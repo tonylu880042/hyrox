@@ -61,6 +61,34 @@ impl SessionStatus {
     }
 }
 
+/// One operator command on the lifecycle. Serialized as the last segment of its route under
+/// `/api/operator/session/`, so a screen can match a button to an entry without a table.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionCommand {
+    Ready,
+    Start,
+    Pause,
+    Resume,
+    Complete,
+    Cancel,
+    Reopen,
+    Draft,
+}
+
+impl SessionCommand {
+    pub const ALL: [SessionCommand; 8] = [
+        SessionCommand::Ready,
+        SessionCommand::Start,
+        SessionCommand::Pause,
+        SessionCommand::Resume,
+        SessionCommand::Complete,
+        SessionCommand::Cancel,
+        SessionCommand::Reopen,
+        SessionCommand::Draft,
+    ];
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum SessionError {
     /// RUNNING -> DRAFT is only legal while nothing has been interpreted yet (D2).
@@ -275,6 +303,35 @@ impl Session {
             }
             from => Err(SessionError::illegal(from, SessionStatus::Draft)),
         }
+    }
+
+    /// The commands that would be accepted right now **and** would change the status.
+    ///
+    /// Answered by running each transition on a copy, so this list cannot drift from the
+    /// transitions themselves. The transitions are idempotent -- `start` on a running class
+    /// succeeds -- so a no-op is left out too: a button that does nothing is as confusing on
+    /// a busy floor as one that is refused.
+    pub fn available_commands(&self) -> Vec<SessionCommand> {
+        // Whether a transition is legal never depends on the instant; the instant only moves
+        // the pause accounting of the copy, which is thrown away.
+        let at = self.paused_since.unwrap_or(Instant(0));
+        SessionCommand::ALL
+            .into_iter()
+            .filter(|command| {
+                let mut probe = self.clone();
+                let accepted = match command {
+                    SessionCommand::Ready => probe.mark_ready(),
+                    SessionCommand::Start => probe.start(),
+                    SessionCommand::Pause => probe.pause(at),
+                    SessionCommand::Resume => probe.resume(at),
+                    SessionCommand::Complete => probe.complete(at),
+                    SessionCommand::Cancel => probe.cancel(),
+                    SessionCommand::Reopen => probe.reopen(at),
+                    SessionCommand::Draft => probe.back_to_draft(at),
+                };
+                accepted.is_ok() && probe.status != self.status
+            })
+            .collect()
     }
 
     fn absorb(&mut self, clock: ClassClock) {

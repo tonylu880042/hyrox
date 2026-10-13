@@ -26,14 +26,12 @@ fn raw(seq: i64, detected: i64) -> RawEvent {
         tag_id: "E280117000001234".into(),
         detected_at: at(detected),
         received_at: at(detected + 120), // arrival lag must never affect timing
+        presence: domain::Presence::Arrived,
     }
 }
 
 fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
-    ReaderBinding {
-        station: station.into(),
-        mode,
-    }
+    ReaderBinding::new(station, mode)
 }
 
 /// Ingests a short class into a fresh store and returns the live in-memory state.
@@ -248,6 +246,7 @@ mod resumed {
             tag_id: vec![tag.to_string()],
             detected_at: at(ms).0,
             uptime_ms: ms,
+            presence: contract::Presence::Arrived,
         };
         ReceivedEvent::new(event, at(ms + 250).0)
     }

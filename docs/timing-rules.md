@@ -44,6 +44,11 @@ Transition = 下一個 Entry 的 detected_at - 前一個 Exit 的 detected_at
 `exit_missed` 的一趟仍算完成，`CourseComplete` 與站點順序判斷不會因此卡住。
 同一站重複讀到進站仍是例外。
 
+**站區讀頭（ADR 0017）**：一站一台、天線照整個站區。ESP32 回報標籤出現（進站）與離開
+（出站，時間為最後一次讀到）。15 秒防護（每台可設定）：停留不到 15 秒為路過，撤銷該次
+到站；離開後 15 秒內回到同一站為短暫掉出範圍，撤銷該次出站。撤銷以新的解讀事件記錄，
+原本的事件保留可稽核。
+
 **名稱**：比賽模式的配置沒有 Roxzone 感應墊，「上一站 N → 下一站 S」包含跑步與 Roxzone
 移動，比賽畫面顯示為「跑步」；訓練模式顯示為「轉換」。此值為衍生資料，
 儲存在 `StationRun::transition_from_prev`，可由 interpreted event 重算。
@@ -68,6 +73,7 @@ pub enum FinishPolicy {
     ClassDuration { limit: Duration },   // 團課時間到就結束（訓練模式）
     CoachDecides,                        // 沒有自動觸發，教練手動結束
     CourseComplete,                      // 完成所有站點最後一站離站（EXIT）即完賽（競賽模式）
+    FinishLine,                          // 完成所有站點後第一次衝過起終點墊即完賽（ADR 0017）
 }
 ```
 

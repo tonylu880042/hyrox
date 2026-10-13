@@ -18,6 +18,7 @@ fn raw(sequence: i64) -> RawEvent {
         tag_id: format!("TAG-{sequence}"),
         detected_at: NOW,
         received_at: Instant(NOW.0 + 100),
+        presence: domain::Presence::Arrived,
     }
 }
 

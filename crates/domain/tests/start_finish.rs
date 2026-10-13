@@ -14,10 +14,7 @@ fn armed() -> Session {
 }
 
 fn reader(station: &str, mode: ReaderMode) -> ReaderBinding {
-    ReaderBinding {
-        station: station.into(),
-        mode,
-    }
+    ReaderBinding::new(station, mode)
 }
 
 fn mat() -> ReaderBinding {
@@ -105,19 +102,22 @@ fn passing_the_mat_mid_race_is_recorded_and_changes_nothing() {
         &s,
     );
     interpret(&mut a, &reader("SKIERG", ReaderMode::Exit), at(500_000), &s);
-    let before = format!("{a:?}");
+    let runs_before = format!("{:?}", a.runs);
 
     let r = interpret(&mut a, &mat(), at(600_000), &s);
 
     assert_eq!(
         r,
-        Interpreted::Passed {
-            station: "WALL_BALLS".into(),
-            at: at(600_000)
-        },
-        "the route passes the mat; that is not an exception"
+        Interpreted::Crossed { at: at(600_000) },
+        "the route passes the mat; that is not an exception (ADR 0017: it is a crossing)"
     );
-    assert_eq!(format!("{a:?}"), before, "a pass must not move the athlete");
+    assert_eq!(
+        format!("{:?}", a.runs),
+        runs_before,
+        "a crossing must not move the athlete"
+    );
+    assert_eq!(a.station_state, StationState::Outside);
+    assert_eq!(a.line_crossings, vec![at(600_000)]);
 }
 
 #[test]

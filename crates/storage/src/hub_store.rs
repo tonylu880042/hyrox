@@ -32,6 +32,7 @@ impl HubStore for Store {
                 tag_id: raw.tag_id.clone(),
                 detected_at: raw.detected_at,
                 received_at: raw.received_at,
+                presence: raw.presence,
             })
             .await?;
         Ok(RawCommit {
@@ -59,6 +60,7 @@ impl HubStore for Store {
                     tag_id: raw.tag_id.clone(),
                     detected_at: raw.detected_at,
                     received_at: raw.received_at,
+                    presence: raw.presence,
                 },
                 context,
             )

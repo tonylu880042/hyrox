@@ -18,8 +18,8 @@
 use contract::CommitOutcome;
 use domain::{
     AthleteState, BindingLedger, ExceptionReason, ExerciseLibrary, Instant, Interpreted, MemberRef,
-    PhysicalStation, ReaderBinding, ReaderRegistration, ReaderRegistry, Session, SessionConfig,
-    StationMap, TagBinding, WorkoutTemplate,
+    PhysicalStation, Presence, ReaderBinding, ReaderRegistration, ReaderRegistry, Session,
+    SessionConfig, StationMap, TagBinding, WorkoutTemplate,
 };
 use std::future::Future;
 
@@ -38,6 +38,9 @@ pub struct RawRead {
     pub detected_at: Instant,
     /// Diagnostics only. Never a source of results.
     pub received_at: Instant,
+    /// What the edge reported (ADR 0017). Part of the raw record: a departure replayed as an
+    /// arrival would be a different read.
+    pub presence: Presence,
 }
 
 /// What the store did with a raw event it has now durably committed.
@@ -251,6 +254,7 @@ pub struct StoredRawRead {
     pub reader_id: String,
     /// Official timing (CLAUDE.md 11, 17). Claiming replays in this order.
     pub detected_at: Instant,
+    pub presence: Presence,
     /// Snapshot captured when the raw row was first committed. `None` means this raw row
     /// predates the context table and callers must keep the legacy fallback explicit.
     pub context: Option<RawInterpretationContext>,

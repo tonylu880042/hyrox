@@ -34,4 +34,4 @@ pub use id::EventId;
 /// The identities the wire carries, re-exported from `domain` so edge-side code — the
 /// simulator, and firmware-equivalent paths — names one crate and still gets the canonical
 /// types (CLAUDE.md 7.3).
-pub use domain::{DeviceId, DeviceIdError, ReaderId, ReaderIdError};
+pub use domain::{DeviceId, DeviceIdError, Presence, ReaderId, ReaderIdError};

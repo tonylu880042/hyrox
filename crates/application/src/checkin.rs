@@ -295,6 +295,7 @@ async fn claim_reads<S: HubStore>(
                 reader_id: &read.reader_id,
                 raw_event_id: Some(read.raw_event_id),
                 at: read.detected_at,
+                presence: read.presence,
                 reader: read.context.as_ref().map(|c| c.reader.clone()),
             },
         )

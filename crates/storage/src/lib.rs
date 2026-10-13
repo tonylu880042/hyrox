@@ -11,9 +11,9 @@ use application::{
     VenueAsset,
 };
 use domain::{
-    AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, ReaderBinding,
-    ReaderKey, ReaderMode, ReaderRegistration, ReaderRegistry, Session, SessionConfig, SessionMode,
-    SessionStatus, TagBinding, TagId,
+    AthleteState, BindingLedger, Duration, ExceptionReason, Instant, Interpreted, Presence,
+    ReaderBinding, ReaderKey, ReaderMode, ReaderRegistration, ReaderRegistry, Session,
+    SessionConfig, SessionMode, SessionStatus, TagBinding, TagId,
 };
 use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 use std::str::FromStr;
@@ -58,6 +58,8 @@ pub struct RawEvent {
     pub tag_id: String,
     pub detected_at: Instant,
     pub received_at: Instant,
+    /// What the edge reported (ADR 0017). Raw rows are immutable, so it is stored as sent.
+    pub presence: Presence,
 }
 
 pub struct Store {
@@ -295,18 +297,20 @@ impl Store {
                 audit,
             } => {
                 sqlx::query(
-                    "INSERT INTO readers (device_id, reader_id, station, zone, mode)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
+                    "INSERT INTO readers (device_id, reader_id, station, zone, mode, min_visit_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT(device_id, reader_id) DO UPDATE SET
                         station = excluded.station,
                         zone = excluded.zone,
-                        mode = excluded.mode",
+                        mode = excluded.mode,
+                        min_visit_ms = excluded.min_visit_ms",
                 )
                 .bind(registration.key.device_id.as_str())
                 .bind(registration.key.reader_id.as_str())
                 .bind(&registration.station)
                 .bind(registration.zone.as_deref())
                 .bind(reader_mode_str(registration.mode))
+                .bind(registration.min_visit.millis())
                 .execute(&mut *tx)
                 .await?;
                 audit_tx(&mut tx, &audit).await?;
@@ -609,8 +613,9 @@ impl Store {
         }
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO raw_events
-                (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+                (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at,
+                 presence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
         )
         .bind(&e.device_id)
         .bind(&e.reader_id)
@@ -619,6 +624,7 @@ impl Store {
         .bind(&e.tag_id)
         .bind(e.detected_at.0)
         .bind(e.received_at.0)
+        .bind(presence_str(e.presence))
         .fetch_one(&self.pool)
         .await?;
         Ok((id, true))
@@ -648,8 +654,9 @@ impl Store {
         } else {
             let id: i64 = sqlx::query_scalar(
                 "INSERT INTO raw_events
-                    (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+                    (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at,
+                     presence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
             )
             .bind(&e.device_id)
             .bind(&e.reader_id)
@@ -658,6 +665,7 @@ impl Store {
             .bind(&e.tag_id)
             .bind(e.detected_at.0)
             .bind(e.received_at.0)
+            .bind(presence_str(e.presence))
             .fetch_one(&mut *tx)
             .await?;
             (id, true)
@@ -672,8 +680,8 @@ impl Store {
             sqlx::query(
                 "INSERT INTO raw_interpretation_context
                     (raw_event_id, session_id, athlete_id, bound_session_id, on_roster,
-                     reader_station, reader_mode, planned_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     reader_station, reader_mode, planned_json, reader_min_visit_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(raw_event_id) DO NOTHING",
             )
             .bind(id)
@@ -684,6 +692,7 @@ impl Store {
             .bind(context.reader.as_ref().map(|r| r.station.as_str()))
             .bind(context.reader.as_ref().map(|r| reader_mode_str(r.mode)))
             .bind(planned_json)
+            .bind(context.reader.as_ref().map(|r| r.min_visit.millis()))
             .execute(&mut *tx)
             .await?;
         }
@@ -1080,6 +1089,23 @@ fn interpreted_columns(event: &Interpreted) -> InterpretedColumns {
             ("EXITED", Some(station.clone()), at.0, None, false, None)
         }
         Interpreted::Started { at } => ("STARTED", None, at.0, None, true, None),
+        Interpreted::Crossed { at } => ("CROSSED", None, at.0, None, false, None),
+        Interpreted::VisitWithdrawn { station, at } => (
+            "VISIT_WITHDRAWN",
+            Some(station.clone()),
+            at.0,
+            None,
+            false,
+            None,
+        ),
+        Interpreted::ExitWithdrawn { station, at } => (
+            "EXIT_WITHDRAWN",
+            Some(station.clone()),
+            at.0,
+            None,
+            false,
+            None,
+        ),
         Interpreted::Passed { station, at } => {
             ("PASSED", Some(station.clone()), at.0, None, false, None)
         }
@@ -1097,6 +1123,10 @@ fn interpreted_columns(event: &Interpreted) -> InterpretedColumns {
 fn row_to_interpreted(r: &sqlx::sqlite::SqliteRow) -> Result<Interpreted, StoreError> {
     let kind: String = r.get("kind");
     let at = Instant(r.get::<i64, _>("detected_at"));
+    let station = || {
+        r.get::<Option<String>, _>("station")
+            .ok_or_else(|| StoreError::Corrupt(format!("{kind} without station")))
+    };
     match kind.as_str() {
         "ENTERED" => Ok(Interpreted::Entered {
             station: r
@@ -1115,6 +1145,15 @@ fn row_to_interpreted(r: &sqlx::sqlite::SqliteRow) -> Result<Interpreted, StoreE
             at,
         }),
         "STARTED" => Ok(Interpreted::Started { at }),
+        "CROSSED" => Ok(Interpreted::Crossed { at }),
+        "VISIT_WITHDRAWN" => Ok(Interpreted::VisitWithdrawn {
+            station: station()?,
+            at,
+        }),
+        "EXIT_WITHDRAWN" => Ok(Interpreted::ExitWithdrawn {
+            station: station()?,
+            at,
+        }),
         "PASSED" => Ok(Interpreted::Passed {
             station: r
                 .get::<Option<String>, _>("station")
@@ -1382,16 +1421,18 @@ impl Store {
 
     pub async fn save_reader(&self, r: &ReaderRegistration) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO readers (device_id, reader_id, station, zone, mode)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO readers (device_id, reader_id, station, zone, mode, min_visit_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(device_id, reader_id) DO UPDATE SET
-                station = excluded.station, zone = excluded.zone, mode = excluded.mode",
+                station = excluded.station, zone = excluded.zone, mode = excluded.mode,
+                min_visit_ms = excluded.min_visit_ms",
         )
         .bind(r.key.device_id.as_str())
         .bind(r.key.reader_id.as_str())
         .bind(&r.station)
         .bind(r.zone.as_deref())
         .bind(reader_mode_str(r.mode))
+        .bind(r.min_visit.millis())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1401,7 +1442,7 @@ impl Store {
     /// back sorted rather than in whatever order SQLite happens to hold them.
     pub async fn readers(&self) -> Result<ReaderRegistry, StoreError> {
         let rows = sqlx::query(
-            "SELECT device_id, reader_id, station, zone, mode FROM readers
+            "SELECT device_id, reader_id, station, zone, mode, min_visit_ms FROM readers
              ORDER BY device_id, reader_id",
         )
         .fetch_all(&self.pool)
@@ -1417,7 +1458,8 @@ impl Store {
                 key,
                 r.get::<String, _>("station"),
                 parse_reader_mode(r.get::<String, _>("mode").as_str())?,
-            );
+            )
+            .with_min_visit(Duration(r.get::<i64, _>("min_visit_ms")));
             if let Some(zone) = r.get::<Option<String>, _>("zone") {
                 registration = registration.with_zone(zone);
             }
@@ -1616,12 +1658,13 @@ impl Store {
         since: Instant,
     ) -> Result<Vec<StoredRawRead>, StoreError> {
         let rows = sqlx::query(
-            "SELECT r.id, r.device_id, r.reader_id, r.detected_at,
+            "SELECT r.id, r.device_id, r.reader_id, r.detected_at, r.presence,
                     c.session_id AS context_session_id, c.athlete_id AS context_athlete_id,
                     c.bound_session_id AS context_bound_session_id,
                     c.on_roster AS context_on_roster,
                     c.reader_station AS context_reader_station,
                     c.reader_mode AS context_reader_mode,
+                    c.reader_min_visit_ms AS context_reader_min_visit_ms,
                     c.planned_json AS context_planned_json
              FROM raw_events r
              LEFT JOIN raw_interpretation_context c ON c.raw_event_id = r.id
@@ -1641,6 +1684,7 @@ impl Store {
                     device_id: r.get("device_id"),
                     reader_id: r.get("reader_id"),
                     detected_at: Instant(r.get::<i64, _>("detected_at")),
+                    presence: parse_presence(r.get::<String, _>("presence").as_str())?,
                     context: context_from_row(r)?,
                 })
             })
@@ -1654,12 +1698,13 @@ impl Store {
         session_id: &str,
     ) -> Result<Vec<StoredRawRead>, StoreError> {
         let rows = sqlx::query(
-            "SELECT r.id, r.device_id, r.reader_id, r.detected_at,
+            "SELECT r.id, r.device_id, r.reader_id, r.detected_at, r.presence,
                     c.session_id AS context_session_id, c.athlete_id AS context_athlete_id,
                     c.bound_session_id AS context_bound_session_id,
                     c.on_roster AS context_on_roster,
                     c.reader_station AS context_reader_station,
                     c.reader_mode AS context_reader_mode,
+                    c.reader_min_visit_ms AS context_reader_min_visit_ms,
                     c.planned_json AS context_planned_json
              FROM raw_events r
              JOIN raw_interpretation_context c ON c.raw_event_id = r.id
@@ -1678,6 +1723,7 @@ impl Store {
                     device_id: r.get("device_id"),
                     reader_id: r.get("reader_id"),
                     detected_at: Instant(r.get::<i64, _>("detected_at")),
+                    presence: parse_presence(r.get::<String, _>("presence").as_str())?,
                     context: context_from_row(r)?,
                 })
             })
@@ -1695,6 +1741,7 @@ impl Store {
                     on_roster AS context_on_roster,
                     reader_station AS context_reader_station,
                     reader_mode AS context_reader_mode,
+                    reader_min_visit_ms AS context_reader_min_visit_ms,
                     planned_json AS context_planned_json
              FROM raw_interpretation_context
              WHERE raw_event_id = ?1",
@@ -1745,10 +1792,14 @@ fn context_from_row(
         r.get::<Option<String>, _>("context_reader_station"),
         r.get::<Option<String>, _>("context_reader_mode"),
     ) {
-        (Some(station), Some(mode)) => Some(ReaderBinding {
-            station,
-            mode: parse_reader_mode(&mode)?,
-        }),
+        // A context written before migration 0017 had no guard recorded; the default is
+        // what that read would have been decided under had it been a zone.
+        (Some(station), Some(mode)) => Some(
+            ReaderBinding::new(station, parse_reader_mode(&mode)?).with_min_visit(
+                r.get::<Option<i64>, _>("context_reader_min_visit_ms")
+                    .map_or(ReaderBinding::DEFAULT_MIN_VISIT, Duration),
+            ),
+        ),
         (None, None) => None,
         _ => {
             return Err(StoreError::Corrupt(
@@ -1778,6 +1829,7 @@ fn reader_mode_str(m: ReaderMode) -> &'static str {
         ReaderMode::Checkpoint => "CHECKPOINT",
         ReaderMode::Passage => "PASSAGE",
         ReaderMode::StartFinish => "START_FINISH",
+        ReaderMode::Zone => "ZONE",
     }
 }
 
@@ -1815,6 +1867,21 @@ fn stored_finish_is_manual(
     }
 }
 
+fn presence_str(p: Presence) -> &'static str {
+    match p {
+        Presence::Arrived => "ARRIVED",
+        Presence::Departed => "DEPARTED",
+    }
+}
+
+fn parse_presence(s: &str) -> Result<Presence, StoreError> {
+    match s {
+        "ARRIVED" => Ok(Presence::Arrived),
+        "DEPARTED" => Ok(Presence::Departed),
+        other => Err(StoreError::Corrupt(format!("unknown presence {other}"))),
+    }
+}
+
 fn parse_reader_mode(s: &str) -> Result<ReaderMode, StoreError> {
     match s {
         "ENTRY" => Ok(ReaderMode::Entry),
@@ -1823,6 +1890,7 @@ fn parse_reader_mode(s: &str) -> Result<ReaderMode, StoreError> {
         "CHECKPOINT" => Ok(ReaderMode::Checkpoint),
         "PASSAGE" => Ok(ReaderMode::Passage),
         "START_FINISH" => Ok(ReaderMode::StartFinish),
+        "ZONE" => Ok(ReaderMode::Zone),
         other => Err(StoreError::Corrupt(format!("reader mode {other}"))),
     }
 }

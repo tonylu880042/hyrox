@@ -125,14 +125,8 @@ fn an_unconfigured_finish_policy_never_decides_an_athlete_is_finished() {
     session.start().unwrap();
 
     // Drive a full station, which is the shape most plausible finish rules would trigger on.
-    let entry = ReaderBinding {
-        station: "WALL BALLS".into(),
-        mode: ReaderMode::Entry,
-    };
-    let exit = ReaderBinding {
-        station: "WALL BALLS".into(),
-        mode: ReaderMode::Exit,
-    };
+    let entry = ReaderBinding::new("WALL BALLS", ReaderMode::Entry);
+    let exit = ReaderBinding::new("WALL BALLS", ReaderMode::Exit);
     interpret(&mut athlete, &entry, Instant(0), &session);
     interpret(&mut athlete, &exit, Instant(60_000), &session);
 
@@ -185,10 +179,7 @@ fn athlete_mid_class() -> AthleteState {
     let mut a = AthleteState::ready("a1", "Chen");
     interpret(
         &mut a,
-        &ReaderBinding {
-            station: "SKIERG".into(),
-            mode: ReaderMode::Entry,
-        },
+        &ReaderBinding::new("SKIERG", ReaderMode::Entry),
         Instant(0),
         &s,
     );
@@ -357,14 +348,8 @@ fn ran(stations: &[(&str, i64, i64)]) -> AthleteState {
     s.start().unwrap();
     let mut a = AthleteState::ready("a1", "Chen");
     for (station, enter, exit) in stations {
-        let entry = ReaderBinding {
-            station: (*station).into(),
-            mode: ReaderMode::Entry,
-        };
-        let out = ReaderBinding {
-            station: (*station).into(),
-            mode: ReaderMode::Exit,
-        };
+        let entry = ReaderBinding::new(*station, ReaderMode::Entry);
+        let out = ReaderBinding::new(*station, ReaderMode::Exit);
         interpret(&mut a, &entry, Instant(*enter), &s);
         interpret(&mut a, &out, Instant(*exit), &s);
     }
@@ -455,10 +440,7 @@ fn a_station_still_open_does_not_count_as_completed() {
     };
     interpret(
         &mut a,
-        &ReaderBinding {
-            station: "WALL BALLS".into(),
-            mode: ReaderMode::Entry,
-        },
+        &ReaderBinding::new("WALL BALLS", ReaderMode::Entry),
         Instant(130_000),
         &s,
     );

@@ -121,6 +121,7 @@ async fn session<S>(State(read): State<ReadOnly<S>>) -> Json<SessionResponse> {
     Json(SessionResponse {
         freshness: freshness(&read).await,
         config_editable: session.accepts_config_edits(),
+        available_commands: session.available_commands(),
         session,
         config,
         class_elapsed_ms,

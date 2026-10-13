@@ -115,9 +115,11 @@ pub async fn resume_or_start<S: HubStore>(
             state.exception_count = exceptions;
             load_venue(store, &mut state).await?;
             reconcile_pending(&mut state, store).await?;
-            if state.config.finish_policy == domain::FinishPolicy::CourseComplete {
-                apply_course_completion(&mut state.athletes, state.config.course.as_ref());
-            }
+            apply_course_completion(
+                &mut state.athletes,
+                state.config.finish_policy,
+                state.config.course.as_ref(),
+            );
             // Even when there was no pending raw row, this repairs a projection that lagged
             // behind an interpreted commit before a crash.
             store
@@ -161,9 +163,11 @@ pub async fn resume_or_start<S: HubStore>(
     }
     // A new class in a venue that already has readers and bands should see them.
     load_venue(store, &mut state).await?;
-    if state.config.finish_policy == domain::FinishPolicy::CourseComplete {
-        apply_course_completion(&mut state.athletes, state.config.course.as_ref());
-    }
+    apply_course_completion(
+        &mut state.athletes,
+        state.config.finish_policy,
+        state.config.course.as_ref(),
+    );
     Ok((state, Recovery::Started))
 }
 
