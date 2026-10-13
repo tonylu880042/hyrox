@@ -76,7 +76,7 @@ CLAUDE.md §8 內文寫 `RFID-02`、§16 JSON 範例寫 `rfid-02`，折疊大小
 | `sequence` | i64 ≥ 0 | 該次開機內的事件序號，開機後重新起算 |
 | `tag_id` | string 陣列，非空 | 該輪 inventory 中所有新出現的 Tag（ADR 0014） |
 | `detected_at` | i64 ≥ 0 | epoch 毫秒，**官方計時來源** |
-| `uptime_ms` | i64 ≥ 0 | 本次開機經過毫秒，診斷用 |
+| `uptime_ms` | i64 ≥ 0 | 本次開機經過毫秒。診斷用，並用來分辨重送與撞號（ADR 0018） |
 
 Hub 收件時另外補上 `received_at`，**只用於診斷**（CLAUDE.md 17）。
 程式碼以 `ReceivedEvent` 把兩者分開存放，`official_time()` 永遠回傳
@@ -120,7 +120,14 @@ ACK 的粒度必須等於邊緣 journal 的粒度，否則邊緣得追蹤「這�
 - `boot_id` 是必要的：`sequence` 會在重開機後歸零，少了 `boot_id` 會與前次
   開機的事件撞號，真實事件會被誤判為重複而遺失（CLAUDE.md 31 第一優先）。
 
-`crates/storage` 的 `raw_events` 以相同三欄位判重，兩邊語意一致。
+`crates/storage` 的 `raw_events` 以這三欄位加上 `tag_id` 與 `uptime_ms` 判重（ADR 0018）：
+
+- 全部相同 → 同一筆讀取，回 `DUPLICATE`。
+- 鍵與 `tag_id` 相同、`uptime_ms` 不同 → 裝置的 flash 被清除過、`boot_id` 重新計數造成的撞號。
+  **照樣存成新的一列**並在 log 標記，回 `STORED`。
+- **不比對 `detected_at`**：裝置重送時會重新換算，可能差幾毫秒；已存的值不會被覆蓋。
+
+ACK 與邊緣 journal 使用的鍵仍然只有上面三欄。
 
 ---
 
@@ -130,10 +137,28 @@ ACK 的粒度必須等於邊緣 journal 的粒度，否則邊緣得追蹤「這�
 hyrox/v1/edge/<device_id>/events    edge → hub   RFID 事件        QoS 1
 hyrox/v1/edge/<device_id>/status    edge → hub   裝置健康 / 警告   QoS 1, retained
 hyrox/v1/hub/<device_id>/ack        hub  → edge  應用層 ACK       QoS 1
-hyrox/v1/hub/time                   hub  → edge  時間同步         QoS 1
+hyrox/v1/hub/time                   hub  → edge  時間同步         QoS 0，不可 retained
 ```
 
 Hub 訂閱 `hyrox/v1/edge/+/events` 與 `hyrox/v1/edge/+/status`。
+
+### 時間同步（CLAUDE.md 17；韌體協議 v1.1 §7.2）
+
+Hub 每 2 秒在 `hyrox/v1/hub/time` 發布自己的系統時鐘：
+
+```json
+{"epoch_ms":1791680512345}
+```
+
+- `epoch_ms` 是**不加引號、沒有小數點**的整數，其他寫法裝置一律忽略。
+- **QoS 0、不可 retained**：排過隊或留在 broker 上的時間就是錯的時間，裝置也會直接丟棄
+  retained 的時間訊息。
+- 取自系統時鐘，不是課程時鐘（demo 的虛擬時間不可以送到實機）。
+- 與 broker 斷線期間不發布，避免重連後一次送出一批過期的時間。
+
+裝置沒有電池時鐘，沒對到時就算不出 `detected_at`，事件只存不送。這個廣播與 OS 無關，
+所以 Hub 不依賴主機有沒有 NTP 服務；appliance 另外以 chrony 提供 NTP 作為第二來源
+（`packaging/etc/chrony/conf.d/hyrox.conf`）。
 
 `v1` 區段的用途：契約若要變更，是換新 topic，而不是讓舊 topic 悄悄改變語意
 （CLAUDE.md 30）。

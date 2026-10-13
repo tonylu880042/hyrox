@@ -98,7 +98,10 @@
 // no reader is there (ADR 0016).
 
 const DEFAULT_STALE_MIN = 5;
-const DEVICE_SILENT_MS = 60000; // same line the reader list in /settings draws
+// Three missed beats. A board reports every 60 s (firmware protocol v1.1 section 5) and an
+// idle one says nothing in between, so a minute of silence is normal. Same line the reader
+// list in /settings draws.
+const DEVICE_SILENT_MS = 180000;
 const SHOW_CHIPS = 12;
 
 /// Where each athlete is drawn. Runs are numbered by the station they lead to: run k

@@ -595,6 +595,7 @@ impl<S: HubStore> EventStore for RawSink<'_, S> {
                         detected_at: Instant(edge.detected_at),
                         received_at: Instant(event.received_at()),
                         presence: edge.presence,
+                        uptime_ms: edge.uptime_ms,
                     },
                     context,
                 )

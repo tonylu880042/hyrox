@@ -60,6 +60,9 @@ pub struct RawEvent {
     pub received_at: Instant,
     /// What the edge reported (ADR 0017). Raw rows are immutable, so it is stored as sent.
     pub presence: Presence,
+    /// Milliseconds since the device booted. With the key and the tag it says *which* read
+    /// this is: a device whose flash was wiped counts `boot_id` from 1 again (ADR 0018).
+    pub uptime_ms: i64,
 }
 
 pub struct Store {
@@ -590,44 +593,18 @@ impl Store {
     }
 
     /// Stores one tag's read, returning its id. A redelivery of the same
-    /// `device_id + boot_id + sequence` **and tag** returns the existing id instead of
-    /// inserting again: duplicate delivery is allowed, duplicate processing is not
-    /// (CLAUDE.md 16).
+    /// `device_id + boot_id + sequence`, tag **and `uptime_ms`** returns the existing id
+    /// instead of inserting again: duplicate delivery is allowed, duplicate processing is not
+    /// (CLAUDE.md 16; ADR 0018 for why the key alone is not enough).
     ///
     /// The tag is part of the lookup because a UHF inventory round carries several of them
     /// under one sequence (ADR 0014). The idempotency key the edge and the ACK speak is
     /// still `device_id + boot_id + sequence`; this row is one read inside that round.
     pub async fn save_raw(&self, e: &RawEvent) -> Result<(i64, bool), StoreError> {
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM raw_events
-             WHERE device_id = ?1 AND boot_id = ?2 AND sequence = ?3 AND tag_id = ?4",
-        )
-        .bind(&e.device_id)
-        .bind(e.boot_id)
-        .bind(e.sequence)
-        .bind(&e.tag_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        if let Some(id) = existing {
-            return Ok((id, false));
-        }
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO raw_events
-                (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at,
-                 presence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
-        )
-        .bind(&e.device_id)
-        .bind(&e.reader_id)
-        .bind(e.boot_id)
-        .bind(e.sequence)
-        .bind(&e.tag_id)
-        .bind(e.detected_at.0)
-        .bind(e.received_at.0)
-        .bind(presence_str(e.presence))
-        .fetch_one(&self.pool)
-        .await?;
-        Ok((id, true))
+        let mut tx = self.pool.begin().await?;
+        let saved = insert_raw(&mut tx, e).await?;
+        tx.commit().await?;
+        Ok(saved)
     }
 
     /// Commits a raw row and the interpretation context that was observed for it in one
@@ -639,37 +616,7 @@ impl Store {
         context: &RawInterpretationContext,
     ) -> Result<(i64, bool), StoreError> {
         let mut tx = self.pool.begin().await?;
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM raw_events
-             WHERE device_id = ?1 AND boot_id = ?2 AND sequence = ?3 AND tag_id = ?4",
-        )
-        .bind(&e.device_id)
-        .bind(e.boot_id)
-        .bind(e.sequence)
-        .bind(&e.tag_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let (id, inserted) = if let Some(id) = existing {
-            (id, false)
-        } else {
-            let id: i64 = sqlx::query_scalar(
-                "INSERT INTO raw_events
-                    (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at,
-                     presence)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
-            )
-            .bind(&e.device_id)
-            .bind(&e.reader_id)
-            .bind(e.boot_id)
-            .bind(e.sequence)
-            .bind(&e.tag_id)
-            .bind(e.detected_at.0)
-            .bind(e.received_at.0)
-            .bind(presence_str(e.presence))
-            .fetch_one(&mut *tx)
-            .await?;
-            (id, true)
-        };
+        let (id, inserted) = insert_raw(&mut tx, e).await?;
 
         if inserted {
             let planned_json = context
@@ -1865,6 +1812,66 @@ fn stored_finish_is_manual(
             Some(domain::FinishDecision::Finished { at }) if at == finished_at
         ),
     }
+}
+
+/// Stores one read unless it is already here, and says which (ADR 0018).
+///
+/// "Already here" is the key, the tag **and** `uptime_ms`. The key alone is not enough: a
+/// device whose flash was wiped counts `boot_id` from 1 again, and its new reads arrive under
+/// keys the hub has seen. Calling those duplicates would acknowledge them and store nothing
+/// -- a lost read with no error anywhere (CLAUDE.md 31). `detected_at` is deliberately not
+/// compared: the edge recomputes it on a resend and it can move by a few milliseconds.
+///
+/// A row with no `uptime_ms` predates the column. It cannot be told apart, so it matches, as
+/// it did before.
+async fn insert_raw(
+    conn: &mut sqlx::SqliteConnection,
+    e: &RawEvent,
+) -> Result<(i64, bool), StoreError> {
+    let held: Vec<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id, uptime_ms FROM raw_events
+         WHERE device_id = ?1 AND boot_id = ?2 AND sequence = ?3 AND tag_id = ?4
+         ORDER BY id",
+    )
+    .bind(&e.device_id)
+    .bind(e.boot_id)
+    .bind(e.sequence)
+    .bind(&e.tag_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    if let Some((id, _)) = held
+        .iter()
+        .find(|(_, uptime)| uptime.is_none_or(|u| u == e.uptime_ms))
+    {
+        return Ok((*id, false));
+    }
+    if !held.is_empty() {
+        // The mark the firmware contract asks for. The rows themselves are the durable
+        // record: more than one under a single key and tag.
+        eprintln!(
+            "raw event key reused: {}/{}/{} tag {} arrived with uptime {} ms, but the store \
+             holds it with another -- stored as a new read; was this device's flash wiped?",
+            e.device_id, e.boot_id, e.sequence, e.tag_id, e.uptime_ms
+        );
+    }
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw_events
+            (device_id, reader_id, boot_id, sequence, tag_id, detected_at, received_at,
+             presence, uptime_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id",
+    )
+    .bind(&e.device_id)
+    .bind(&e.reader_id)
+    .bind(e.boot_id)
+    .bind(e.sequence)
+    .bind(&e.tag_id)
+    .bind(e.detected_at.0)
+    .bind(e.received_at.0)
+    .bind(presence_str(e.presence))
+    .bind(e.uptime_ms)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok((id, true))
 }
 
 fn presence_str(p: Presence) -> &'static str {

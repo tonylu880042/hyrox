@@ -239,6 +239,7 @@ async fn a_failed_claim_replays_its_durable_intent_after_restart() {
         detected_at: Instant(START.0 + 100),
         received_at: Instant(START.0 + 150),
         presence: domain::Presence::Arrived,
+        uptime_ms: 0,
     };
     store
         .save_raw_with_context(
@@ -288,6 +289,7 @@ async fn a_failed_claim_replays_its_durable_intent_after_restart() {
         detected_at: Instant(START.0 + 600),
         received_at: Instant(START.0 + 650),
         presence: domain::Presence::Arrived,
+        uptime_ms: 0,
     };
     store
         .save_raw_with_context(

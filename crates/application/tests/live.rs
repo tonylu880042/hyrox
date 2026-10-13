@@ -287,3 +287,39 @@ fn each_reader_reports_when_it_last_produced_a_read() {
         "never read is not zero, and must not be drawn as fresh"
     );
 }
+
+/// A status is retained on the broker, so the hub is handed every device's last one each
+/// time it (re)connects -- including boards that lost power an hour ago. What it says is
+/// worth showing; that it arrived is not evidence the board is alive (firmware protocol
+/// v1.1 section 5.4).
+#[test]
+fn a_retained_status_carries_the_report_but_is_not_liveness() {
+    let mut state = session();
+    let device = domain::DeviceId::parse("a4cf128b3d91").unwrap();
+    let report = |pending_events| application::DeviceReport {
+        device_id: device.clone(),
+        boot_id: 8,
+        pending_events,
+        journal_capacity: 1024,
+        warning: Some(domain::DeviceWarning::JournalFull),
+    };
+
+    application::note_retained_status(&mut state, report(1024));
+    let known = state.device(&device).expect("the report is kept");
+    assert_eq!(known.last_seen, None, "never heard from live");
+    assert_eq!(known.warning(), Some(domain::DeviceWarning::JournalFull));
+
+    application::note_device_status(&mut state, report(3), Instant(START.0 + 5_000));
+    application::note_retained_status(&mut state, report(7));
+    let known = state.device(&device).unwrap();
+    assert_eq!(
+        known.last_seen,
+        Some(Instant(START.0 + 5_000)),
+        "a replay does not make the board any fresher"
+    );
+    assert_eq!(
+        known.report.as_ref().unwrap().pending_events,
+        7,
+        "the broker's retained copy is the board's last word"
+    );
+}

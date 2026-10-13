@@ -495,19 +495,23 @@ function signalBars(d) {
   let color = "#10b981";
   let labelKey = "dev.signalStrong";
 
-  if (age > 60000) {
+  // A board reports every 60 s (firmware protocol v1.1 section 5) and an idle one says
+  // nothing in between, so the steps are counted in beats: under one is not a symptom,
+  // three missed is the same line /course draws.
+  const BEAT_MS = 60000;
+  if (age > 3 * BEAT_MS) {
     level = 0;
     color = "#6b7280";
     labelKey = "dev.signalOffline";
-  } else if (age > 30000 || (bad && d.warning === "JOURNAL_FULL")) {
+  } else if (age > 2 * BEAT_MS || (bad && d.warning === "JOURNAL_FULL")) {
     level = 1;
     color = "#ef4444";
     labelKey = "dev.signalWeak";
-  } else if (age > 15000 || bad) {
+  } else if (age > 1.5 * BEAT_MS || bad) {
     level = 2;
     color = "#f59e0b";
     labelKey = "dev.signalFair";
-  } else if (age > 5000) {
+  } else if (age > 1.1 * BEAT_MS) {
     level = 3;
     color = "#84cc16";
     labelKey = "dev.signalGood";

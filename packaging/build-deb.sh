@@ -36,6 +36,8 @@ install -Dm755 packaging/bin/backup                 "$ROOT/usr/lib/hyrox/backup"
 install -Dm644 packaging/etc/hyrox/hub.env          "$ROOT/etc/hyrox/hub.env"
 # What the hub is allowed to ask of the machine (M6). A polkit rule rather than sudo: the
 # hub's unit sets NoNewPrivileges, which blocks setuid binaries by design.
+install -Dm644 packaging/etc/mosquitto/conf.d/hyrox.conf "$ROOT/etc/mosquitto/conf.d/hyrox.conf"
+install -Dm644 packaging/etc/chrony/conf.d/hyrox.conf   "$ROOT/etc/chrony/conf.d/hyrox.conf"
 install -Dm644 packaging/etc/polkit-1/rules.d/50-hyrox-power.rules \
     "$ROOT/etc/polkit-1/rules.d/50-hyrox-power.rules"
 # The .mount is shipped but not enabled: it belongs to a venue that was given a USB stick
@@ -54,6 +56,9 @@ mkdir -p "$ROOT/DEBIAN"
 # headless server no longer fails. It also unblocks a real problem: google-chrome-stable is
 # not in Ubuntu's own archive, so as a hard dependency it made the package uninstallable
 # until somebody had added Google's apt source.
+#
+# chrony and avahi-daemon are what a board needs from this host besides the broker: a clock
+# to ask, and an answer to `hyrox-hub.local` so no venue's IP has to be flashed into it.
 cat > "$ROOT/DEBIAN/control" <<EOF
 Package: hyrox-hub
 Version: $VERSION
@@ -61,7 +66,7 @@ Section: misc
 Priority: optional
 Architecture: $ARCH
 Maintainer: HYROX Central Hub <ops@example.com>
-Depends: mosquitto, curl, jq, sqlite3
+Depends: mosquitto, chrony, avahi-daemon, curl, jq, sqlite3
 Recommends: cage, google-chrome-stable
 Description: HYROX Central Hub
  On-site host for HYROX competition and training sessions: RFID ingestion over MQTT,
@@ -69,7 +74,8 @@ Description: HYROX Central Hub
 EOF
 
 # hub.env is the venue's configuration; an upgrade must never overwrite an edited one.
-echo "/etc/hyrox/hub.env" > "$ROOT/DEBIAN/conffiles"
+printf '%s\n' /etc/hyrox/hub.env /etc/mosquitto/conf.d/hyrox.conf /etc/chrony/conf.d/hyrox.conf \
+    > "$ROOT/DEBIAN/conffiles"
 
 cat > "$ROOT/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
@@ -106,6 +112,10 @@ systemctl enable hyrox-hub.service hyrox-maintenance.timer hyrox-backup.timer
 if command -v google-chrome-stable > /dev/null 2>&1 && command -v cage > /dev/null 2>&1; then
     systemctl enable hyrox-kiosk.service
 fi
+# Pick up the listener and the LAN time server this package ships. Before the hub, so it
+# connects to the broker as configured. Boards reconnect by themselves, and nothing they
+# hold is lost: an unacknowledged read stays in their journal (CLAUDE.md 18).
+systemctl restart mosquitto.service chrony.service || true
 # `restart`, not `start`: this same script runs on upgrade, and the new binary has to be the
 # one running before the maintenance job verifies it.
 systemctl restart hyrox-hub.service

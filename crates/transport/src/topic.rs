@@ -6,7 +6,7 @@
 //! hyrox/v1/edge/<device>/events   edge → hub   RFID events        QoS 1
 //! hyrox/v1/edge/<device>/status   edge → hub   health / warnings  (CLAUDE.md 18)
 //! hyrox/v1/hub/<device>/ack       hub  → edge  application ACK    (CLAUDE.md 15)
-//! hyrox/v1/hub/time               hub  → edge  time sync          (CLAUDE.md 17)
+//! hyrox/v1/hub/time               hub  → edge  time sync          QoS 0, never retained
 //! ```
 //!
 //! The `v1` segment exists so a contract change is a new topic rather than a silent
@@ -28,6 +28,12 @@ pub const ALL_EVENTS: &str = "hyrox/v1/edge/+/events";
 pub const ALL_STATUS: &str = "hyrox/v1/edge/+/status";
 /// The hub is the local time authority and broadcasts to all devices (CLAUDE.md 17).
 pub const TIME_SYNC: &str = "hyrox/v1/hub/time";
+
+/// The body of a time broadcast: the hub's clock at the moment of publishing, as a bare
+/// integer. Firmware ignores anything else (protocol v1.1 section 7.2).
+pub fn time_sync_payload(epoch_ms: i64) -> String {
+    format!(r#"{{"epoch_ms":{epoch_ms}}}"#)
+}
 
 pub fn events(device: &DeviceId) -> String {
     format!("{EDGE}/{device}/{EVENTS_LEAF}")

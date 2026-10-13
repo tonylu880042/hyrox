@@ -297,6 +297,7 @@ impl HubStore for FakeStore {
                 && r.boot_id == raw.boot_id
                 && r.sequence == raw.sequence
                 && r.tag_id == raw.tag_id
+                && r.uptime_ms == raw.uptime_ms
         });
         if let Some(i) = existing {
             return Ok(RawCommit {
@@ -329,6 +330,7 @@ impl HubStore for FakeStore {
                 && r.boot_id == raw.boot_id
                 && r.sequence == raw.sequence
                 && r.tag_id == raw.tag_id
+                && r.uptime_ms == raw.uptime_ms
         });
         let (id, inserted) = match existing {
             Some(i) => (i as i64 + 1, false),

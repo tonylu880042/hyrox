@@ -64,7 +64,9 @@ test('a gate light is the worst of its readers, and unheard is never green', () 
   assert.equal(p('health([{ last_seen_age_ms: 1000 }])'), 'ok');
   assert.equal(p('health([{ last_seen_age_ms: 1000, warning: "JOURNAL_NEAR_FULL" }])'), 'warn');
   assert.equal(p('health([{ last_seen_age_ms: 1000 }, { last_seen_age_ms: null }])'), 'bad');
-  assert.equal(p('health([{ last_seen_age_ms: 60001 }])'), 'bad');
+  // A board reports every 60 s, so an idle one is routinely a minute old.
+  assert.equal(p('health([{ last_seen_age_ms: 60001 }])'), 'ok');
+  assert.equal(p('health([{ last_seen_age_ms: 180001 }])'), 'bad');
 });
 
 test('missed exits are counted against the gate that missed them', () => {
@@ -94,7 +96,7 @@ test('alerts name silent readers, stale athletes and missed exits', () => {
   const p = page();
   const readers = [
     { station: 'SKIERG', mode: 'ENTRY', last_seen_age_ms: null },
-    { station: 'SKIERG', mode: 'EXIT', last_seen_age_ms: 120000 },
+    { station: 'SKIERG', mode: 'EXIT', last_seen_age_ms: 240000 },
     { station: 'WALL_BALLS', mode: 'START_FINISH', last_seen_age_ms: 1000 },
   ];
   p(`snap = { course: ${JSON.stringify(course)}, athletes: [
@@ -111,7 +113,7 @@ test('alerts name silent readers, stale athletes and missed exits', () => {
 test('a whole venue of silent readers is one line, not one per gate', () => {
   const p = page();
   const readers = ['SKIERG', 'SLED_PUSH', 'WALL_BALLS'].flatMap((station) => [
-    { station, mode: 'ENTRY', last_seen_age_ms: 120000 }, { station, mode: 'EXIT', last_seen_age_ms: 120000 }]);
+    { station, mode: 'ENTRY', last_seen_age_ms: 240000 }, { station, mode: 'EXIT', last_seen_age_ms: 240000 }]);
   p(`snap = { course: ${JSON.stringify(course)}, athletes: [] };
     list = alerts(snap, ${JSON.stringify(readers)}, place(snap, 300000), 300000);`);
   assert.deepEqual(JSON.parse(p('JSON.stringify(list.map(a => a.text))')), ['course.readerDown|2S 2N 3S 3N 4S 4N']);

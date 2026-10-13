@@ -34,7 +34,9 @@ pub struct DeviceReport {
 pub struct DeviceHealth {
     pub device_id: DeviceId,
     /// When the hub last heard anything at all from this device -- a read or a status.
-    pub last_seen: Instant,
+    /// `None` when all it has is the broker's retained status: a report, but no evidence
+    /// the board is there now.
+    pub last_seen: Option<Instant>,
     /// `None` until the device has published a status; a device can be heard from through
     /// its reads alone, and half a fact is better than a fabricated one.
     pub report: Option<DeviceReport>,
@@ -53,10 +55,10 @@ impl DeviceHealth {
 /// root owns -- and because official timing never comes from this path (CLAUDE.md 17).
 pub fn note_device_seen(state: &mut LiveSession, device_id: &DeviceId, at: Instant) {
     match state.device_mut(device_id) {
-        Some(known) => known.last_seen = at,
+        Some(known) => known.last_seen = Some(at),
         None => state.push_device(DeviceHealth {
             device_id: device_id.clone(),
-            last_seen: at,
+            last_seen: Some(at),
             report: None,
         }),
     }
@@ -74,12 +76,29 @@ pub fn note_reader_read(state: &mut LiveSession, key: &ReaderKey, at: Instant) {
 pub fn note_device_status(state: &mut LiveSession, report: DeviceReport, at: Instant) {
     match state.device_mut(&report.device_id) {
         Some(known) => {
-            known.last_seen = at;
+            known.last_seen = Some(at);
             known.report = Some(report);
         }
         None => state.push_device(DeviceHealth {
             device_id: report.device_id.clone(),
-            last_seen: at,
+            last_seen: Some(at),
+            report: Some(report),
+        }),
+    }
+}
+
+/// Records a status the broker replayed from its retained store.
+///
+/// The report is kept -- it is the board's last word, and a journal that was full before
+/// the hub came up is still worth an operator's attention -- but `last_seen` is left alone.
+/// Firmware sets no last will, so the broker hands this over on every (re)subscribe whether
+/// or not the board has had power since.
+pub fn note_retained_status(state: &mut LiveSession, report: DeviceReport) {
+    match state.device_mut(&report.device_id) {
+        Some(known) => known.report = Some(report),
+        None => state.push_device(DeviceHealth {
+            device_id: report.device_id.clone(),
+            last_seen: None,
             report: Some(report),
         }),
     }

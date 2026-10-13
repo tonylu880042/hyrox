@@ -55,3 +55,14 @@ fn a_foreign_or_malformed_topic_names_no_device() {
         assert_eq!(topic::device_of_events(t), None, "{t} must not parse");
     }
 }
+
+/// Firmware protocol v1.1 section 7.2. The device wants a bare integer -- `7`, never `7.0`
+/// or `"7"` -- and ignores anything else, which would leave it unsynced and its events
+/// stuck in its journal.
+#[test]
+fn the_time_broadcast_is_one_bare_integer_of_epoch_milliseconds() {
+    assert_eq!(
+        topic::time_sync_payload(1_791_680_512_345),
+        r#"{"epoch_ms":1791680512345}"#
+    );
+}

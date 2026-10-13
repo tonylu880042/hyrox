@@ -27,6 +27,7 @@ fn raw(seq: i64, detected: i64) -> RawEvent {
         detected_at: at(detected),
         received_at: at(detected + 120), // arrival lag must never affect timing
         presence: domain::Presence::Arrived,
+        uptime_ms: 0,
     }
 }
 

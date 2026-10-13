@@ -21,8 +21,13 @@
 
 use crate::wall_clock_ms;
 use api::Hub;
-use application::{ingest_read, note_device_status, note_reader_read, DeviceReport, IngestError};
+use application::{
+    ingest_read, note_device_status, note_reader_read, note_retained_status, DeviceReport,
+    IngestError,
+};
 use contract::ReceivedEvent;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use storage::Store;
 use transport::{
     client::{self, AsyncClient},
@@ -37,6 +42,33 @@ const UNDECODABLE_EXCERPT_BYTES: usize = 256;
 /// only stops a down broker from turning the loop into a spin.
 const RECONNECT_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// How often the hub broadcasts its clock. The firmware's suggested period (protocol v1.1
+/// section 7.2); it keeps the lowest-latency sample of the last five minutes, so nothing
+/// rides on this being exact.
+const TIME_BROADCAST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Broadcasts the hub's clock for as long as the process lives (CLAUDE.md 17).
+///
+/// An edge board has no battery clock. Until it has a time source it cannot compute
+/// `detected_at`, so it journals its reads and sends none of them -- and fills up. This is
+/// that source, and it is the one that does not depend on what the host OS runs: an NTP
+/// server is a second source on the appliance, never a requirement of the hub.
+///
+/// Reads the wall clock, never the class clock: the demo's virtual time must not reach a
+/// real board. Silent while disconnected, because rumqttc would queue the publishes and
+/// deliver a burst of stale times on reconnect.
+async fn broadcast_time(client: AsyncClient, connected: Arc<AtomicBool>) {
+    let mut ticker = tokio::time::interval(TIME_BROADCAST_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        if connected.load(Ordering::Relaxed) {
+            // Dropped on a full queue; the next one is two seconds away.
+            let _ = client::publish_time(&client, wall_clock_ms());
+        }
+    }
+}
+
 /// Subscribes to the edge topics and ingests for as long as the process lives.
 ///
 /// Never returns: an ingestion loop that gave up would leave the hub running with a live
@@ -50,10 +82,13 @@ pub async fn run(hub: Hub<Store>, config: MqttConfig) {
     // Diagnostics, deliberately counted rather than merely logged: "the hub has been
     // dropping payloads all evening" is a question an operator should be able to answer.
     let mut undecodable_total: u64 = 0;
+    let connected = Arc::new(AtomicBool::new(false));
+    tokio::spawn(broadcast_time(client.clone(), connected.clone()));
 
     loop {
         match client::next_inbound(&mut eventloop).await {
             Ok(Some(Inbound::Connected { session_present })) => {
+                connected.store(true, Ordering::Relaxed);
                 // Re-subscribe on every connection: a broker that restarted has forgotten
                 // the subscriptions it was holding for this session, and a hub that assumed
                 // otherwise would go quiet without ever failing.
@@ -68,7 +103,8 @@ pub async fn run(hub: Hub<Store>, config: MqttConfig) {
                 }
             }
             Ok(Some(Inbound::Event(event))) => ingest(&hub, &client, *event).await,
-            Ok(Some(Inbound::Status(status))) => report_status(&hub, &status).await,
+            Ok(Some(Inbound::Status(status))) => report_status(&hub, &status, true).await,
+            Ok(Some(Inbound::RetainedStatus(status))) => report_status(&hub, &status, false).await,
             Ok(Some(Inbound::Undecodable {
                 topic,
                 error,
@@ -91,6 +127,7 @@ pub async fn run(hub: Hub<Store>, config: MqttConfig) {
             // subscription we do not hold. Neither is a fault.
             Ok(Some(Inbound::Ack(_))) | Ok(Some(Inbound::Foreign { .. })) | Ok(None) => {}
             Err(e) => {
+                connected.store(false, Ordering::Relaxed);
                 eprintln!("MQTT connection error: {e} -- retrying");
                 tokio::time::sleep(RECONNECT_BACKOFF).await;
             }
@@ -147,7 +184,10 @@ async fn ingest(hub: &Hub<Store>, client: &AsyncClient, event: contract::EdgeEve
 ///
 /// Kept, not merely logged: `/operator` shows each reader's last-seen age and its board's
 /// own warning, and a log line on a headless box is not something an operator can see.
-async fn report_status(hub: &Hub<Store>, status: &DeviceStatus) {
+///
+/// `live` is false for the broker's retained copy: its content is shown, but it is not
+/// counted as hearing from the board.
+async fn report_status(hub: &Hub<Store>, status: &DeviceStatus, live: bool) {
     let report = DeviceReport {
         device_id: status.device_id.clone(),
         boot_id: status.boot_id,
@@ -156,8 +196,12 @@ async fn report_status(hub: &Hub<Store>, status: &DeviceStatus) {
         // The device's own assessment, relayed. The hub never derives one of its own.
         warning: status.warning,
     };
-    let now = hub.now();
-    note_device_status(&mut *hub.lock().await, report, now);
+    if live {
+        let now = hub.now();
+        note_device_status(&mut *hub.lock().await, report, now);
+    } else {
+        note_retained_status(&mut *hub.lock().await, report);
+    }
 
     match status.warning {
         Some(warning) => eprintln!(

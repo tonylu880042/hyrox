@@ -97,10 +97,15 @@ pub async fn subscribe_acks(client: &AsyncClient, device: &DeviceId) -> Result<(
 #[allow(clippy::result_large_err)]
 pub async fn next_inbound(eventloop: &mut EventLoop) -> Result<Option<Inbound>, ConnectionError> {
     match eventloop.poll().await? {
-        Event::Incoming(Packet::Publish(publish)) => Ok(Some(crate::inbound::classify(
-            &publish.topic,
-            &publish.payload,
-        ))),
+        Event::Incoming(Packet::Publish(publish)) => {
+            Ok(Some(
+                match crate::inbound::classify(&publish.topic, &publish.payload) {
+                    // The broker replaying what it kept, not the device speaking now.
+                    Inbound::Status(status) if publish.retain => Inbound::RetainedStatus(status),
+                    other => other,
+                },
+            ))
+        }
         Event::Incoming(Packet::ConnAck(ack)) => Ok(Some(Inbound::Connected {
             session_present: ack.session_present,
         })),
@@ -120,6 +125,21 @@ pub async fn publish_ack(
     client
         .publish(topic::ack(device), QOS, false, ack.encode())
         .await
+}
+
+/// Broadcasts the hub's clock to every device (CLAUDE.md 17).
+///
+/// QoS 0 and never retained, both on purpose: a time that sat in a queue or on the broker is
+/// a wrong time, and firmware discards a retained one outright. `try_publish` for the same
+/// reason -- when the request queue is full the right thing to do with a timestamp is drop
+/// it, not wait.
+pub fn publish_time(client: &AsyncClient, epoch_ms: i64) -> Result<(), ClientError> {
+    client.try_publish(
+        topic::TIME_SYNC,
+        rumqttc::QoS::AtMostOnce,
+        false,
+        topic::time_sync_payload(epoch_ms),
+    )
 }
 
 /// Edge-side publish, used by the simulator and by firmware-equivalent code paths.

@@ -275,7 +275,9 @@ pub fn reader_views(state: &LiveSession, now: Instant) -> Vec<ReaderView> {
                 zone: r.zone.clone(),
                 mode: r.mode,
                 min_visit_ms: r.min_visit.millis(),
-                last_seen_age_ms: health.map(|h| now.since(h.last_seen).millis()),
+                last_seen_age_ms: health
+                    .and_then(|h| h.last_seen)
+                    .map(|t| now.since(t).millis()),
                 last_read_age_ms: state
                     .reader_last_read(&r.key)
                     .map(|t| now.since(t).millis()),

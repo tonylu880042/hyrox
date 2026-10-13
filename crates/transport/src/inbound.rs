@@ -31,6 +31,11 @@ pub enum Inbound {
     Event(Box<EdgeEvent>),
     /// A device health report (CLAUDE.md 18).
     Status(Box<DeviceStatus>),
+    /// The broker's retained copy of a status, handed over on subscribe. Emitted by the
+    /// broker client, never by [`classify`]. Kept apart because it says what a device last
+    /// reported and nothing about whether that device is still there: firmware sets no last
+    /// will, so a board that lost power keeps its final status on the broker for ever.
+    RetainedStatus(Box<DeviceStatus>),
     /// An acknowledgement on the downlink branch (CLAUDE.md 15). Only an edge collector
     /// subscribes to these; the hub sees them classified but never receives one.
     Ack(Box<AckPayload>),

@@ -110,8 +110,9 @@ pub struct OverviewResponse {
 #[derive(Debug, Serialize)]
 pub struct DeviceView {
     pub device_id: String,
-    /// How long since the hub heard anything at all from this board.
-    pub last_seen_age_ms: i64,
+    /// How long since the hub heard anything at all from this board. `null` when all the
+    /// hub has is the broker's retained status, which is not the board speaking.
+    pub last_seen_age_ms: Option<i64>,
     /// `None` until the device has published a status -- a board can be heard from through
     /// its reads alone, and half a fact beats an invented one.
     pub boot_id: Option<i64>,
@@ -126,7 +127,7 @@ impl DeviceView {
         let report = health.report.as_ref();
         Self {
             device_id: health.device_id.to_string(),
-            last_seen_age_ms: now.since(health.last_seen).millis(),
+            last_seen_age_ms: health.last_seen.map(|t| now.since(t).millis()),
             boot_id: report.map(|r| r.boot_id),
             pending_events: report.map(|r| r.pending_events),
             journal_capacity: report.map(|r| r.journal_capacity),

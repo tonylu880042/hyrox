@@ -18,6 +18,7 @@ fn raw(seq: i64) -> RawRead {
         detected_at: Instant(T0),
         received_at: Instant(T0 + 120),
         presence: domain::Presence::Arrived,
+        uptime_ms: 0,
     }
 }
 
@@ -47,6 +48,78 @@ async fn a_redelivered_raw_event_reports_the_same_row() {
     assert_eq!(again.outcome, CommitOutcome::AlreadyStored);
     assert_eq!(first.raw_event_id, again.raw_event_id);
     assert_eq!(store.raw_event_count().await.unwrap(), 1);
+}
+
+/// Firmware protocol v1.1 section 3. A device whose flash was wiped counts `boot_id` from 1
+/// again, so the key and even the tag can match a read the hub already holds. Calling that
+/// a duplicate would acknowledge it and store nothing.
+#[tokio::test]
+async fn a_key_reused_by_a_wiped_device_is_a_new_read_not_a_duplicate() {
+    let (store, _) = armed_store().await;
+    let before_the_wipe = RawRead {
+        uptime_ms: 120_345,
+        ..raw(1)
+    };
+    let after_the_wipe = RawRead {
+        uptime_ms: 120_999,
+        detected_at: Instant(T0 + 86_400_000),
+        ..raw(1)
+    };
+
+    let first = store.commit_raw(&before_the_wipe).await.unwrap();
+    let second = store.commit_raw(&after_the_wipe).await.unwrap();
+
+    assert_eq!(second.outcome, CommitOutcome::Stored);
+    assert_ne!(first.raw_event_id, second.raw_event_id);
+    assert_eq!(store.raw_event_count().await.unwrap(), 2);
+
+    // Each is still idempotent in its own right.
+    let again = store.commit_raw(&after_the_wipe).await.unwrap();
+    assert_eq!(again.outcome, CommitOutcome::AlreadyStored);
+    assert_eq!(again.raw_event_id, second.raw_event_id);
+}
+
+/// The edge computes `detected_at` at the moment of sending, so a resend after a clock
+/// correction carries a slightly different one (firmware protocol v1.1 section 4.2). The
+/// read is the same read, and the time first stored is the one that stands.
+#[tokio::test]
+async fn a_redelivery_whose_detected_at_moved_is_still_the_same_read() {
+    let (store, _) = armed_store().await;
+    let first = store.commit_raw(&raw(1)).await.unwrap();
+    let resent = RawRead {
+        detected_at: Instant(T0 + 17),
+        ..raw(1)
+    };
+
+    let again = store.commit_raw(&resent).await.unwrap();
+
+    assert_eq!(again.outcome, CommitOutcome::AlreadyStored);
+    assert_eq!(again.raw_event_id, first.raw_event_id);
+    assert_eq!(store.raw_event_count().await.unwrap(), 1);
+}
+
+/// A row stored before `uptime_ms` was kept cannot be told apart, so a redelivery of it is
+/// a duplicate, as it always was. Otherwise the first backlog replay after an upgrade
+/// would store every pending read twice.
+#[tokio::test]
+async fn a_read_stored_before_uptime_was_kept_still_deduplicates() {
+    let (store, _) = armed_store().await;
+    let first = store.commit_raw(&raw(1)).await.unwrap();
+    sqlx::query("UPDATE raw_events SET uptime_ms = NULL")
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+    let again = store
+        .commit_raw(&RawRead {
+            uptime_ms: 382_912,
+            ..raw(1)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(again.outcome, CommitOutcome::AlreadyStored);
+    assert_eq!(again.raw_event_id, first.raw_event_id);
 }
 
 #[tokio::test]

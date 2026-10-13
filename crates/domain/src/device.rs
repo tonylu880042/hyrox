@@ -130,6 +130,14 @@ pub enum DeviceWarning {
     JournalNearlyFull,
     /// No reclaimable space left. The next RF read cannot be journalled.
     JournalFull,
+    /// The board has no time source, so it cannot compute `detected_at` and is holding its
+    /// events back (firmware protocol v1.1 section 5.2).
+    TimeNotSynced,
+    /// A warning this hub build has no name for. `warning` is an open string on the wire:
+    /// rejecting the whole status over a new word would blank the device's health exactly
+    /// when it has something to say.
+    #[serde(other)]
+    Other,
 }
 
 /// Reader identity, scoped to its device. Kept apart from `DeviceId` so a `reader_id`

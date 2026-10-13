@@ -577,6 +577,7 @@ async fn the_checkin_queue_is_rebuilt_from_the_raw_store() {
             detected_at: Instant(START.0 + 5_000),
             received_at: Instant(START.0 + 5_250),
             presence: domain::Presence::Arrived,
+            uptime_ms: 0,
         })
         .await
         .expect("raw read of an unclaimed band");
@@ -602,6 +603,7 @@ async fn a_tag_bound_before_the_restart_is_not_queued_for_check_in_again() {
             detected_at: Instant(START.0 + 5_000),
             received_at: Instant(START.0 + 5_250),
             presence: domain::Presence::Arrived,
+            uptime_ms: 0,
         })
         .await
         .expect("raw");

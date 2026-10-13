@@ -19,6 +19,7 @@ fn raw(sequence: i64) -> RawEvent {
         detected_at: NOW,
         received_at: Instant(NOW.0 + 100),
         presence: domain::Presence::Arrived,
+        uptime_ms: 0,
     }
 }
 

@@ -226,6 +226,11 @@ finish rule.
 | `push_interval_ms` | how often the hub pushes; a screen that has waited much longer has a dead link, without inventing a timeout |
 | `subscribers` | how many sockets the hub is pushing to — the server's half of the liveness question |
 
+A board reports its status every 60 s and says nothing in between, so a minute of silence
+is normal; the screens call a board silent after three missed beats. `devices[].last_seen_age_ms`
+is `null` when all the hub holds is the broker's retained status for that board — a report,
+but no evidence the board is there now.
+
 `/api/coach` and `/api/operator` additionally carry per-reader freshness:
 `readers[].last_seen_age_ms`, again `null` for a board the hub has not heard from since it
 started, and `readers[].last_read_age_ms` — when that one head last produced a tag read. A

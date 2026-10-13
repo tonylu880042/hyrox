@@ -47,6 +47,32 @@ fn a_status_on_a_status_topic_decodes_to_a_status() {
     }
 }
 
+/// Firmware protocol v1.1 section 5.2: `warning` is an open string. A status is retained, so
+/// rejecting one over a word the hub has not learnt yet would blank that device's health
+/// for as long as the warning lasts.
+#[test]
+fn a_status_with_a_warning_the_hub_does_not_know_is_still_a_status() {
+    let payload = br#"{"device_id":"a4cf128b3d91","boot_id":8,"pending_events":12,"journal_capacity":1024,"warning":"SOMETHING_NEW"}"#;
+    match classify(&topic::status(&device()), payload) {
+        Inbound::Status(received) => {
+            assert_eq!(received.warning, Some(DeviceWarning::Other));
+            assert_eq!(received.pending_events, 12);
+        }
+        other => panic!("expected a status, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_device_can_say_its_clock_is_not_synced() {
+    let payload = br#"{"device_id":"a4cf128b3d91","boot_id":8,"pending_events":12,"journal_capacity":1024,"warning":"TIME_NOT_SYNCED"}"#;
+    match classify(&topic::status(&device()), payload) {
+        Inbound::Status(received) => {
+            assert_eq!(received.warning, Some(DeviceWarning::TimeNotSynced))
+        }
+        other => panic!("expected a status, got {other:?}"),
+    }
+}
+
 #[test]
 fn an_ack_on_the_downlink_branch_decodes_to_an_ack() {
     let ack = AckPayload {

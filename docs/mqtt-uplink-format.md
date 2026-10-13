@@ -77,7 +77,7 @@ hyrox/v1/edge/a4cf128b3d91/events
 | `sequence` | integer | ≥ 0，該次開機內遞增，開機歸零 | 無 |
 | `tag_id` | **string 陣列** | 非空陣列，元素不得為空字串或全空白 | 每項去頭尾空白、轉大寫 |
 | `detected_at` | integer | ≥ 0，epoch **毫秒**，**偵測當下**的時間 | 無（官方計時來源） |
-| `uptime_ms` | integer | ≥ 0，本次開機經過毫秒 | 無（診斷用） |
+| `uptime_ms` | integer | ≥ 0，本次開機經過毫秒；**重送時必須與第一次相同** | 無（診斷用，並用來分辨重送與撞號） |
 
 整數請送 JSON number，**不要加引號**（`"boot_id": "18"` 會被判為 malformed）。
 
@@ -150,10 +150,14 @@ Hub 另有 15 秒防護（可逐台設定）：離開後 15 秒內回來視為�
 | `device_id` | string | 同第 3 節 |
 | `boot_id` | integer ≥ 0 | 本次開機序號 |
 | `pending_events` | integer ≥ 0 | journal 中尚未被 ACK 的筆數 |
-| `journal_capacity` | integer ≥ 0 | journal 總容量（目標 10,000） |
+| `journal_capacity` | integer ≥ 0 | journal 總容量（目標 10,000；韌體 0.10 實際為 1024，見 open-issues.md） |
 | `warning` | string 或 `null` | 健康時送 `null`，**請保留欄位** |
 
-`warning` 目前只有兩個值：`JOURNAL_NEARLY_FULL`（建議 80% 觸發）、`JOURNAL_FULL`。
+`warning` 是**開放字串**。Hub 認得 `JOURNAL_NEARLY_FULL`（建議 80% 觸發）、`JOURNAL_FULL`、
+`TIME_NOT_SYNCED`；不認得的值照樣收下、當成一般警告顯示，**不會因此拒收整則 status**。
+
+status 沒有時間欄位、裝置也沒有設遺囑訊息，所以 Hub 以「多久沒收到這台裝置的訊息」判斷在線：
+請至少每 60 秒送一次。broker 重播的 retained status 只更新內容，不算收到訊息。
 
 **必須 retained**：Hub 重啟後要立刻看到它離線期間就已告警的裝置。
 
@@ -245,5 +249,8 @@ mosquitto_pub -t 'hyrox/v1/edge/a4cf128b3d91/events' -q 1 -m '{"device_id":"a4cf
 topic 的 `v1` 是契約版本。欄位語意若要改，是開 `v2` 新 topic，
 不讓 `v1` 悄悄改變意思。現場混版時舊裝置照樣能繼續跑。
 
-待確認事項（EPC 長度、單輪峰值張數、`rssi` 欄位、對時方式等）見
+對時：Hub 每 2 秒在 `hyrox/v1/hub/time` 發布 `{"epoch_ms":<整數>}`（QoS 0、不 retained），
+格式見 [event-protocol.md](event-protocol.md) §4。
+
+待確認事項（單輪峰值張數等）見
 [reader-integration.md](reader-integration.md) §8 與 [open-issues.md](open-issues.md)。

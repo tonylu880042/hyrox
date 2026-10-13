@@ -33,6 +33,7 @@ impl HubStore for Store {
                 detected_at: raw.detected_at,
                 received_at: raw.received_at,
                 presence: raw.presence,
+                uptime_ms: raw.uptime_ms,
             })
             .await?;
         Ok(RawCommit {
@@ -61,6 +62,7 @@ impl HubStore for Store {
                     detected_at: raw.detected_at,
                     received_at: raw.received_at,
                     presence: raw.presence,
+                    uptime_ms: raw.uptime_ms,
                 },
                 context,
             )

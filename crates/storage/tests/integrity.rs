@@ -137,7 +137,11 @@ async fn a_backup_will_not_overwrite_one_that_is_already_there() {
     );
 }
 
-/// Writes rubbish into the middle of the file, past the header and the schema.
+/// Writes rubbish over the middle half of the file, past the header.
+///
+/// A run of whole pages rather than a couple of kilobytes at one offset: damage that lands
+/// in the unused middle of a nearly empty page, or on a free one, changes nothing SQLite
+/// reads, and which page sits at the midpoint moves every time a migration is added.
 fn scribble_over_a_page(path: &std::path::Path) {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -148,7 +152,8 @@ fn scribble_over_a_page(path: &std::path::Path) {
         len > 8192,
         "the fixture should be several pages, got {len} bytes"
     );
-    file.seek(SeekFrom::Start(len / 2)).expect("seek");
-    file.write_all(&[0x5A; 2048]).expect("scribble");
+    file.seek(SeekFrom::Start(len / 4)).expect("seek");
+    file.write_all(&vec![0x5A; (len / 2) as usize])
+        .expect("scribble");
     file.flush().expect("flush");
 }

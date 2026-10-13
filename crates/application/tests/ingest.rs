@@ -313,6 +313,29 @@ async fn a_redelivered_event_is_acknowledged_but_interpreted_only_once() {
     assert_eq!(state.athlete("a1").unwrap().runs.len(), 1);
 }
 
+/// ADR 0018. A device whose flash was wiped counts `boot_id` from 1 again, so its new reads
+/// reuse keys the hub has already stored. The round is the same round only if `uptime_ms`
+/// says so; otherwise acknowledging it as a duplicate would lose the read.
+#[tokio::test]
+async fn a_key_reused_by_a_wiped_device_is_interpreted_as_a_new_read() {
+    let store = FakeStore::new();
+    let mut state = armed_session();
+    let before_the_wipe = read("rfid-01", "TAG-A1", 1, 1_010_000);
+    // Same boot, sequence and tag -- at a different point in a different boot's life.
+    let after_the_wipe = read("rfid-01", "TAG-A1", 1, 1_050_000);
+
+    ingest_read(&mut state, &store, &before_the_wipe)
+        .await
+        .expect("first");
+    let second = ingest_read(&mut state, &store, &after_the_wipe)
+        .await
+        .expect("the reused key");
+
+    assert_eq!(second.ack.payload().status, AckStatus::Stored);
+    assert!(!matches!(sole(&second), IngestOutcome::Duplicate));
+    assert_eq!(store.interpreted().len(), 2);
+}
+
 #[tokio::test]
 async fn an_event_arriving_before_the_session_is_armed_is_an_exception() {
     let store = FakeStore::new();

@@ -316,8 +316,9 @@ hyrox/v1/edge/<device_id>/status        QoS 1, retained
 }
 ```
 
-`warning` 健康時送 `null`（請保留欄位）。目前定義的值：
-`JOURNAL_NEARLY_FULL`（建議用量 80% 觸發）、`JOURNAL_FULL`。
+`warning` 健康時送 `null`（請保留欄位）。它是開放字串：Hub 認得
+`JOURNAL_NEARLY_FULL`（建議用量 80% 觸發）、`JOURNAL_FULL`、`TIME_NOT_SYNCED`，
+不認得的值照樣收下、當成一般警告顯示。
 
 **必須 retained**：Hub 重啟後要立刻看見它離線期間就已告警的裝置。
 
@@ -360,10 +361,10 @@ Hub 對**無法解碼的 payload 不回 ACK 也不入庫**，但一定留下日�
 |---|---|---|
 | `reader_id` 是不是讀頭自己的 MAC | 視為**裝置內的編號**，與 `device_id` 無關 | 若每個讀頭各有 MAC，我們要重新確認「一台裝置多個讀頭」的模型 |
 | 一台 ESP32 掛幾個讀頭 | 支援 1..N | 實際幾個？ |
-| `tag_id` 格式 | 陣列；元素不限長度與字元集，只 trim + 轉大寫 | 實際 EPC 長度與編碼 |
+| `tag_id` 格式 | 陣列；元素不限長度與字元集，只 trim + 轉大寫 | **已答（2026-10-13）**：24 個大寫 hex 字元（96 bit） |
 | 單輪最多幾張 Tag | 無上限假設 | 實際峰值（決定 journal 單筆大小） |
 | `absent_timeout` | 預設 4000 ms，可調 | 場地實測值 |
-| 時間同步 | 只保留了 topic `hyrox/v1/hub/time`，**payload 未定義** | 你們希望的對時方式（NTP？還是走這個 topic？） |
+| 時間同步 | **已定（2026-10-13）**：Hub 每 2 秒發 `hyrox/v1/hub/time` `{"epoch_ms":…}`，QoS 0、不 retained；appliance 另開 NTP（chrony） | — |
 | 每筆一則 ACK | 目前如此 | 若 10,000 筆 backlog 重送時流量吃不消，改批次 cursor |
 | 事件是否需要 `rssi` 欄位 | 目前**沒有**此欄位 | 若 Hub 端也要看 RSSI 調參，提出後再加（改契約） |
 | inventory 輪詢週期 | 無假設，抑制邏輯與週期無關 | 實際週期與單輪最多回報幾張 Tag |

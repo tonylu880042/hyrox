@@ -94,7 +94,7 @@ fn is_ours(inbound: &Inbound) -> bool {
     let ours = device();
     match inbound {
         Inbound::Event(event) => event.device_id == ours,
-        Inbound::Status(status) => status.device_id == ours,
+        Inbound::Status(status) | Inbound::RetainedStatus(status) => status.device_id == ours,
         Inbound::Ack(ack) => ack.device_id == ours,
         Inbound::Undecodable { topic: name, .. } => {
             topic::device_of_events(name).as_ref() == Some(&ours)
@@ -285,7 +285,7 @@ async fn broker_retains_device_health_for_a_hub_that_connects_later() {
     wait_connected(&mut hub_loop).await;
     client::subscribe_hub(&hub).await.expect("subscribe");
     match next_message(&mut hub_loop).await {
-        Some(Inbound::Status(received)) => assert_eq!(*received, status),
+        Some(Inbound::RetainedStatus(received)) => assert_eq!(*received, status),
         other => panic!("expected the retained status, got {other:?}"),
     }
 

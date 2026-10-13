@@ -7,6 +7,57 @@ Answered items stay on this page with their answer and the date, so the reasonin
 
 ---
 
+## 韌體協議 v1.1 對照（2026-10-13）
+
+對照韌體團隊的 `hub-protocol-v1.1.md` 與 `hub-followup.md`（韌體 0.10.0／0.11.0）。
+
+**Hub 已配合（2026-10-13）**
+
+* status 的 `warning` 是開放字串，未知值不再讓整則 status 被拒收；新增 `TIME_NOT_SYNCED`。
+* Hub 每 2 秒發布 `hyrox/v1/hub/time`（QoS 0、不 retained）。
+* 判重比對 `uptime_ms`，裝置被清除後重用的鍵存成新讀取（ADR 0018）。
+* retained 的 status 不算「收到裝置訊息」；裝置靜默門檻改為配合 60 秒一則的 status。
+* appliance 套件帶 mosquitto 區網 listener（匿名）、chrony（NTP）、avahi（`hyrox-hub.local`）。
+  **這三項尚未在實體 appliance 上驗證**，接實機前要確認：另一台電腦連得上 1883、
+  `ping hyrox-hub.local` 解析得到、裝置的 `/api/station` 顯示 `time_synced: true`。
+
+**要回覆韌體團隊的更正**
+
+* Hub 主機是 **Ubuntu Server appliance**（ADR 0009），開發機是 macOS，**不是 Windows PC**。
+  他們文件的 2.1.1、7.3 與「Hub 主機檢查清單」不適用。
+* 他們對照的是 2026-09-21／23 的規格，沒有 ADR 0016、0017。
+
+**接受的偏離（韌體現況與 CLAUDE.md 不同）**
+
+* journal 容量 **1024 筆**，不是 CLAUDE.md 18 的 10,000（裝置 RAM 放不下）。
+  夠不夠取決於事件率與 Hub 最長離線時間——**待提供**：每場人數、讀頭數、每人讀取次數、
+  Hub 最長可能離線多久。
+* 一機一讀頭；一則事件最多 3 張卡，超過拆成多則（各自的 `sequence`）。Hub 不需要改。
+* 整次開機都沒對到時的事件，裝置重開機後**丟棄**（那個 `boot_id` 完全沒有事件）。
+  Hub 無從補救，只能確保時間來源一直都在。
+* broker 匿名、無 TLS：韌體不支援帳密。邊界是場地網路；production networking／VLAN 設計仍未定（CLAUDE.md 28）。
+
+**OPEN — 這版韌體是「登入站」，不是計時感應站**
+
+按著按鍵才掃描、一輪一張卡、15 dBm；持續掃描與一輪多卡「日後再做」，
+也沒有 `presence: DEPARTED`。所以無人值守的 ENTRY／EXIT 地墊與 ZONE 讀頭（ADR 0017）
+目前沒有韌體可以配合。需要韌體團隊排入持續掃描與離開事件。
+
+**OPEN — 同一張卡沒離開就再次上報**
+
+韌體在裝置重開機、journal 滿後恢復、抑制表溢出時，會把還在場的卡再報一次（新的 `sequence`，
+不是重送）；按鍵隔 7 秒以上再按也會。TOGGLE 讀頭會把它解讀成出站。CLAUDE.md 14 把業務層去重
+交給 Hub，但 TOGGLE 目前沒有最短間隔保護（只有 ZONE 有 `min_visit`）。
+需要決定：最短間隔是多少、是否每個讀頭可設。在決定之前不寫死任何數值。
+
+**OPEN — 電量 topic `hyrox/v1/edge/<device_id>/battery`**
+
+Hub 目前不訂閱。確定現場用電池供電後再加（`LOW`／`CRITICAL` 告警；`UNKNOWN` 不是低電量）。
+
+**待答** 計時精度要求（各裝置時間差容許多少）。韌體實測 SNTP +40 ms、`hub/time` −8～−18 ms。
+
+---
+
 ## FIRMWARE TEAM — ESP32 journal retention contradicts the edge's ignorance of business meaning
 
 **Not blocking the hub** (decided 2026-08-27). The hub never observes edge retention: its

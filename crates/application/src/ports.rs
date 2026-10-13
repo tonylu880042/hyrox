@@ -41,6 +41,10 @@ pub struct RawRead {
     /// What the edge reported (ADR 0017). Part of the raw record: a departure replayed as an
     /// arrival would be a different read.
     pub presence: Presence,
+    /// Milliseconds since the device booted, as sent. Told apart from the key because a
+    /// wiped device reuses its keys, and only this says the read is a different one
+    /// (ADR 0018).
+    pub uptime_ms: i64,
 }
 
 /// What the store did with a raw event it has now durably committed.
